@@ -105,6 +105,12 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
                         accs[owner].kind = Some(classify(&tag));
                     }
                 }
+                // 列表项与表格行之间的换行必须显式保留：切块按空行进行，
+                // 这些换行落在块内、又不在任何片段里，会被差集当成标记折叠掉，
+                // 结果整段列表塌成一行。这里补一个硬换行片段占住它。
+                if matches!(tag, Tag::Item | Tag::TableRow | Tag::TableHead) {
+                    close_previous_line(src, &ranges, &mut accs, range.start);
+                }
                 stack.push(style.clone());
                 match &tag {
                     Tag::Strong => style.strong = true,
@@ -253,8 +259,37 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
     ParseResult { blocks, outline }
 }
 
-fn code_inner(src: &str, range: &Range<usize>) -> Range<usize> {
-    let delims = src
+/// 在 `start` 之前找最近的换行，把它登记为可见的硬换行。
+///
+/// 只处理块内、尚未被任何片段覆盖的换行；块首或跨块的情况直接跳过。
+fn close_previous_line(src: &str, ranges: &[Range<usize>], accs: &mut [Acc], start: usize) {
+    let Some(owner) = owner_of(ranges, start) else {
+        return;
+    };
+    let Some(nl) = src.get(..start).and_then(|head| head.rfind('\n')) else {
+        return;
+    };
+    let block = &ranges[owner];
+    if nl < block.start || nl + 1 > block.end {
+        return;
+    }
+    if accs[owner]
+        .covered
+        .iter()
+        .any(|r| r.start <= nl && nl < r.end)
+    {
+        return;
+    }
+    accs[owner].spans.push(Span {
+        kind: SpanKind::Break { hard: true },
+        byte: nl..nl + 1,
+        text: "\n".to_owned(),
+        style: Style::default(),
+    });
+    accs[owner].covered.push(nl..nl + 1);
+}
+
+fn code_inner(src: &str, range: &Range<usize>) -> Range<usize> {    let delims = src
         .get(range.clone())
         .map(|s| s.bytes().take_while(|b| *b == b'`').count())
         .unwrap_or(0);
@@ -523,6 +558,30 @@ mod tests {
                 assert!(src.is_char_boundary(hidden.end));
             }
         }
+    }
+
+    #[test]
+    fn list_items_keep_their_own_line() {
+        // 切块按空行进行，列表项之间的换行落在块内，必须显式保留
+        let block = first_block("- 甲\n- 乙\n");
+        let breaks = block
+            .spans
+            .iter()
+            .filter(|s| matches!(s.kind, SpanKind::Break { hard: true }))
+            .count();
+        assert_eq!(breaks, 1, "两个列表项之间应有一个硬换行");
+    }
+
+    #[test]
+    fn table_rows_keep_their_own_line() {
+        // 分隔行 `|---|---|` 整段折叠，只留表头与数据行之间的那一个换行
+        let block = first_block("| A | B |\n|---|---|\n| 1 | 2 |");
+        let breaks = block
+            .spans
+            .iter()
+            .filter(|s| matches!(s.kind, SpanKind::Break { hard: true }))
+            .count();
+        assert_eq!(breaks, 1, "表头与数据行之间应有 1 个换行");
     }
 
     #[test]

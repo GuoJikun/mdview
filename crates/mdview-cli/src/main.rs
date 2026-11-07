@@ -51,6 +51,7 @@ fn main() {
         "blocks" => print_blocks(&parsed),
         "spans" => print_spans(&content, &parsed),
         "layout" => print_layout(&content, &parsed),
+        "preview" => write_preview(path, &content),
         "html" => print!("{}", parsed.to_html()),
         other => {
             warn!("未知子命令 {other}");
@@ -268,7 +269,24 @@ fn run_demo() {
     );
 }
 
+/// 生成可交互的投影页，用浏览器核对停靠点与光标位置。
+fn write_preview(path: &str, content: &str) {
+    let html = mdview_markdown::preview_html(content);
+    let out = std::path::Path::new(path).with_extension("preview.html");
+    match fs::write(&out, html) {
+        Ok(()) => {
+            info!("生成投影页 {}", out.display());
+            println!("已生成投影页 {}", out.display());
+        }
+        Err(err) => {
+            error!("写入失败 {}: {err}", out.display());
+            eprintln!("写入失败 {}: {err}", out.display());
+            process::exit(1);
+        }
+    }
+}
+
 fn usage() {
-    println!("mdview <file> [outline|stats|blocks|spans|layout|html]");
+    println!("mdview <file> [outline|stats|blocks|spans|layout|preview|html]");
     println!("mdview demo");
 }
