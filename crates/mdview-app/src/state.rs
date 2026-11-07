@@ -2,7 +2,7 @@ use std::{ops::Range, path::PathBuf};
 
 use log::{info, warn};
 use mdview_core::Document;
-use mdview_markdown::{MarkdownParser, ParseResult, SourceMap};
+use mdview_markdown::{DocumentLayout, Gravity, MarkdownParser, ParseResult, SourceMap};
 
 use crate::ports::{FileStore, Fingerprint, RenderFrame};
 
@@ -34,6 +34,8 @@ pub enum Message {
     Save,
     /// byte offset（Markdown / DOM 语义）
     Click { byte_offset: usize },
+    /// 选区两端都是 byte offset，交给布局层吸附到停靠点
+    Select { anchor: usize, head: usize },
     Reload { content: String },
 }
 
@@ -43,13 +45,24 @@ pub enum Effect {
     ScheduleParse { revision: u64 },
     Render,
     Persist,
-    MoveCursor { char_offset: usize, block: Option<usize> },
+    MoveCursor {
+        char_offset: usize,
+        block: Option<usize>,
+        /// 块内视觉列。前端据此对齐 caret 的 x 坐标，不必自己数隐藏标记。
+        visual: Option<usize>,
+    },
+    /// 选区已吸附到可见文本，`byte` 可直接用于按块切高亮。
+    Selection {
+        byte: Range<usize>,
+        blocks: Vec<usize>,
+    },
     Conflict,
 }
 
 pub struct AppState {
     pub document: Document,
     pub parsed: ParseResult,
+    pub layout: DocumentLayout,
     pub source_map: SourceMap,
     pub mode: ViewMode,
     pub dirty: bool,
@@ -68,6 +81,7 @@ impl AppState {
         let mut state = Self {
             document: Document::new(content),
             parsed: ParseResult::default(),
+            layout: DocumentLayout::default(),
             source_map: SourceMap::default(),
             mode: ViewMode::Wysiwyg,
             dirty: false,
@@ -85,6 +99,7 @@ impl AppState {
         let source = self.document.text();
         self.parsed = self.parser.parse(&source);
         self.source_map = self.parsed.source_map();
+        self.layout = DocumentLayout::build(&source, &self.parsed);
     }
 
     pub fn render_frame(&self) -> RenderFrame {
@@ -149,10 +164,45 @@ impl AppState {
                 vec![Effect::Persist]
             }
             Message::Click { byte_offset } => {
-                let block = self.source_map.block_at_byte(byte_offset).map(|id| id.0);
+                // 点击点可能落在被折叠的标记里（`**` 的中间），先吸附到可见停靠点，
+                // 否则光标会被塞进标记内部，下一次输入就把 `**` 拆散。
+                let (block, visual, snapped) =
+                    match self.layout.stop_at_byte(byte_offset, Gravity::Upstream) {
+                        Some(global) => {
+                            let (id, local) = self
+                                .layout
+                                .locate(global)
+                                .expect("全局停靠点必定能定位回块");
+                            (
+                                Some(id.0),
+                                self.layout.layout(id).and_then(|l| l.visual(local)),
+                                self.layout.byte(global).unwrap_or(byte_offset),
+                            )
+                        }
+                        None => (None, None, byte_offset),
+                    };
                 // byte -> char 换算：中文文档不做这一步会定位到错误的字。
-                let char_offset = self.document.byte_to_char(byte_offset);
-                vec![Effect::MoveCursor { char_offset, block }]
+                let char_offset = self.document.byte_to_char(snapped);
+                vec![Effect::MoveCursor {
+                    char_offset,
+                    block,
+                    visual,
+                }]
+            }
+            Message::Select { anchor, head } => {
+                let snap = |byte| {
+                    self.layout
+                        .stop_at_byte(byte, Gravity::Upstream)
+                        .unwrap_or(0)
+                };
+                let selection = mdview_markdown::Selection::new(snap(anchor), snap(head));
+                let byte = selection.byte_range(&self.layout).unwrap_or(0..0);
+                let blocks = selection
+                    .blocks(&self.layout)
+                    .into_iter()
+                    .map(|id| id.0)
+                    .collect();
+                vec![Effect::Selection { byte, blocks }]
             }
             Message::Reload { content } => {
                 self.document = Document::new(content);
@@ -210,9 +260,43 @@ mod tests {
             vec![Effect::MoveCursor {
                 char_offset: app.document.byte_to_char(byte_offset),
                 block: Some(1),
+                visual: Some(0),
             }]
         );
         assert!(app.document.byte_to_char(byte_offset) < byte_offset);
+    }
+
+    #[test]
+    fn click_inside_marker_snaps_out_of_it() {
+        let mut files = InMemoryFileStore::default();
+        files.insert("a.md", "**加粗**\n");
+        let mut app = AppState::open("**加粗**\n", Some(PathBuf::from("a.md")), &files);
+        // byte 1 落在开头的 `**` 中间
+        let effects = app.update(Message::Click { byte_offset: 1 }, &files);
+        let Effect::MoveCursor { char_offset, .. } = effects[0] else {
+            panic!("应产生移动光标效果");
+        };
+        // 吸附到「加」之前，也就是 char 2
+        assert_eq!(char_offset, 2);
+    }
+
+    #[test]
+    fn selection_spans_blocks_and_keeps_blank_line() {
+        let (files, mut app) = fixture();
+        let source = app.document.text();
+        let effects = app.update(
+            Message::Select {
+                anchor: 5,
+                head: app.parsed.blocks[1].byte.start + 6,
+            },
+            &files,
+        );
+        let Effect::Selection { byte, blocks } = &effects[0] else {
+            panic!("应产生选区效果");
+        };
+        assert_eq!(blocks, &vec![0, 1]);
+        // 选区包含块间空行，否则复制出来会把两段粘在一起
+        assert_eq!(&source[byte.clone()], "题\n\n正文");
     }
 
     #[test]

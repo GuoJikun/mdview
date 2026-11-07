@@ -11,6 +11,7 @@
 //! index——`&str[非字符边界]` 会直接 panic，中文文档的坐标错位都出在这里。
 
 mod block;
+mod layout;
 mod project;
 mod sourcemap;
 mod split;
@@ -18,6 +19,7 @@ mod split;
 pub use block::{
     align, Block, BlockId, BlockKind, OutlineItem, ParseResult, Span, SpanKind, Style,
 };
+pub use layout::{Caret, DocumentLayout, Gravity, Layout, Selection, Stop};
 pub use project::{parse, MarkdownParser};
-pub use sourcemap::{Caret, SourceMap};
+pub use sourcemap::SourceMap;
 pub use split::split_blocks;

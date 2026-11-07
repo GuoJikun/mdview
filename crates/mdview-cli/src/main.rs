@@ -1,6 +1,6 @@
 //! 无头入口：验证 core / markdown / app 三层链路，不依赖任何 GUI。
 //!
-//!   mdview <file> [outline|stats|blocks|spans|html]
+//!   mdview <file> [outline|stats|blocks|spans|layout|html]
 //!   mdview demo
 
 use std::{env, fs, process};
@@ -8,7 +8,7 @@ use std::{env, fs, process};
 use log::{error, info, warn};
 use mdview_app::{AppState, CollectingSink, InMemoryFileStore, Message, RenderSink, ViewMode};
 use mdview_core::Document;
-use mdview_markdown::{Block, BlockKind, MarkdownParser, ParseResult};
+use mdview_markdown::{Block, BlockKind, DocumentLayout, MarkdownParser, ParseResult};
 
 const DEMO: &str = "# 标题\n\n你好 **world**\n\n```rust\nfn main() {}\n```\n";
 
@@ -50,6 +50,7 @@ fn main() {
         "stats" => print_stats(&content, &parsed),
         "blocks" => print_blocks(&parsed),
         "spans" => print_spans(&content, &parsed),
+        "layout" => print_layout(&content, &parsed),
         "html" => print!("{}", parsed.to_html()),
         other => {
             warn!("未知子命令 {other}");
@@ -148,8 +149,57 @@ fn print_spans(content: &str, parsed: &ParseResult) {
     }
 }
 
-fn annotate(content: &str, block: &Block) -> String {
-    let mut out = String::new();
+/// 逐块打印停靠点表：`列` 是视觉列，`@` 是源码字节。
+/// 同一列连续出现两次，说明这里有两个停靠点——中间隔着被折叠的标记。
+fn print_layout(content: &str, parsed: &ParseResult) {
+    let doc = DocumentLayout::build(content, parsed);
+    println!(
+        "全文档：停靠点 {} 个，视觉列 {} 列",
+        doc.stops(),
+        doc.width()
+    );
+    for block in &parsed.blocks {
+        let Some(layout) = doc.layout(block.id) else {
+            continue;
+        };
+        println!(
+            "\n#{} {} bytes {}..{}  列宽 {}  停靠点 {}",
+            block.id.0,
+            block.kind.label(),
+            block.byte.start,
+            block.byte.end,
+            layout.width(),
+            layout.len()
+        );
+        for (index, stop) in layout.stops().iter().enumerate() {
+            let end = layout
+                .stops()
+                .get(index + 1)
+                .map(|next| next.byte)
+                .unwrap_or(block.byte.end)
+                .min(block.byte.end);
+            let label = match block.hidden_at(stop.byte) {
+                Some(hidden) => format!(
+                    "⟦{}⟧",
+                    content[stop.byte..block.hidden[hidden].end].replace('\n', "⏎")
+                ),
+                None => match content.get(stop.byte..end).and_then(|s| s.chars().next()) {
+                    Some('\n') => "⏎".to_owned(),
+                    Some(c) => c.to_string(),
+                    None => "<块尾>".to_owned(),
+                },
+            };
+            let shared = if index > 0 && layout.stops()[index - 1].visual == stop.visual {
+                "  ← 同列"
+            } else {
+                ""
+            };
+            println!("  列 {:<3} @{:<5} {label}{shared}", stop.visual, stop.byte);
+        }
+    }
+}
+
+fn annotate(content: &str, block: &Block) -> String {    let mut out = String::new();
     let mut cursor = block.byte.start;
     for range in &block.hidden {
         if range.start > cursor {
@@ -219,6 +269,6 @@ fn run_demo() {
 }
 
 fn usage() {
-    println!("mdview <file> [outline|stats|blocks|spans|html]");
+    println!("mdview <file> [outline|stats|blocks|spans|layout|html]");
     println!("mdview demo");
 }

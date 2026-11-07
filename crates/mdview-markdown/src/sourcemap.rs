@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::block::{Block, BlockId, Span};
+use crate::block::{Block, BlockId};
 
 /// byte ↔ 块 / 片段 的双向索引。
 ///
@@ -13,8 +13,14 @@ pub struct SourceMap {
 
 impl SourceMap {
     pub fn build(blocks: &[Block]) -> Self {
-        let mut entries: Vec<(Range<usize>, BlockId)> =
-            blocks.iter().map(|b| (b.byte.clone(), b.id)).collect();
+        let entries: Vec<_> = blocks.iter().map(|b| (b.byte.clone(), b.id)).collect();
+        Self::from_entries(entries)
+    }
+
+    /// 由已排好序的 (块区间, 块 id) 建索引。视觉布局层直接复用自己那份区间，
+    /// 免得为了拿 SourceMap 再把整篇 block 传一遍。
+    pub fn from_entries(mut entries: Vec<(Range<usize>, BlockId)>) -> Self {
+        entries.retain(|(range, _)| range.start <= range.end);
         entries.sort_by_key(|(range, _)| range.start);
         Self { entries }
     }
@@ -44,51 +50,8 @@ impl SourceMap {
     }
 }
 
-/// 编辑器光标的中间表示：块 + 片段 + 片段内字符偏移。
-///
-/// 不直接用 byte 存光标，是因为编辑后 byte 会整体平移；
-/// 而（块, 片段, 字符）在块内是稳定的，重解析后可以重新锚定。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Caret {
-    pub block: BlockId,
-    pub span: usize,
-    pub char_in_span: usize,
-}
-
-impl Caret {
-    /// 由绝对 byte 构造。落在隐藏标记里时吸附到右侧可见位置。
-    pub fn from_byte(blocks: &[Block], src: &str, byte: usize) -> Option<Self> {
-        let block = blocks.iter().find(|b| b.byte.start <= byte && byte <= b.byte.end)?;
-        let snapped = block.snap_visible(byte);
-        let span = block
-            .span_at(snapped)
-            .or_else(|| block.spans.len().checked_sub(1))?;
-        let target = &block.spans[span];
-        let rel = snapped.clamp(target.byte.start, target.byte.end) - target.byte.start;
-        let char_in_span = src
-            .get(target.byte.start..target.byte.start + rel)
-            .map(|s| s.chars().count())
-            .unwrap_or(0);
-        Some(Self {
-            block: block.id,
-            span,
-            char_in_span,
-        })
-    }
-
-    /// 还原为绝对 byte。
-    pub fn to_byte(&self, blocks: &[Block], src: &str) -> Option<usize> {
-        let block = blocks.get(self.block.0)?;
-        let span: &Span = block.spans.get(self.span)?;
-        let slice = src.get(span.byte.clone())?;
-        let rel = crate::block::align(slice, &span.text, self.char_in_span);
-        Some(span.byte.start + rel)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::project::MarkdownParser;
 
     #[test]
@@ -111,25 +74,5 @@ mod tests {
         let map = parsed.source_map();
         let gap = parsed.blocks[0].byte.end + 1;
         assert!(map.block_at_byte(gap).is_none());
-    }
-
-    #[test]
-    fn caret_roundtrips_over_chinese() {
-        let src = "# 标题\n\n中文段落 abc\n";
-        let parsed = MarkdownParser::gfm().parse(src);
-        let block = &parsed.blocks[1];
-        // 指向 "中" 之后
-        let target = block.byte.start + "中".len();
-        let caret = Caret::from_byte(&parsed.blocks, src, target).unwrap();
-        assert_eq!(caret.to_byte(&parsed.blocks, src), Some(target));
-    }
-
-    #[test]
-    fn caret_snaps_out_of_hidden_marker() {
-        let src = "**加粗**";
-        let parsed = MarkdownParser::gfm().parse(src);
-        // byte 1 落在开头的 "**" 里
-        let caret = Caret::from_byte(&parsed.blocks, src, 1).unwrap();
-        assert_eq!(caret.to_byte(&parsed.blocks, src), Some(2));
     }
 }
