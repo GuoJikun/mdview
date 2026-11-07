@@ -4,3 +4,4 @@
 .workbuddy
 /logs
 crates/mdview-desktop/gen
+node_modules
