@@ -186,7 +186,7 @@ byte   0  2  5  8  10
 ## 7. 当前进度快照
 
 - 日期：2026-11-07
-- 测试：**131 项全过**（markdown 64 / app 45 / desktop 10 / support 7 / core 5），无编译告警；其中 desktop 三项是前端守门（`node --check` 全部脚本 + `ime.test.js` 13 项 + `caretline.test.js` 16 项）
+- 测试：**132 项全过**（markdown 64 / app 46 / desktop 10 / support 7 / core 5），无编译告警；其中 desktop 三项是前端守门（`node --check` 全部脚本 + `ime.test.js` 13 项 + `caretline.test.js` 16 项）
 - 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
 - 自检：`cargo run -p mdview-desktop -- <file> --self-test`，日志出现「自检通过：OK 22/22」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项）
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
