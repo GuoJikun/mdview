@@ -540,15 +540,29 @@ impl AppState {
                         let end = self.caret_byte().unwrap_or(line_start + prefix.len());
                         let start = self.document.byte_to_char(line_start);
                         let at = self.document.byte_to_char(end);
-                        // 空项正好是文档的最后一行时，这一行连行尾换行都没有：
-                        // 删掉标记后整篇只剩列表本身，没有块能承接光标，
-                        // `stop_at_byte` 只能把它退回上一行的末尾——用户看到的
-                        // 是「回车把光标送回列表最后一行」，而且再也离不开列表
-                        // （下一次回车又造出一个空项）。这里把整行换成空段落。
-                        if end == self.document.len_bytes() {
+                        // 空项回车 = 退出这一层。删掉标记之后这一行就成了空行，
+                        // 而空行不属于任何块（见 `split_blocks`），所以必须顺手把它
+                        // 变成**空段落**，否则光标无处可停，只能吸附到下一块的行首——
+                        // 用户看到的是「回车没换行，光标跳到了下一行的开头」。
+                        let rest = self.document.slice_bytes(end..self.document.len_bytes());
+                        if rest.is_empty() {
+                            // 空项就是文档最后一行，连行尾换行都没有：整篇只剩列表
+                            // 本身，没有块能承接光标，`stop_at_byte` 只能把它退回上一行
+                            // 的末尾——而且再也离不开列表（下一次回车又造出一个空项）。
                             return self.apply_with_caret(start..at, "\n", Some(start + 1));
                         }
-                        self.apply_bytes(line_start..end, "")
+                        if rest.trim().is_empty() {
+                            // 后面只剩空行（文档就这样结尾）：末尾空段落本来就接得住
+                            // 光标，把标记删掉就行，不必再堆空行
+                            return self.apply_with_caret(start..at, "", None);
+                        }
+                        // 后面还有内容：空段落要两头都被空行夹住，首尾两行留给两侧的
+                        // 分隔，中间那行才是空段落。少一头的话，敲下第一个字就把内容
+                        // 粘到隔壁块上（`- 乙\nX` 是列表项的懒续行），事后再补也补不回来。
+                        let extra = 2usize.saturating_sub(self.blank_lines_after(end));
+                        let insert = "\n".repeat(extra);
+                        let caret = self.document.byte_to_char(line_start + 1);
+                        self.apply_with_caret(start..at, &insert, Some(caret))
                     }
                     None => self.split_paragraph(),
                 }
@@ -627,12 +641,6 @@ impl AppState {
             .unwrap_or(0)
     }
 
-    fn apply_bytes(&mut self, range: Range<usize>, insert: &str) -> Vec<Effect> {
-        let span =
-            self.document.byte_to_char(range.start)..self.document.byte_to_char(range.end);
-        self.apply(span, insert)
-    }
-
     /// 光标所在行从行首到光标的源码前缀（识别列表 / 引用标记用）。
     fn line_prefix(&self) -> Option<(usize, String)> {
         let byte = self.caret_byte()?;
@@ -655,6 +663,23 @@ impl AppState {
     }
 
     // ---- 效果组装 -------------------------------------------------------
+
+    /// 紧跟在这一行之后的连续空行有多少行。
+    ///
+    /// 退出列表时要靠它判断「删掉标记之后是不是已经有两行空行」：空段落
+    /// 需要一头一尾各一行分隔，不够就得自己补。
+    fn blank_lines_after(&self, byte: usize) -> usize {
+        let tail = self.document.slice_bytes(byte..self.document.len_bytes());
+        let mut count = 0;
+        // 第一段是本行剩下的部分，不算
+        for line in tail.split_inclusive('\n').skip(1) {
+            if !line.trim().is_empty() {
+                break;
+            }
+            count += 1;
+        }
+        count
+    }
 
     fn cursor_effect(&self) -> Effect {
         let global = self.selection.head;
@@ -1253,6 +1278,42 @@ mod tests {
     }
 
     #[test]
+    fn enter_twice_below_a_blank_line_keeps_an_empty_paragraph() {
+        // 列表下面还有正文：连按两次回车必须**开出新的一行**，光标停在那行上，
+        // 而不是吸附到「正文」的行首（空行不属于任何块，删掉标记就无处可停）
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "- 甲\n- 乙\n\n正文\n");
+        click(&mut app, &files, 11);
+        app.update(Message::Newline, &files);
+        assert_eq!(app.document.text(), "- 甲\n- 乙\n- \n\n正文\n");
+        app.update(Message::Newline, &files);
+        // 三行空行：首尾两行是分隔，中间那行是空段落
+        assert_eq!(app.document.text(), "- 甲\n- 乙\n\n\n\n正文\n");
+        let (block, stop) = app.layout.locate(app.selection.head).unwrap();
+        assert_eq!(stop, 0);
+        assert_eq!(app.parsed.blocks[block.0].byte, 13..13, "光标没停在空段落里");
+
+        // 敲第一个字：必须自成一派，不能粘到列表最后一项或下一段身上
+        type_text(&mut app, &files, "丙");
+        assert_eq!(app.document.text(), "- 甲\n- 乙\n\n丙\n\n正文\n");
+        assert_eq!(app.frames()[1].kind, "paragraph");
+    }
+
+    #[test]
+    fn enter_twice_below_another_item_splits_the_list() {
+        // 下面还是列表项时同理：光标停在两段列表之间的空段落上
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "- 甲\n- 乙\n- 丙\n");
+        click(&mut app, &files, 11);
+        app.update(Message::Newline, &files);
+        app.update(Message::Newline, &files);
+        let (block, _) = app.layout.locate(app.selection.head).unwrap();
+        assert_eq!(app.parsed.blocks[block.0].byte, 13..13, "光标没停在空段落里");
+        type_text(&mut app, &files, "文");
+        assert_eq!(app.document.text(), "- 甲\n- 乙\n\n文\n\n- 丙\n");
+    }
+
+    #[test]
     fn enter_continues_blockquote() {
         let mut files = InMemoryFileStore::default();
         let mut app = open(&mut files, "> 引用");
@@ -1459,4 +1520,3 @@ mod tests {
         assert!(analyze_line("2026 年").is_none(), "数字后没跟 . 或 ) 不算列表");
     }
 }
-

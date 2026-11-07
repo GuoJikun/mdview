@@ -747,4 +747,16 @@ mod tests {
         assert_eq!(caret.block, BlockId(1));
         assert_eq!(caret.to_byte(&doc), Some(5));
     }
+
+    #[test]
+    fn empty_paragraph_between_blocks_takes_the_caret() {
+        // 文档中间的空段落（两头被空行夹住）：光标要停在它里面，
+        // 而不是吸附到下一段的行首
+        let (parsed, doc) = build("甲\n\n\n\n乙\n");
+        assert_eq!(parsed.blocks.len(), 3, "中间的空行应产生空段落");
+        let caret = Caret::from_byte(&doc, 5).unwrap();
+        assert_eq!(caret.block, BlockId(1));
+        assert_eq!(caret.to_byte(&doc), Some(5));
+        assert_eq!(doc.stops(), 5, "甲 两个停靠点、空段落一个、乙 两个");
+    }
 }
