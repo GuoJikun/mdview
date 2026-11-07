@@ -43,7 +43,20 @@ pub fn split_blocks(src: &str) -> Vec<Range<usize>> {
         spans.push(trim_eol(start, src.len(), src));
     }
     spans.retain(|r| r.start < r.end);
+    // 末尾空段落：源码以空行结束（含整篇为空）时补一个零长块。
+    // 没有它，「在文档末尾回车」得到的光标只能贴在上一段行尾——视觉上回不到新行。
+    if spans.is_empty() || ends_with_blank_line(src) {
+        spans.push(src.len()..src.len());
+    }
     spans
+}
+
+/// 源码是否以空行结束。空行 = 最后一个换行与它之前的换行之间只有空白。
+fn ends_with_blank_line(src: &str) -> bool {
+    let Some(head) = src.strip_suffix('\n') else {
+        return false;
+    };
+    head.rsplit('\n').next().unwrap_or("").trim().is_empty()
 }
 
 fn fence_marker(bytes: &[u8]) -> Option<(u8, usize)> {
@@ -93,8 +106,18 @@ mod tests {
     }
 
     #[test]
-    fn empty_source_has_no_blocks() {
-        assert!(split_blocks("").is_empty());
-        assert!(split_blocks("\n\n").is_empty());
+    fn empty_source_keeps_one_empty_block() {
+        // 编辑器必须永远有一个可落光标的段落，否则空文档没有 caret 目标
+        assert_eq!(split_blocks(""), vec![0..0]);
+        assert_eq!(split_blocks("\n\n"), vec![2..2]);
+    }
+
+    #[test]
+    fn trailing_blank_line_yields_empty_paragraph() {
+        // "abc\n\n" 的最后一行是空行，回车后光标要有落点
+        assert_eq!(texts("abc\n\n"), vec!["abc", ""]);
+        assert_eq!(split_blocks("abc\n\n").last().unwrap(), &(5..5));
+        // 只有一个换行时属于段尾，不额外造块
+        assert_eq!(texts("abc\n"), vec!["abc"]);
     }
 }

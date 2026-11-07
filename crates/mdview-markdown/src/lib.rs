@@ -21,7 +21,7 @@ pub use block::{
     align, Block, BlockId, BlockKind, OutlineItem, ParseResult, Span, SpanKind, Style,
 };
 pub use layout::{Caret, DocumentLayout, Gravity, Layout, Selection, Stop};
-pub use preview::preview_html;
+pub use preview::{preview_html, BlockFrame, Patch, block_frames, diff_frames};
 pub use project::{parse, MarkdownParser};
 pub use sourcemap::SourceMap;
 pub use split::split_blocks;

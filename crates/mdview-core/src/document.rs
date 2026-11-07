@@ -56,6 +56,18 @@ impl Document {
         self.text.slice(range).to_string()
     }
 
+    /// 按 **byte** 区间取文本，非字符边界自动向左取整。
+    /// 供「光标前一行源码前缀」这类 byte 语义的查询使用。
+    pub fn slice_bytes(&self, range: Range<usize>) -> String {
+        let len = self.text.len_bytes();
+        let start = self.byte_to_char(range.start.min(len));
+        let end = self.byte_to_char(range.end.min(len));
+        if start >= end {
+            return String::new();
+        }
+        self.text.slice(start..end).to_string()
+    }
+
     pub fn can_undo(&self) -> bool {
         self.history.undo_len() > 0
     }

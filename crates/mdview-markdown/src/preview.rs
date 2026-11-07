@@ -14,9 +14,9 @@
 //! 生产实现会把「每字符一个元素」换成「每片段一个元素 + 内核 align 换算」，
 //! 否则英文单词会被拆成字符、任意处都能断行。
 
-use std::fmt::Write as _;
+use std::{fmt::Write as _, ops::Range};
 
-use crate::block::{escape, Block, BlockKind, SpanKind};
+use crate::block::{escape, Block, BlockKind, ParseResult, SpanKind};
 use crate::layout::DocumentLayout;
 use crate::project::MarkdownParser;
 
@@ -25,8 +25,8 @@ pub fn preview_html(src: &str) -> String {
     let doc = DocumentLayout::build(src, &parsed);
 
     let mut body = String::new();
-    for block in &parsed.blocks {
-        write_block(&mut body, src, block, &doc);
+    for frame in block_frames(src, &parsed, &doc) {
+        body.push_str(&frame.html);
     }
 
     let mut out = String::with_capacity(body.len() + STYLE.len() + SCRIPT.len() + 2048);
@@ -44,19 +44,97 @@ pub fn preview_html(src: &str) -> String {
     out
 }
 
-fn write_block(out: &mut String, src: &str, block: &Block, doc: &DocumentLayout) {
-    let Some(layout) = doc.layout(block.id) else {
-        return;
-    };
+/// 单个块的 HTML 帧。
+///
+/// `base` / `end` 是该块首尾停靠点的**全局**序号：前端替换节点后不必重新编号，
+/// 因为紧随其后的块会因序号变化而一并被替换（见 [`diff_frames`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockFrame {
+    pub id: usize,
+    pub kind: &'static str,
+    pub base: usize,
+    pub end: usize,
+    pub html: String,
+}
+
+/// 一次增量重绘：用 `html` 替换第 `replace` 段的块节点。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Patch {
+    pub old_len: usize,
+    pub new_len: usize,
+    pub replace: Range<usize>,
+    pub html: String,
+}
+
+impl Patch {
+    /// 是否什么都没变（编辑被合并进同一块且未改内容时会出现）。
+    pub fn is_empty(&self) -> bool {
+        self.replace.is_empty() && self.old_len == self.new_len
+    }
+}
+
+/// 全文档分块帧。与 [`preview_html`] 共用同一套渲染代码，保证标定页与编辑页一致。
+pub fn block_frames(src: &str, parsed: &ParseResult, doc: &DocumentLayout) -> Vec<BlockFrame> {
+    let mut frames = Vec::with_capacity(parsed.blocks.len());
+    for block in &parsed.blocks {
+        let Some(html) = block_html(src, block, doc) else {
+            continue;
+        };
+        let Some(base) = doc.global(block.id, 0) else {
+            continue;
+        };
+        let end = base + doc.layout(block.id).map(|l| l.len()).unwrap_or(1) - 1;
+        frames.push(BlockFrame {
+            id: block.id.0,
+            kind: block.kind.label(),
+            base,
+            end,
+            html,
+        });
+    }
+    frames
+}
+
+/// 最长公共前缀 / 后缀求差集：只替换中间真正变化的那一段块。
+///
+/// 不能用块 id 做 diff：一次编辑会让其后所有块的 byte 起点与停靠点序号整体平移，
+/// 按 id 比对等价于全量重绘。前后缀比对至少保证「改动前后的块原样不动」。
+pub fn diff_frames(old: &[BlockFrame], new: &[BlockFrame]) -> Patch {
+    let shared = old.len().min(new.len());
+    let head = old
+        .iter()
+        .zip(new)
+        .take_while(|(a, b)| a.html == b.html)
+        .count();
+    let tail = old
+        .iter()
+        .rev()
+        .zip(new.iter().rev())
+        .take(shared - head)
+        .take_while(|(a, b)| a.html == b.html)
+        .count();
+    let html = new[head..new.len() - tail]
+        .iter()
+        .map(|frame| frame.html.as_str())
+        .collect();
+    Patch {
+        old_len: old.len(),
+        new_len: new.len(),
+        replace: head..new.len() - tail,
+        html,
+    }
+}
+
+fn block_html(src: &str, block: &Block, doc: &DocumentLayout) -> Option<String> {
+    let layout = doc.layout(block.id)?;
     let stops = layout.stops();
     if stops.is_empty() {
-        return;
+        return None;
     }
-    let Some(first) = doc.global(block.id, 0) else {
-        return;
-    };
+    let first = doc.global(block.id, 0)?;
     let last = first + stops.len() - 1;
 
+    let mut out = String::new();
     let _ = write!(
         out,
         "<section class=\"blk kind-{}\" data-block=\"{}\" data-bb=\"{first}\" data-be=\"{last}\">",
@@ -73,7 +151,7 @@ fn write_block(out: &mut String, src: &str, block: &Block, doc: &DocumentLayout)
             block.byte.start, block.id.0
         );
         out.push_str("</section>\n");
-        return;
+        return Some(out);
     }
 
     let (open, close) = wrapper(&block.kind);
@@ -86,7 +164,7 @@ fn write_block(out: &mut String, src: &str, block: &Block, doc: &DocumentLayout)
         out.push_str(open);
     }
     for index in 0..stops.len().saturating_sub(1) {
-        write_segment(out, src, block, stops, index, first + index);
+        write_segment(&mut out, src, block, stops, index, first + index);
     }
     // 块尾锚点：最后一个停靠点没有对应字符，单独给一个零宽元素供光标停靠
     let _ = write!(
@@ -100,6 +178,7 @@ fn write_block(out: &mut String, src: &str, block: &Block, doc: &DocumentLayout)
         out.push_str(close);
     }
     out.push_str("</section>\n");
+    Some(out)
 }
 
 fn write_segment(
@@ -514,5 +593,43 @@ mod tests {
             .nth(1)
             .and_then(|rest| rest.split('"').next());
         assert_eq!(second, Some("2"));
+    }
+
+    fn frames_of(src: &str) -> Vec<BlockFrame> {
+        let parsed = MarkdownParser::gfm().parse(src);
+        let doc = DocumentLayout::build(src, &parsed);
+        block_frames(src, &parsed, &doc)
+    }
+
+    #[test]
+    fn frames_are_exactly_the_page_body() {
+        let src = "# 甲\n\n乙**丙**\n\n- 丁\n";
+        let joined: String = frames_of(src).iter().map(|f| f.html.as_str()).collect();
+        // 标定页与编辑页必须出自同一套渲染代码，否则调好的坐标在编辑态不成立
+        assert!(preview_html(src).contains(&joined));
+    }
+
+    #[test]
+    fn diff_replaces_only_changed_block() {
+        // 等长替换：停靠点总数不变，后续块的 data-b 也不变，只该换中间那块
+        let patch = diff_frames(&frames_of("甲\n\n乙\n\n丙\n"), &frames_of("甲\n\n丁\n\n丙\n"));
+        assert_eq!(patch.replace, 1..2);
+        assert!(patch.html.contains("丁"));
+        assert_eq!(patch.old_len, 3);
+    }
+
+    #[test]
+    fn diff_covers_tail_when_stop_count_changes() {
+        // 停靠点总数一变，后面每块的 data-b 都要重编号，只能连尾部一起替换
+        let patch = diff_frames(&frames_of("甲\n\n乙\n\n丙\n"), &frames_of("甲\n\n丁戊\n\n丙\n"));
+        assert_eq!(patch.replace, 1..3);
+    }
+
+    #[test]
+    fn trailing_empty_paragraph_gets_its_own_frame() {
+        let frames = frames_of("abc\n\n");
+        assert_eq!(frames.len(), 2);
+        assert!(frames[1].html.contains("class=\"eob\""));
+        assert_eq!(frames[1].base, frames[1].end, "空段落只有一个停靠点");
     }
 }

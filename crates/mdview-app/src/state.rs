@@ -2,7 +2,10 @@ use std::{ops::Range, path::PathBuf};
 
 use log::{info, warn};
 use mdview_core::Document;
-use mdview_markdown::{DocumentLayout, Gravity, MarkdownParser, ParseResult, SourceMap};
+use mdview_markdown::{
+    BlockFrame, BlockKind, Caret, DocumentLayout, Gravity, MarkdownParser, ParseResult, Patch,
+    Selection, SourceMap, block_frames, diff_frames,
+};
 
 use crate::ports::{FileStore, Fingerprint, RenderFrame};
 
@@ -26,8 +29,22 @@ impl ViewMode {
 
 #[derive(Debug)]
 pub enum Message {
-    /// span 为 char index（core 语义）
+    /// span 为 char index（core 语义）。脚本化编辑与测试用，等价于「替换 + 落光标」。
     Edit { span: Range<usize>, insert: String },
+    /// 键盘或输入法提交的一段文本。有选区时替换选区。
+    InsertText { text: String },
+    Backspace,
+    DeleteForward,
+    /// 回车：按块类型拆分（段落插空行、代码块插单换行、列表/引用延续标记）
+    Newline,
+    /// Shift+Enter：段内硬换行（写 `\` + 换行，反斜杠进隐藏集）
+    HardBreak,
+    /// 键盘移动。`delta` 以停靠点为单位，跨块自动连续；`extend` 为 Shift 扩展选区
+    MoveCaret { delta: isize, extend: bool },
+    /// 输入法组合开始：此后重解析与重绘全部挂起（硬约束 9）
+    CompositionStart,
+    /// 输入法提交：整段文本作为**一次**事务落盘，一次撤销即可回退整个词
+    CompositionCommit { text: String },
     Undo,
     Redo,
     SetMode(ViewMode),
@@ -43,7 +60,11 @@ pub enum Message {
 pub enum Effect {
     /// 生产实现：把该 Revision 的脏块投递到后台线程做增量解析。
     ScheduleParse { revision: u64 },
+    /// 全量重绘。只在结构可能整体变化时发出（切换模式、重载、撤销）。
     Render,
+    /// 增量重绘：用 `patch.html` 替换第 `patch.replace` 段块节点。
+    /// 编辑一律走增量，前端拿到它就不必重建整页。
+    Patch { revision: u64, patch: Patch },
     Persist,
     MoveCursor {
         char_offset: usize,
@@ -67,6 +88,12 @@ pub struct AppState {
     pub mode: ViewMode,
     pub dirty: bool,
     pub path: Option<PathBuf>,
+    /// 当前选区。两端是**全局停靠点索引**，不是 byte。
+    pub selection: Selection,
+    /// 输入法组合期间为真：所有编辑消息被吞掉，只等 `CompositionCommit` 一次性提交。
+    pub composing: bool,
+    /// 上一次渲染的分块帧，供增量重绘求差集。
+    frames: Vec<BlockFrame>,
     saved_fingerprint: Option<Fingerprint>,
     parser: MarkdownParser,
 }
@@ -86,6 +113,9 @@ impl AppState {
             mode: ViewMode::Wysiwyg,
             dirty: false,
             path,
+            selection: Selection::caret(0),
+            composing: false,
+            frames: Vec::new(),
             saved_fingerprint,
             parser: MarkdownParser::gfm(),
         };
@@ -100,6 +130,12 @@ impl AppState {
         self.parsed = self.parser.parse(&source);
         self.source_map = self.parsed.source_map();
         self.layout = DocumentLayout::build(&source, &self.parsed);
+        self.frames = block_frames(&source, &self.parsed, &self.layout);
+    }
+
+    /// 当前渲染帧（每块一份 HTML + 全局停靠点区间）。
+    pub fn frames(&self) -> &[BlockFrame] {
+        &self.frames
     }
 
     pub fn render_frame(&self) -> RenderFrame {
@@ -114,18 +150,21 @@ impl AppState {
     pub fn update(&mut self, msg: Message, files: &impl FileStore) -> Vec<Effect> {
         let is_undo = matches!(&msg, Message::Undo);
         match msg {
-            Message::Edit { span, insert } => {
-                if self.document.edit(span, &insert).is_err() {
-                    return Vec::new();
-                }
-                self.dirty = true;
-                self.reparse();
-                vec![
-                    Effect::ScheduleParse {
-                        revision: self.document.revision().0,
-                    },
-                    Effect::Render,
-                ]
+            Message::Edit { span, insert } => self.apply(span, &insert),
+            Message::InsertText { text } => self.insert_text(&text),
+            Message::Backspace => self.delete_backward(),
+            Message::DeleteForward => self.delete_forward(),
+            Message::Newline => self.newline(),
+            Message::HardBreak => self.hard_break(),
+            Message::MoveCaret { delta, extend } => self.move_caret(delta, extend),
+            Message::CompositionStart => {
+                self.composing = true;
+                // 不重绘：preedit 交给浏览器自己渲染，内核此时不得插手 DOM
+                Vec::new()
+            }
+            Message::CompositionCommit { text } => {
+                self.composing = false;
+                self.insert_text(&text)
             }
             Message::Undo | Message::Redo => {
                 let changed = if is_undo {
@@ -138,7 +177,9 @@ impl AppState {
                 }
                 self.dirty = true;
                 self.reparse();
-                vec![Effect::Render]
+                // 撤销会改变块数，旧停靠点索引可能越界，先夹紧再报光标
+                self.clamp_selection();
+                vec![Effect::Render, self.cursor_effect()]
             }
             Message::SetMode(mode) => {
                 self.mode = mode;
@@ -166,7 +207,7 @@ impl AppState {
             Message::Click { byte_offset } => {
                 // 点击点可能落在被折叠的标记里（`**` 的中间），先吸附到可见停靠点，
                 // 否则光标会被塞进标记内部，下一次输入就把 `**` 拆散。
-                let (block, visual, snapped) =
+                let (block, visual, snapped, global) =
                     match self.layout.stop_at_byte(byte_offset, Gravity::Upstream) {
                         Some(global) => {
                             let (id, local) = self
@@ -177,10 +218,12 @@ impl AppState {
                                 Some(id.0),
                                 self.layout.layout(id).and_then(|l| l.visual(local)),
                                 self.layout.byte(global).unwrap_or(byte_offset),
+                                global,
                             )
                         }
-                        None => (None, None, byte_offset),
+                        None => (None, None, byte_offset, 0),
                     };
+                self.selection = Selection::caret(global);
                 // byte -> char 换算：中文文档不做这一步会定位到错误的字。
                 let char_offset = self.document.byte_to_char(snapped);
                 vec![Effect::MoveCursor {
@@ -195,23 +238,341 @@ impl AppState {
                         .stop_at_byte(byte, Gravity::Upstream)
                         .unwrap_or(0)
                 };
-                let selection = mdview_markdown::Selection::new(snap(anchor), snap(head));
-                let byte = selection.byte_range(&self.layout).unwrap_or(0..0);
-                let blocks = selection
-                    .blocks(&self.layout)
-                    .into_iter()
-                    .map(|id| id.0)
-                    .collect();
-                vec![Effect::Selection { byte, blocks }]
+                self.selection = Selection::new(snap(anchor), snap(head));
+                self.selection_effect().into_iter().collect()
             }
             Message::Reload { content } => {
                 self.document = Document::new(content);
                 self.reparse();
+                self.clamp_selection();
                 self.dirty = false;
-                vec![Effect::Render]
+                vec![Effect::Render, self.cursor_effect()]
             }
         }
     }
+
+    // ---- 编辑闭环 -------------------------------------------------------
+
+    /// 唯一的文本写入口：一次事务 = 一步撤销，之后统一重解析、重定位光标、求增量帧。
+    fn apply(&mut self, span: Range<usize>, insert: &str) -> Vec<Effect> {
+        if span.is_empty() && insert.is_empty() {
+            return Vec::new();
+        }
+        if self.document.edit(span.clone(), insert).is_err() {
+            return Vec::new();
+        }
+        self.dirty = true;
+        let caret = span.start + insert.chars().count();
+        // 先摘走旧帧再重解析，避免为求差集克隆整份 HTML
+        let old = std::mem::take(&mut self.frames);
+        self.reparse();
+        self.selection = Selection::caret(self.stop_at_char(caret));
+        let revision = self.document.revision().0;
+        vec![
+            Effect::ScheduleParse { revision },
+            Effect::Patch {
+                revision,
+                patch: diff_frames(&old, &self.frames),
+            },
+            self.cursor_effect(),
+        ]
+    }
+
+    fn insert_text(&mut self, text: &str) -> Vec<Effect> {
+        if self.composing || text.is_empty() {
+            return Vec::new();
+        }
+        match self.selection_chars() {
+            Some(sel) => self.apply(sel, text),
+            None => {
+                let at = self.caret_char_offset();
+                self.apply(at..at, text)
+            }
+        }
+    }
+
+    fn delete_backward(&mut self) -> Vec<Effect> {
+        if self.composing {
+            return Vec::new();
+        }
+        if let Some(sel) = self.selection_chars() {
+            return self.apply(sel, "");
+        }
+        let at = self.caret_char_offset();
+        if at == 0 {
+            return Vec::new();
+        }
+        self.apply(at - 1..at, "")
+    }
+
+    fn delete_forward(&mut self) -> Vec<Effect> {
+        if self.composing {
+            return Vec::new();
+        }
+        if let Some(sel) = self.selection_chars() {
+            return self.apply(sel, "");
+        }
+        let at = self.caret_char_offset();
+        if at >= self.document.len_chars() {
+            return Vec::new();
+        }
+        self.apply(at..at + 1, "")
+    }
+
+    fn hard_break(&mut self) -> Vec<Effect> {
+        if self.composing {
+            return Vec::new();
+        }
+        if let Some(sel) = self.selection_chars() {
+            return self.apply(sel, "\\\n");
+        }
+        let at = self.caret_char_offset();
+        self.apply(at..at, "\\\n")
+    }
+
+    /// 回车。分隔符取决于光标所在块的类型：
+    ///
+    /// - 段落 / 标题：`\n\n`，因为 Markdown 的段落边界就是空行；
+    /// - 代码块 / 表格 / HTML：`\n`，插空行会把块一分为二；
+    /// - 列表 / 引用：`\n` + 重复本行标记，且有序列表序号递增；
+    /// - 标记之后尚无内容（空项）：删掉标记本身，回车即退出该层。
+    fn newline(&mut self) -> Vec<Effect> {
+        if self.composing {
+            return Vec::new();
+        }
+        if let Some(sel) = self.selection_chars() {
+            // 有选区时回车等价于「删掉选区 + 分段」，一次事务完成，只需撤销一次
+            return self.apply(sel, "\n\n");
+        }
+        let Some((id, _)) = self.layout.locate(self.selection.head) else {
+            return Vec::new();
+        };
+        let kind = self.parsed.blocks[id.0].kind.clone();
+        match kind {
+            BlockKind::CodeBlock { .. } | BlockKind::Html | BlockKind::Table => {
+                let at = self.caret_char_offset();
+                self.apply(at..at, "\n")
+            }
+            BlockKind::List { .. } | BlockKind::BlockQuote => {
+                let Some((line_start, prefix)) = self.line_prefix() else {
+                    return self.split_paragraph();
+                };
+                match analyze_line(&prefix) {
+                    Some(info) if !info.empty_item => {
+                        let at = self.caret_char_offset();
+                        self.apply(at..at, &format!("\n{}", info.repeat))
+                    }
+                    Some(_) => {
+                        let end = self.caret_byte().unwrap_or(line_start + prefix.len());
+                        self.apply_bytes(line_start..end, "")
+                    }
+                    None => self.split_paragraph(),
+                }
+            }
+            _ => self.split_paragraph(),
+        }
+    }
+
+    fn split_paragraph(&mut self) -> Vec<Effect> {
+        let at = self.caret_char_offset();
+        self.apply(at..at, "\n\n")
+    }
+
+    fn move_caret(&mut self, delta: isize, extend: bool) -> Vec<Effect> {
+        let Some((id, local)) = self.layout.locate(self.selection.head) else {
+            return Vec::new();
+        };
+        let mut caret = Caret {
+            block: id,
+            stop: local,
+        };
+        for _ in 0..delta.unsigned_abs() {
+            let next = if delta > 0 {
+                caret.next(&self.layout)
+            } else {
+                caret.prev(&self.layout)
+            };
+            let Some(next) = next else { break };
+            caret = next;
+        }
+        let Some(global) = caret.to_global(&self.layout) else {
+            return Vec::new();
+        };
+        if extend {
+            self.selection.head = global;
+        } else {
+            self.selection = Selection::caret(global);
+        }
+        let mut effects = vec![self.cursor_effect()];
+        if let Some(sel) = self.selection_effect() {
+            effects.push(sel);
+        }
+        effects
+    }
+
+    // ---- 坐标换算 -------------------------------------------------------
+
+    /// 光标所在的 byte。停靠点保证落在字符边界，因此可直接用作源码下标。
+    fn caret_byte(&self) -> Option<usize> {
+        self.layout.byte(self.selection.head)
+    }
+
+    fn caret_char_offset(&self) -> usize {
+        self.caret_byte()
+            .map(|byte| self.document.byte_to_char(byte))
+            .unwrap_or_else(|| self.document.len_chars())
+    }
+
+    /// 非折叠选区 → char 区间（跨块时含块间空行）。
+    fn selection_chars(&self) -> Option<Range<usize>> {
+        if self.selection.is_collapsed() {
+            return None;
+        }
+        let byte = self.selection.byte_range(&self.layout)?;
+        Some(self.document.byte_to_char(byte.start)..self.document.byte_to_char(byte.end))
+    }
+
+    /// char 位置 → 停靠点。
+    ///
+    /// 用 `Upstream`：刚打的字右侧若紧跟闭合标记（`**粗**` 的尾部），光标必须留在
+    /// 标记**之前**，否则下一次输入就落到样式外面。`Upstream` 贴住左词末尾正是这个语义。
+    fn stop_at_char(&self, char_offset: usize) -> usize {
+        let byte = self.document.char_to_byte(char_offset);
+        self.layout
+            .stop_at_byte(byte, Gravity::Upstream)
+            .unwrap_or(0)
+    }
+
+    fn apply_bytes(&mut self, range: Range<usize>, insert: &str) -> Vec<Effect> {
+        let span =
+            self.document.byte_to_char(range.start)..self.document.byte_to_char(range.end);
+        self.apply(span, insert)
+    }
+
+    /// 光标所在行从行首到光标的源码前缀（识别列表 / 引用标记用）。
+    fn line_prefix(&self) -> Option<(usize, String)> {
+        let byte = self.caret_byte()?;
+        let mut width = 64usize;
+        loop {
+            let start = byte.saturating_sub(width);
+            let aligned = self
+                .document
+                .char_to_byte(self.document.byte_to_char(start));
+            let chunk = self.document.slice_bytes(aligned..byte);
+            if let Some(pos) = chunk.rfind('\n') {
+                let line_start = aligned + pos + 1;
+                return Some((line_start, self.document.slice_bytes(line_start..byte)));
+            }
+            if aligned == 0 || width >= 8192 {
+                return Some((aligned, chunk));
+            }
+            width = (width * 4).min(8192);
+        }
+    }
+
+    // ---- 效果组装 -------------------------------------------------------
+
+    fn cursor_effect(&self) -> Effect {
+        let global = self.selection.head;
+        let (block, visual) = match self.layout.locate(global) {
+            Some((id, local)) => (
+                Some(id.0),
+                self.layout.layout(id).and_then(|l| l.visual(local)),
+            ),
+            None => (None, None),
+        };
+        Effect::MoveCursor {
+            char_offset: self.caret_char_offset(),
+            block,
+            visual,
+        }
+    }
+
+    fn selection_effect(&self) -> Option<Effect> {
+        if self.selection.is_collapsed() {
+            return None;
+        }
+        let byte = self.selection.byte_range(&self.layout)?;
+        let blocks = self
+            .selection
+            .blocks(&self.layout)
+            .into_iter()
+            .map(|id| id.0)
+            .collect();
+        Some(Effect::Selection { byte, blocks })
+    }
+
+    fn clamp_selection(&mut self) {
+        let last = self.layout.stops().saturating_sub(1);
+        let anchor = self.selection.anchor.min(last);
+        let head = self.selection.head.min(last);
+        self.selection = Selection::new(anchor, head);
+    }
+}
+
+/// 行首块级标记的解析结果。
+struct LineInfo {
+    /// 回车后应重复的前缀（引用 + 缩进 + 标记，有序列表序号已递增）
+    repeat: String,
+    /// 标记之后还没有内容，回车应退出该层
+    empty_item: bool,
+}
+
+/// 从「行首到光标」的源码前缀里识别 `> `、缩进、`- ` / `1. ` 这类块级标记。
+fn analyze_line(prefix: &str) -> Option<LineInfo> {
+    let mut rest = prefix;
+    let mut quote = String::new();
+    loop {
+        let trimmed = rest.trim_start_matches([' ', '\t']);
+        let Some(after) = trimmed.strip_prefix('>') else {
+            break;
+        };
+        let after = after.strip_prefix(' ').unwrap_or(after);
+        quote.push_str("> ");
+        rest = after;
+    }
+
+    let indent_len = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+    let indent = &rest[..indent_len];
+    let body = &rest[indent_len..];
+
+    let bullet = ['-', '*', '+']
+        .into_iter()
+        .find(|c| body.starts_with(*c) && body[c.len_utf8()..].starts_with(' '));
+
+    let (marker, after_marker) = if let Some(c) = bullet {
+        (format!("{c} "), body[c.len_utf8()..].trim_start_matches(' '))
+    } else {
+        let digits = body.chars().take_while(|c| c.is_ascii_digit()).count();
+        let delim = body[digits..].chars().next();
+        match delim {
+            Some(d) if digits > 0 && (d == '.' || d == ')') => {
+                let after = &body[digits + d.len_utf8()..];
+                if !after.starts_with(' ') {
+                    return None;
+                }
+                let number: u64 = body[..digits].parse().unwrap_or(0);
+                (
+                    format!("{}{d} ", number + 1),
+                    after.trim_start_matches(' '),
+                )
+            }
+            // 没有列表标记：引用块本身也要延续 `> `
+            _ if !quote.is_empty() => {
+                let empty = body.trim().is_empty();
+                return Some(LineInfo {
+                    repeat: format!("{quote}{indent}"),
+                    empty_item: empty,
+                });
+            }
+            _ => return None,
+        }
+    };
+
+    Some(LineInfo {
+        repeat: format!("{quote}{indent}{marker}"),
+        empty_item: after_marker.trim().is_empty(),
+    })
 }
 
 #[cfg(test)]
@@ -224,6 +585,28 @@ mod tests {
         files.insert("note.md", "# 标题\n\n正文内容\n");
         let app = AppState::open("# 标题\n\n正文内容\n", Some(PathBuf::from("note.md")), &files);
         (files, app)
+    }
+
+    fn open(files: &mut InMemoryFileStore, src: &str) -> AppState {
+        files.insert("t.md", src);
+        AppState::open(src, Some(PathBuf::from("t.md")), files)
+    }
+
+    fn caret_byte(app: &AppState) -> usize {
+        app.layout.byte(app.selection.head).unwrap_or(0)
+    }
+
+    fn click(app: &mut AppState, files: &InMemoryFileStore, byte: usize) {
+        app.update(Message::Click { byte_offset: byte }, files);
+    }
+
+    fn type_text(app: &mut AppState, files: &InMemoryFileStore, text: &str) {
+        app.update(
+            Message::InsertText {
+                text: text.to_owned(),
+            },
+            files,
+        );
     }
 
     #[test]
@@ -242,7 +625,7 @@ mod tests {
         assert_ne!(after.html, before.html);
         assert!(after.html.contains("<blockquote>"));
         assert!(app.dirty);
-        assert!(effects.contains(&Effect::Render));
+        assert!(effects.iter().any(|e| matches!(e, Effect::Patch { .. })));
 
         let mut sink = CollectingSink::default();
         sink.render(&after);
@@ -291,7 +674,7 @@ mod tests {
             },
             &files,
         );
-        let Effect::Selection { byte, blocks } = &effects[0] else {
+        let Some(Effect::Selection { byte, blocks }) = effects.first() else {
             panic!("应产生选区效果");
         };
         assert_eq!(blocks, &vec![0, 1]);
@@ -320,5 +703,315 @@ mod tests {
         app.update(Message::Edit { span: 0..0, insert: "> ".into() }, &files);
         assert_eq!(app.update(Message::Save, &files), vec![Effect::Persist]);
         assert!(!app.dirty);
+    }
+
+    // ---- 编辑闭环 -------------------------------------------------------
+
+    #[test]
+    fn insert_text_advances_caret_after_the_new_char() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "正文");
+        click(&mut app, &files, 0);
+        type_text(&mut app, &files, "新");
+        assert_eq!(app.document.text(), "新正文");
+        assert_eq!(caret_byte(&app), 3, "光标应落在新字之后");
+    }
+
+    #[test]
+    fn typing_inside_bold_stays_inside_the_markers() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "**加粗**");
+        click(&mut app, &files, 2);
+        type_text(&mut app, &files, "很");
+        assert_eq!(app.document.text(), "**很加粗**");
+        // 光标必须留在闭合标记之前，否则下一个字会掉到加粗外面
+        assert_eq!(caret_byte(&app), 5);
+        let effects = app.update(
+            Message::InsertText {
+                text: "多".into(),
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "**很多加粗**");
+        assert!(effects.iter().any(|e| matches!(e, Effect::MoveCursor { .. })));
+    }
+
+    #[test]
+    fn backspace_deletes_previous_char_with_chinese() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "中文abc");
+        click(&mut app, &files, 3); // 「中」之后
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "文abc");
+        assert_eq!(caret_byte(&app), 0);
+    }
+
+    #[test]
+    fn backspace_at_block_start_merges_paragraphs() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\n\n乙");
+        click(&mut app, &files, 5); // 「乙」之前
+        app.update(Message::Backspace, &files);
+        // 删掉的是空行里最后一个换行，两段合成一段
+        assert_eq!(app.document.text(), "甲\n乙");
+        assert_eq!(app.parsed.blocks.len(), 1);
+    }
+
+    #[test]
+    fn delete_forward_removes_next_char() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "abc");
+        click(&mut app, &files, 0);
+        app.update(Message::DeleteForward, &files);
+        assert_eq!(app.document.text(), "bc");
+        assert_eq!(caret_byte(&app), 0);
+    }
+
+    #[test]
+    fn typing_replaces_selection() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲乙丙");
+        app.update(Message::Select { anchor: 3, head: 6 }, &files);
+        type_text(&mut app, &files, "丁");
+        // 只替换选中的「乙」，前后字保留
+        assert_eq!(app.document.text(), "甲丁丙");
+        assert_eq!(caret_byte(&app), 6);
+    }
+
+    #[test]
+    fn enter_splits_paragraph_and_lands_in_empty_one() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "abc");
+        click(&mut app, &files, 3);
+        app.update(Message::Newline, &files);
+        assert_eq!(app.document.text(), "abc\n\n");
+        assert_eq!(app.parsed.blocks.len(), 2, "末尾应出现空段落");
+        assert_eq!(app.layout.locate(app.selection.head).unwrap().0 .0, 1);
+        // 继续打字应写进新段落，而不是接在上一段行尾
+        type_text(&mut app, &files, "d");
+        assert_eq!(app.document.text(), "abc\n\nd");
+    }
+
+    #[test]
+    fn enter_on_list_item_continues_marker() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "- 甲");
+        click(&mut app, &files, 5);
+        app.update(Message::Newline, &files);
+        assert_eq!(app.document.text(), "- 甲\n- ");
+        type_text(&mut app, &files, "乙");
+        assert_eq!(app.document.text(), "- 甲\n- 乙");
+        // 两项都还在同一个列表块里，第二项不能再冒出 `- ` 源码
+        assert!(matches!(app.parsed.blocks[0].kind, BlockKind::List { ordered: false }));
+    }
+
+    #[test]
+    fn enter_on_ordered_list_increments_number() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "1. 甲");
+        let end = app.document.len_bytes();
+        click(&mut app, &files, end);
+        app.update(Message::Newline, &files);
+        assert_eq!(app.document.text(), "1. 甲\n2. ");
+    }
+
+    #[test]
+    fn enter_on_empty_item_leaves_the_list() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "- 甲\n- ");
+        click(&mut app, &files, 8);
+        app.update(Message::Newline, &files);
+        assert_eq!(app.document.text(), "- 甲\n");
+        assert_eq!(app.parsed.blocks.len(), 1);
+    }
+
+    #[test]
+    fn enter_continues_blockquote() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "> 引用");
+        let end = app.document.len_bytes();
+        click(&mut app, &files, end);
+        app.update(Message::Newline, &files);
+        assert_eq!(app.document.text(), "> 引用\n> ");
+    }
+
+    #[test]
+    fn enter_in_code_block_inserts_single_newline() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "```\nab\n```");
+        click(&mut app, &files, 6);
+        app.update(Message::Newline, &files);
+        assert_eq!(app.document.text(), "```\nab\n\n```");
+    }
+
+    #[test]
+    fn hard_break_splits_the_line_into_one_extra_column() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "ab");
+        click(&mut app, &files, 1);
+        app.update(Message::HardBreak, &files);
+        assert_eq!(app.document.text(), "a\\\nb");
+        // 反斜杠 + 换行合成一个 Break 片段：视觉上只占一列（一个 <br>）
+        let block = &app.parsed.blocks[0];
+        let brk = block
+            .spans
+            .iter()
+            .find(|s| matches!(s.kind, mdview_markdown::SpanKind::Break { hard: true }))
+            .expect("应产生硬换行片段");
+        assert_eq!(brk.byte, 1..3);
+        // 光标落在换行之后、b 之前
+        assert_eq!(caret_byte(&app), 3);
+    }
+
+    #[test]
+    fn composition_swallows_typing_and_commits_once() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "正文");
+        click(&mut app, &files, 0);
+
+        assert!(app.update(Message::CompositionStart, &files).is_empty());
+        // 组合期间的输入一律吞掉，否则会和 preedit 双重插入
+        assert!(app
+            .update(
+                Message::InsertText {
+                    text: "x".into()
+                },
+                &files
+            )
+            .is_empty());
+        assert_eq!(app.document.text(), "正文");
+
+        app.update(
+            Message::CompositionCommit {
+                text: "你好".into(),
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "你好正文");
+        assert!(!app.composing);
+        // 一次组合 = 一步撤销
+        app.update(Message::Undo, &files);
+        assert_eq!(app.document.text(), "正文");
+    }
+
+    #[test]
+    fn arrow_keys_cross_hidden_markers() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "**a**");
+        click(&mut app, &files, 0);
+        let mut path = vec![caret_byte(&app)];
+        for _ in 0..3 {
+            app.update(Message::MoveCaret { delta: 1, extend: false }, &files);
+            path.push(caret_byte(&app));
+        }
+        // 块首点击已越过开头的 `**`（落在 2），之后每次 +1 站：2 -> 3 -> 5，末尾不越界
+        assert_eq!(path, vec![2, 3, 5, 5]);
+    }
+
+    #[test]
+    fn shift_arrow_extends_selection() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲乙丙");
+        click(&mut app, &files, 0);
+        let effects = app.update(
+            Message::MoveCaret {
+                delta: 2,
+                extend: true,
+            },
+            &files,
+        );
+        let Some(Effect::Selection { byte, .. }) = effects.last() else {
+            panic!("Shift+方向键应产生选区");
+        };
+        assert_eq!(byte, &(0..6));
+        assert_eq!(&app.document.text()[byte.clone()], "甲乙");
+    }
+
+    #[test]
+    fn patch_rewrites_only_the_edited_block() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\n\n乙\n\n丙\n");
+        // 等长替换：块内停靠点数量不变，后续块序号也不变，理想情况下只换中间那块
+        app.update(Message::Select { anchor: 5, head: 8 }, &files);
+        let effects = app.update(
+            Message::InsertText {
+                text: "丁".into(),
+            },
+            &files,
+        );
+        let Some(Effect::Patch { patch, .. }) = effects
+            .iter()
+            .find(|e| matches!(e, Effect::Patch { .. }))
+        else {
+            panic!("编辑必须产出增量帧");
+        };
+        assert_eq!(patch.replace, 1..2, "只应替换第 2 块");
+        assert!(patch.html.contains("丁"));
+        assert_eq!(patch.old_len, patch.new_len);
+    }
+
+    #[test]
+    fn patch_covers_tail_when_stop_indices_shift() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\n\n乙\n\n丙\n");
+        app.update(Message::Select { anchor: 5, head: 8 }, &files);
+        let effects = app.update(
+            Message::InsertText {
+                text: "丁戊".into(),
+            },
+            &files,
+        );
+        let Some(Effect::Patch { patch, .. }) = effects
+            .iter()
+            .find(|e| matches!(e, Effect::Patch { .. }))
+        else {
+            panic!("编辑必须产出增量帧");
+        };
+        // 停靠点总数变了，后续块的 data-b 全部平移，必须连尾部一起替换
+        assert_eq!(patch.replace, 1..3);
+    }
+
+    #[test]
+    fn undo_after_typing_restores_text_and_caret() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "abc");
+        click(&mut app, &files, 3);
+        type_text(&mut app, &files, "d");
+        assert_eq!(app.document.text(), "abcd");
+        app.update(Message::Undo, &files);
+        assert_eq!(app.document.text(), "abc");
+        assert!(app.selection.head < app.layout.stops());
+    }
+
+    #[test]
+    fn empty_document_accepts_first_keystroke() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "");
+        assert_eq!(app.layout.stops(), 1, "空文档也要有一个可落光标的段落");
+        type_text(&mut app, &files, "首");
+        assert_eq!(app.document.text(), "首");
+        assert_eq!(caret_byte(&app), 3);
+    }
+
+    #[test]
+    fn analyze_line_recognises_markers() {
+        let info = analyze_line("- 甲").expect("应识别无序列表");
+        assert_eq!(info.repeat, "- ");
+        assert!(!info.empty_item);
+
+        let info = analyze_line("1. 甲").expect("应识别有序列表");
+        assert_eq!(info.repeat, "2. ");
+
+        let info = analyze_line("- ").expect("应识别空项");
+        assert!(info.empty_item);
+
+        let info = analyze_line("> 引用").expect("应识别引用");
+        assert_eq!(info.repeat, "> ");
+
+        let info = analyze_line("  * 甲").expect("应保留缩进");
+        assert_eq!(info.repeat, "  * ");
+
+        assert!(analyze_line("普通段落").is_none());
+        assert!(analyze_line("2026 年").is_none(), "数字后没跟 . 或 ) 不算列表");
     }
 }

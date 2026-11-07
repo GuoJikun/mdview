@@ -702,9 +702,20 @@ mod tests {
     }
 
     #[test]
-    fn empty_document_has_no_stops() {
+    fn empty_document_still_has_one_stop() {
+        // 空文档也保留一个空段落，否则 caret 无处可停
         let (_, doc) = build("");
-        assert_eq!(doc.stops(), 0);
-        assert!(Caret::from_byte(&doc, 0).is_none());
+        assert_eq!(doc.stops(), 1);
+        assert_eq!(Caret::from_byte(&doc, 0).and_then(|c| c.to_byte(&doc)), Some(0));
+    }
+
+    #[test]
+    fn trailing_empty_paragraph_takes_the_caret() {
+        let (parsed, doc) = build("甲\n\n");
+        assert_eq!(parsed.blocks.len(), 2, "末尾空行应产生空段落");
+        // 文档末尾（byte = len）必须落在最后一个空块的首个停靠点上
+        let caret = Caret::from_byte(&doc, 5).unwrap();
+        assert_eq!(caret.block, BlockId(1));
+        assert_eq!(caret.to_byte(&doc), Some(5));
     }
 }

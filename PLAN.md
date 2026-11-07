@@ -30,6 +30,7 @@
 8. **撤销存 Transaction 的逆操作**，不存文档快照。
 9. **IME**：`compositionstart` 到 `compositionend` 之间，重解析与 DOM patch 全部挂起，只让浏览器渲染 preedit，`compositionend` 后一次性提交。否则中文输入会被自己的重绘打断。
 10. **同步滚动按锚点块插值**，禁止用滚动百分比换算。
+11. **文档必须永远至少有一个块**：`split_blocks` 在「整篇为空」或「以空行结尾」时补一个零长块。否则空文档没有停靠点、在末尾回车后光标只能贴在上一段行尾。（改动前 `split` 会丢弃空行段，M3 实测踩到）
 
 ---
 
@@ -131,10 +132,14 @@ byte   0  2  5  8  10
 ### M3 可编辑 🔶
 - ✅ 视觉位置索引（停靠点表）、`Caret { block, stop }`、`next/prev/home/end`
 - ✅ 选区模型与按块切高亮
-- ⬜ `beforeinput` 翻译器：DOM offset → byte → `EditOp` → rope → 重解析 → DOM patch → 重建 Selection
-- ⬜ IME 挂起机制（第 2 节约束 9）
+- ✅ **输入翻译器骨架**（`AppState::update` 内闭环）：`InsertText` / `Backspace` / `DeleteForward` / `Newline` / `HardBreak` / `MoveCaret{delta,extend}` / `CompositionStart` / `CompositionCommit`
+  - 一次编辑 = 一次 `Transaction` = 一步撤销；编辑后按 char→byte→停靠点（`Gravity::Upstream`）回填光标，闭合标记右侧不会掉出样式
+  - 回车按块类型分派：段落 `\n\n`、代码块/表格 `\n`、列表延续标记（有序序号 +1）、空项回车退出该层、引用延续 `> `
+- ✅ **增量重绘帧**：`block_frames` 出每块 HTML + 全局停靠点区间，`diff_frames` 用前后缀比对只替换变化段；编辑只发 `Effect::Patch`，结构变化才发 `Effect::Render`
+- ⬜ `beforeinput` 翻译器（DOM offset → byte）：前端侧尚未接线，当前输入消息由 CLI 脚本驱动
+- ✅ IME 挂起（内核侧）：组合期间编辑消息全部吞掉，`CompositionCommit` 一次性提交并只占一步撤销
 - ⬜ `selectionchange` 隔离，抑制原生选区与自绘 caret 的抖动
-- ⬜ 输入格式化：回车拆分块、Tab 缩进列表、输入 `**` 自动配对
+- 🔶 输入格式化：回车拆分与列表/引用延续已做；Tab 缩进、`**` 自动配对、Delete 合并块未做
 
 ### M4 细节 ⬜
 - 🔶 表格：目前仅按行断行 + 单元格间距，**无网格渲染**。表格是独立子工程（列对齐、单元格内光标、行列增删），不要塞进 M3
@@ -150,11 +155,12 @@ byte   0  2  5  8  10
 ## 7. 当前进度快照
 
 - 日期：2026-11-07
-- 测试：**67 项全过**（markdown 49 / support 7 / core 5 / app 6），无编译告警
+- 测试：**94 项全过**（markdown 55 / support 7 / core 5 / app 27），无编译告警
 - 最近提交（Angular 规范）：
   - `feat: 初始化内核、解析投影与日志`
   - `feat(markdown): 新增视觉布局与停靠点表`
   - `feat(markdown): 新增可交互投影页与结构断行`
+  - `feat(mdview): 打通输入到光标的编辑闭环与增量重绘`
 - 远端：`origin/main` 停在 `feat: 初始化内核…`，本地历史已分叉，同步需 `git push --force-with-lease`
 
 ---
@@ -170,15 +176,17 @@ byte   0  2  5  8  10
 5. **图片只渲染占位符**：不加载真实图片，路径沙箱与尺寸测量未做。
 6. **`Watcher` 无实现**：外部修改只在保存时靠指纹被动发现。
 7. **列表嵌套未验证**：多级列表的 `Item` 边界换行只测了单层。
+8. **退格会先吃掉标记字符**：光标停在「标记之后、文字之前」这个双停靠点位置时，退格删的是标记里的一个字节，`**粗**` 会退化成 `*粗**`。Typora 的做法是把标记对整删，或干脆让该位置不可停靠。这是纯字节编辑的固有代价，不是新 bug，修法在 M3 细节里排。
 
 ---
 
 ## 9. 下一步（按推荐顺序）
 
-1. **Tauri 2 外壳**：`crates/mdview-desktop`，`frontendDist` 直接指向 `preview_html` 的输出，先用 `build.rs` 或启动时生成静态文件；接 `AppState` 的 `Message::Click` / `Select`，验证 `Effect::MoveCursor { visual }` 能对上真实像素。
-2. **输入翻译器**：`beforeinput` → `EditOp`，先只支持「单字符插入 / Backspace / Enter」，跑通闭环再扩。
-3. **IME**：在翻译器之上加 composition 挂起。这是中文体验的生死线，单独排一轮。
+1. **Tauri 2 外壳 + 前端接线**：`crates/mdview-desktop`，`frontendDist` 指向由 `block_frames` 生成的编辑页；`beforeinput` / `keydown` → `Message`，消费 `Effect::Patch` 做 `replaceChildren` 式替换，用 `MoveCursor { block, visual }` 对齐真实像素。已确认 tauri 2 在本机可离线编译（`tauri 2.11.5` / `wry 0.55` / `tao 0.35` 均已在 registry 缓存中）。
+2. **DOM offset → byte 的前端换算**：编辑页仍需按片段渲染，才能把 `Selection.rangeStart` 反查成 byte；这是接线后第一件要验的事。
+3. **标记对整删**：退格/Delete 落在隐藏区间边缘时按「标记对」删除（见第 8 节第 8 条）。
 4. **表格子工程**：`<table>` 渲染 + 单元格内停靠点，替代当前的文本流占位。
+5. **`Watcher` 落地**（`notify`），把外部修改从「保存时被动发现」变成主动提示。
 
 每完成一项，更新第 6 节状态、第 7 节快照，并用 Angular 规范提交。
 
@@ -189,6 +197,7 @@ byte   0  2  5  8  10
 ```bash
 cargo test --workspace                      # 全量测试
 cargo run -p mdview-cli -- demo             # 端到端演示（edit/click/undo/save）
+cargo run -p mdview-cli -- demo edit        # 键盘脚本回放：输入 → 光标 → 增量帧
 cargo run -p mdview-cli -- <file> outline   # 大纲
 cargo run -p mdview-cli -- <file> stats     # 字符/字节/块/隐藏区间统计
 cargo run -p mdview-cli -- <file> blocks    # 块清单
@@ -209,15 +218,15 @@ cargo run -p mdview-cli -- <file> html      # 阅读态 HTML
 | 关注点 | 文件 |
 |---|---|
 | 文本与撤销 | `crates/mdview-core/src/document.rs`、`transaction.rs` |
-| 块切分 | `crates/mdview-markdown/src/split.rs` |
+| 块切分（含末尾空段落） | `crates/mdview-markdown/src/split.rs` |
 | 投影（差集、图片原子化、内联代码内缩） | `crates/mdview-markdown/src/project.rs` |
 | 片段模型、`align`、HTML | `crates/mdview-markdown/src/block.rs` |
 | **视觉布局与停靠点** | `crates/mdview-markdown/src/layout.rs` |
-| 验证页生成 | `crates/mdview-markdown/src/preview.rs` |
-| 状态机与 Effect | `crates/mdview-app/src/state.rs` |
+| **分块帧与增量 patch**（`block_frames` / `diff_frames`）+ 验证页 | `crates/mdview-markdown/src/preview.rs` |
+| **编辑闭环**（输入 → 事务 → 光标回填 → patch） | `crates/mdview-app/src/state.rs` |
 | 端口（FileStore / RenderSink / Watcher） | `crates/mdview-app/src/ports.rs` |
 | 日志滚动 | `crates/mdview-support/src/logging.rs` |
-| 命令行入口 | `crates/mdview-cli/src/main.rs` |
+| 命令行入口（含 `demo edit` 回放） | `crates/mdview-cli/src/main.rs` |
 
 ---
 

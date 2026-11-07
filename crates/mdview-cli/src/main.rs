@@ -6,7 +6,9 @@
 use std::{env, fs, process};
 
 use log::{error, info, warn};
-use mdview_app::{AppState, CollectingSink, InMemoryFileStore, Message, RenderSink, ViewMode};
+use mdview_app::{
+    AppState, CollectingSink, Effect, InMemoryFileStore, Message, RenderSink, ViewMode,
+};
 use mdview_core::Document;
 use mdview_markdown::{Block, BlockKind, DocumentLayout, MarkdownParser, ParseResult};
 
@@ -32,7 +34,11 @@ fn main() {
     }
 
     if args[0] == "demo" {
-        run_demo();
+        if args.get(1).map(String::as_str) == Some("edit") {
+            run_edit_demo();
+        } else {
+            run_demo();
+        }
         return;
     }
 
@@ -286,7 +292,108 @@ fn write_preview(path: &str, content: &str) {
     }
 }
 
+/// 键盘脚本回放：把「输入 → 事务 → 重解析 → 光标回填 → 增量帧」整条链路打印出来。
+/// 这是 M3 编辑闭环的无头验证入口，不需要任何 GUI。
+fn run_edit_demo() {
+    let mut files = InMemoryFileStore::default();
+    files.insert("edit.md", String::new());
+    let mut app = AppState::open("", Some("edit.md".into()), &files);
+    println!(
+        "[open] 空文档：停靠点 {} 个（空段落保证光标有落点）",
+        app.layout.stops()
+    );
+
+    step(
+        &mut app,
+        &files,
+        "输入「标题」",
+        Message::InsertText {
+            text: "标题".into(),
+        },
+    );
+    step(&mut app, &files, "回车分段", Message::Newline);
+    step(
+        &mut app,
+        &files,
+        "输入「正文**粗**」",
+        Message::InsertText {
+            text: "正文**粗**".into(),
+        },
+    );
+
+    // 光标点进加粗标记内部再打字：标记不能被拆散，光标也不能被推到样式外面
+    let inside = app.document.text().find('粗').unwrap_or(0);
+    step(
+        &mut app,
+        &files,
+        "点进加粗内部",
+        Message::Click { byte_offset: inside },
+    );
+    step(
+        &mut app,
+        &files,
+        "输入「很」",
+        Message::InsertText {
+            text: "很".into(),
+        },
+    );
+    step(
+        &mut app,
+        &files,
+        "左移一格",
+        Message::MoveCaret {
+            delta: -1,
+            extend: false,
+        },
+    );
+    step(&mut app, &files, "退格", Message::Backspace);
+    step(&mut app, &files, "撤销", Message::Undo);
+    step(&mut app, &files, "保存", Message::Save);
+}
+
+fn step(app: &mut AppState, files: &InMemoryFileStore, label: &str, msg: Message) {
+    let effects = app.update(msg, files);
+    let text = app.document.text().replace('\n', "⏎");
+    let caret = match app.layout.locate(app.selection.head) {
+        Some((id, local)) => format!(
+            "块 {} 视觉列 {:?}",
+            id.0,
+            app.layout.layout(id).and_then(|l| l.visual(local))
+        ),
+        None => "无（文档为空）".to_owned(),
+    };
+    println!("[{label}]");
+    println!("   源码 {text:?}");
+    println!("   光标 {caret}  停靠点 {}", app.selection.head);
+    if let Some(Effect::Patch { patch, .. }) = effects
+        .iter()
+        .find(|e| matches!(e, Effect::Patch { .. }))
+    {
+        println!(
+            "   增量 替换块 {:?} / 共 {} 块，HTML {} 字节",
+            patch.replace,
+            patch.new_len,
+            patch.html.len()
+        );
+    }
+    let names: Vec<&str> = effects.iter().map(effect_name).collect();
+    println!("   效果 {names:?}");
+}
+
+fn effect_name(effect: &Effect) -> &'static str {
+    match effect {
+        Effect::ScheduleParse { .. } => "ScheduleParse",
+        Effect::Render => "Render",
+        Effect::Patch { .. } => "Patch",
+        Effect::Persist => "Persist",
+        Effect::MoveCursor { .. } => "MoveCursor",
+        Effect::Selection { .. } => "Selection",
+        Effect::Conflict => "Conflict",
+    }
+}
+
 fn usage() {
     println!("mdview <file> [outline|stats|blocks|spans|layout|preview|html]");
-    println!("mdview demo");
+    println!("mdview demo        状态机与文件端到端（edit/click/undo/save）");
+    println!("mdview demo edit   键盘脚本回放：输入 → 光标 → 增量帧");
 }
