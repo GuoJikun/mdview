@@ -64,6 +64,7 @@ crates/
   mdview-support/   运行期基础设施：logging（滚动落盘）/ error（AppError）
   mdview-app/       状态机：State / Message / update / Effect + ports trait
   mdview-cli/       无头入口，所有验证都从这里跑
+  mdview-desktop/   Tauri 2 外壳：session.rs（IPC 契约，可单测）+ web/（只做像素与输入）
 ```
 
 依赖方向：`cli → app → markdown → core`，`support` 被 app 与 cli 共用。**core 不得依赖 markdown**。
@@ -125,7 +126,8 @@ byte   0  2  5  8  10
 - ✅ 样式：标题 / 加粗 / 斜体 / 删除线 / 行内代码 / 链接 / 引用 / 代码块 / 分隔线
 - ✅ **可交互验证页**（`mdview <file> preview`）：真实 DOM + 自绘 caret + 状态栏，用于核对停靠点
 - ✅ 列表项与表格行断行、列表项目符号逐项渲染
-- ⬜ Tauri 2 外壳与 `frontendDist` 接线
+- ✅ **Tauri 2 外壳**（`crates/mdview-desktop`）：`frontendDist` 指向内嵌的 `web/`，`session.rs` 隔离 IPC 契约（前端 `kind` 字符串 → `Message`），窗口创建与 IPC 已用启动探针在日志中验证
+- ✅ 前端渲染：按块落地、增量应用 `Patch`、用停靠点 `data-b`/`data-a` 的左右边缘量出 caret 像素、点击/拖动报停靠点
 - ⬜ 主题系统、大纲侧栏
 - ⬜ 同步滚动（锚点插值）
 
@@ -136,8 +138,9 @@ byte   0  2  5  8  10
   - 一次编辑 = 一次 `Transaction` = 一步撤销；编辑后按 char→byte→停靠点（`Gravity::Upstream`）回填光标，闭合标记右侧不会掉出样式
   - 回车按块类型分派：段落 `\n\n`、代码块/表格 `\n`、列表延续标记（有序序号 +1）、空项回车退出该层、引用延续 `> `
 - ✅ **增量重绘帧**：`block_frames` 出每块 HTML + 全局停靠点区间，`diff_frames` 用前后缀比对只替换变化段；编辑只发 `Effect::Patch`，结构变化才发 `Effect::Render`
-- ⬜ `beforeinput` 翻译器（DOM offset → byte）：前端侧尚未接线，当前输入消息由 CLI 脚本驱动
-- ✅ IME 挂起（内核侧）：组合期间编辑消息全部吞掉，`CompositionCommit` 一次性提交并只占一步撤销
+- ✅ **桌面端输入接线**：`keydown` / `paste` / 鼠标 → `Wire` → `Message`；消费 `Patch` 做块节点替换，用 `MoveCursor { stop, block, visual }` 对齐像素
+- ⬜ **输入法输入层（下一轮的头号任务）**：`#doc` 目前不是可编辑元素，IME 的 `compositionstart/end` 根本不会触发，**当前只能用粘贴输入中文**。需要按约束 9 加一个镜像输入层（隐藏 input + 镜像 span 显示 preedit），composition 期间挂起重绘
+- ⬜ 行内软换行后的上下方向键、选区拖动中的自动滚动
 - ⬜ `selectionchange` 隔离，抑制原生选区与自绘 caret 的抖动
 - 🔶 输入格式化：回车拆分与列表/引用延续已做；Tab 缩进、`**` 自动配对、Delete 合并块未做
 
@@ -155,12 +158,14 @@ byte   0  2  5  8  10
 ## 7. 当前进度快照
 
 - 日期：2026-11-07
-- 测试：**94 项全过**（markdown 55 / support 7 / core 5 / app 27），无编译告警
+- 测试：**101 项全过**（markdown 55 / app 27 / desktop 7 / support 7 / core 5），无编译告警
+- 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
 - 最近提交（Angular 规范）：
   - `feat: 初始化内核、解析投影与日志`
   - `feat(markdown): 新增视觉布局与停靠点表`
   - `feat(markdown): 新增可交互投影页与结构断行`
   - `feat(mdview): 打通输入到光标的编辑闭环与增量重绘`
+  - `feat(desktop): 新增 Tauri 外壳与前端编辑接线`
 - 远端：`origin/main` 停在 `feat: 初始化内核…`，本地历史已分叉，同步需 `git push --force-with-lease`
 
 ---
@@ -169,22 +174,23 @@ byte   0  2  5  8  10
 
 按影响排序，接手时不要误以为是新 bug：
 
-1. **表格没有网格**：markdown 层把 `|` 与 `---` 折叠后，表格退化成普通文本流。当前只做到「行分行、单元格加间隙」。
-2. **每字符一个 DOM 元素**：`preview.rs` 为了让停靠点可寻址，把每个字符渲染成独立 `<span>`。副作用是英文单词任意处可断行。生产实现应改为「每片段一个元素 + 内核 `align` 换算 char↔byte」。
-3. **Windows 原子写窗口期**：见 M1。
-4. **无虚拟化**：全文档一次性建 DOM。5 万字以上会卡，但暂无此需求。
-5. **图片只渲染占位符**：不加载真实图片，路径沙箱与尺寸测量未做。
-6. **`Watcher` 无实现**：外部修改只在保存时靠指纹被动发现。
-7. **列表嵌套未验证**：多级列表的 `Item` 边界换行只测了单层。
-8. **退格会先吃掉标记字符**：光标停在「标记之后、文字之前」这个双停靠点位置时，退格删的是标记里的一个字节，`**粗**` 会退化成 `*粗**`。Typora 的做法是把标记对整删，或干脆让该位置不可停靠。这是纯字节编辑的固有代价，不是新 bug，修法在 M3 细节里排。
+1. **输入法不可用（最高优先级）**：`#doc` 不是可编辑元素，`compositionstart/end` 不会触发，目前只能用粘贴输入中文。内核侧的挂起与一次性提交已就绪（`CompositionStart` / `CompositionCommit`），缺的是前端输入层。修法见第 9 节第 1 条。
+2. **表格没有网格**：markdown 层把 `|` 与 `---` 折叠后，表格退化成普通文本流。当前只做到「行分行、单元格加间隙」。
+3. **每字符一个 DOM 元素**：`preview.rs` 为了让停靠点可寻址，把每个字符渲染成独立 `<span>`。副作用是英文单词任意处可断行，DOM 节点数也偏高。生产实现应改为「每片段一个元素 + 内核 `align` 换算 char↔byte」。
+4. **Windows 原子写窗口期**：见 M1。
+5. **无虚拟化**：全文档一次性建 DOM。5 万字以上会卡，但暂无此需求。
+6. **图片只渲染占位符**：不加载真实图片，路径沙箱与尺寸测量未做。
+7. **`Watcher` 无实现**：外部修改只在保存时靠指纹被动发现。
+8. **列表嵌套未验证**：多级列表的 `Item` 边界换行只测了单层。
+9. **退格会先吃掉标记字符**：光标停在「标记之后、文字之前」这个双停靠点位置时，退格删的是标记里的一个字节，`**粗**` 会退化成 `*粗**`。Typora 的做法是把标记对整删，或干脆让该位置不可停靠。这是纯字节编辑的固有代价，不是新 bug，修法在 M3 细节里排。
 
 ---
 
 ## 9. 下一步（按推荐顺序）
 
-1. **Tauri 2 外壳 + 前端接线**：`crates/mdview-desktop`，`frontendDist` 指向由 `block_frames` 生成的编辑页；`beforeinput` / `keydown` → `Message`，消费 `Effect::Patch` 做 `replaceChildren` 式替换，用 `MoveCursor { block, visual }` 对齐真实像素。已确认 tauri 2 在本机可离线编译（`tauri 2.11.5` / `wry 0.55` / `tao 0.35` 均已在 registry 缓存中）。
-2. **DOM offset → byte 的前端换算**：编辑页仍需按片段渲染，才能把 `Selection.rangeStart` 反查成 byte；这是接线后第一件要验的事。
-3. **标记对整删**：退格/Delete 落在隐藏区间边缘时按「标记对」删除（见第 8 节第 8 条）。
+1. **IME 输入层**：`#doc` 换成「隐藏 input + 镜像 span」的输入层。preedit 渲染在镜像 span 里（可见），`compositionstart` 到 `compositionend` 之间不重绘，提交时走 `CompositionCommit`。这是中文可用的前提，也是当前最大的缺口。
+2. **标记对整删**：退格/Delete 落在隐藏区间边缘时按「标记对」删除（见第 8 节第 9 条）。
+3. **行内上下移动**：`ArrowUp/Down` 需要跨块 + 视觉列对齐，靠 `Caret::visual` 与块内 `stop_at_visual` 实现。
 4. **表格子工程**：`<table>` 渲染 + 单元格内停靠点，替代当前的文本流占位。
 5. **`Watcher` 落地**（`notify`），把外部修改从「保存时被动发现」变成主动提示。
 
@@ -205,6 +211,7 @@ cargo run -p mdview-cli -- <file> spans     # 逐块投影，⟦⟧ 内为折叠
 cargo run -p mdview-cli -- <file> layout    # 停靠点表：列 / byte / 字符（← 同列）
 cargo run -p mdview-cli -- <file> preview   # 生成 <file>.preview.html
 cargo run -p mdview-cli -- <file> html      # 阅读态 HTML
+cargo run -p mdview-desktop -- <file>       # 起窗（Tauri 2）
 ```
 
 日志落在可执行文件同级 `logs/`：`mdview.log`（5×1MB 滚动）、`error.log`（error 独占，5×1MB）。只读目录自动回落到 `%LOCALAPPDATA%/mdview/logs`。
@@ -227,6 +234,8 @@ cargo run -p mdview-cli -- <file> html      # 阅读态 HTML
 | 端口（FileStore / RenderSink / Watcher） | `crates/mdview-app/src/ports.rs` |
 | 日志滚动 | `crates/mdview-support/src/logging.rs` |
 | 命令行入口（含 `demo edit` 回放） | `crates/mdview-cli/src/main.rs` |
+| **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包） | `crates/mdview-desktop/src/session.rs` |
+| **编辑页**（停靠点 → 像素、按键 → 消息、增量应用） | `crates/mdview-desktop/web/app.js` |
 
 ---
 

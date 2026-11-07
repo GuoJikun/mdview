@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"主窗口的最低权限：只用自定义命令，不开任何插件","local":true,"windows":["main"],"permissions":["core:default"]}}

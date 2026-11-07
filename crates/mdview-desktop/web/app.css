@@ -1,0 +1,73 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font: 16px/1.85 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  color: #1f2328; background: #fff;
+  -webkit-font-smoothing: antialiased;
+}
+#doc {
+  max-width: 780px; margin: 0 auto; padding: 56px 32px 45vh;
+  outline: none; cursor: text;
+}
+.blk { position: relative; margin: 0 0 1.1em; white-space: pre-wrap; }
+.p { margin: 0; }
+h1, h2, h3, h4, h5, h6 { margin: 1.5em 0 .6em; line-height: 1.35; font-weight: 650; }
+h1 { font-size: 1.9em; } h2 { font-size: 1.55em; } h3 { font-size: 1.3em; }
+h4 { font-size: 1.12em; } h5, h6 { font-size: 1em; }
+.code {
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: .92em; line-height: 1.6; white-space: pre;
+  background: #f6f8fa; border: 1px solid #eaecef; border-radius: 6px;
+  padding: .9em 1em; overflow-x: auto;
+}
+blockquote {
+  margin: 0; padding-left: 1em; border-left: 3px solid #dfe2e5; color: #57606a;
+}
+.kind-list { padding-left: 1.5em; }
+.li { position: relative; }
+.li::before { content: "•"; position: absolute; left: -1.05em; color: #8b949e; }
+.li:has(.atom.task)::before { content: none; }
+.li:has(.atom.task) { padding-left: .1em; }
+.sep { display: inline-block; width: .55em; }
+.atom.rule { display: block; color: #d0d7de; letter-spacing: .1em; }
+.b { font-weight: 650; }
+.i { font-style: italic; }
+.d { text-decoration: line-through; color: #6e7781; }
+.c {
+  font-family: "Cascadia Code", Consolas, monospace; font-size: .9em;
+  background: #eff1f3; border-radius: 3px;
+}
+.a { color: #0969da; text-decoration: underline; text-underline-offset: 2px; }
+/* 折叠的标记仍然占位，只是不可见：它是停靠点之间的「跨栏」 */
+.mk { color: transparent; }
+.eob, .mk { user-select: none; }
+.atom { display: inline-block; vertical-align: baseline; }
+.atom.img {
+  min-width: 1.6em; padding: 0 .35em; border: 1px dashed #b6bcc4; border-radius: 4px;
+  color: #57606a; font-size: .82em; text-align: center; background: #fafbfc;
+}
+.atom.task { color: #57606a; }
+.sel { background: rgba(37, 99, 235, .18); border-radius: 2px; }
+#caret {
+  position: absolute; width: 2px; background: #0969da; border-radius: 1px;
+  pointer-events: none; display: none;
+}
+#caret.blink { animation: caret-blink 1.05s steps(1) infinite; }
+@keyframes caret-blink { 50% { opacity: 0; } }
+#bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+  display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
+  padding: 8px 18px; font: 12px/1.6 ui-monospace, Consolas, monospace;
+  color: #57606a; background: rgba(255, 255, 255, .94);
+  border-top: 1px solid #eaecef; backdrop-filter: blur(6px);
+}
+#bar b { color: #1f2328; font-weight: 600; }
+#bar .hint { margin-left: auto; color: #8b949e; }
+#bar .dirty { color: #bf8700; }
+#toast {
+  position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%);
+  padding: 6px 14px; border-radius: 6px; font-size: 13px;
+  background: rgba(31, 35, 40, .9); color: #fff; opacity: 0;
+  transition: opacity .2s ease; pointer-events: none; z-index: 20;
+}
+#toast.show { opacity: 1; }

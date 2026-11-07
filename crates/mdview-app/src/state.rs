@@ -51,6 +51,9 @@ pub enum Message {
     Save,
     /// byte offset（Markdown / DOM 语义）
     Click { byte_offset: usize },
+    /// 全局停靠点序号。前端已持有「停靠点 → 像素」映射，点击/拖动直接报停靠点，
+    /// 省掉一次 byte → 停靠点的吸附。
+    SetCaret { stop: usize, extend: bool },
     /// 选区两端都是 byte offset，交给布局层吸附到停靠点
     Select { anchor: usize, head: usize },
     Reload { content: String },
@@ -67,6 +70,8 @@ pub enum Effect {
     Patch { revision: u64, patch: Patch },
     Persist,
     MoveCursor {
+        /// 光标所在的全局停靠点序号。前端用它找 `data-b` / `data-a` 节点定像素。
+        stop: usize,
         char_offset: usize,
         block: Option<usize>,
         /// 块内视觉列。前端据此对齐 caret 的 x 坐标，不必自己数隐藏标记。
@@ -227,10 +232,25 @@ impl AppState {
                 // byte -> char 换算：中文文档不做这一步会定位到错误的字。
                 let char_offset = self.document.byte_to_char(snapped);
                 vec![Effect::MoveCursor {
+                    stop: global,
                     char_offset,
                     block,
                     visual,
                 }]
+            }
+            Message::SetCaret { stop, extend } => {
+                let last = self.layout.stops().saturating_sub(1);
+                let stop = stop.min(last);
+                if extend {
+                    self.selection.head = stop;
+                } else {
+                    self.selection = Selection::caret(stop);
+                }
+                let mut effects = vec![self.cursor_effect()];
+                if let Some(sel) = self.selection_effect() {
+                    effects.push(sel);
+                }
+                effects
             }
             Message::Select { anchor, head } => {
                 let snap = |byte| {
@@ -482,6 +502,7 @@ impl AppState {
             None => (None, None),
         };
         Effect::MoveCursor {
+            stop: global,
             char_offset: self.caret_char_offset(),
             block,
             visual,
@@ -641,6 +662,7 @@ mod tests {
         assert_eq!(
             effects,
             vec![Effect::MoveCursor {
+                stop: app.layout.stop_at_byte(byte_offset, Gravity::Upstream).unwrap(),
                 char_offset: app.document.byte_to_char(byte_offset),
                 block: Some(1),
                 visual: Some(0),
