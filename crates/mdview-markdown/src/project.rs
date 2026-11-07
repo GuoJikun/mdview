@@ -317,6 +317,11 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
             hidden,
             markers,
         };
+        let block = if heading_is_bare(src, &block) {
+            demote_to_paragraph(src, block)
+        } else {
+            block
+        };
         if let BlockKind::Heading(level) = &block.kind {
             outline.push(OutlineItem {
                 level: *level,
@@ -329,6 +334,51 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
     }
 
     ParseResult { blocks, outline }
+}
+
+/// 标题是否「还没成形」：`#` 之后既没有空格、也没有内容。
+///
+/// pulldown 按 CommonMark 把行尾的裸 `#` 也当成合法的 ATX 标题（内容为空），
+/// 于是逐字输入时会出现两次跳变：敲 `#` 整行先变成一级标题（`#` 被折叠、字号
+/// 变大），接着输入文字又掉回段落（`#` 重新可见、字号缩回）。
+///
+/// 这里把「只有 `#`、后面没有空格」的块降级成段落：标记始终可见，用户敲下空格
+/// 的那一刻才升格为标题。既消灭了抖动，也与「ATX 标题必须有空格」一致。
+fn heading_is_bare(src: &str, block: &Block) -> bool {
+    if !matches!(block.kind, BlockKind::Heading(_)) {
+        return false;
+    }
+    if !block.plain_text().is_empty() {
+        return false;
+    }
+    // 内容为空时，`#` 之后只可能什么都没有（`#a` 本来就不是标题）
+    let raw = src.get(block.byte.clone()).unwrap_or("");
+    !raw.trim_start()
+        .trim_start_matches('#')
+        .chars()
+        .next()
+        .is_some_and(|c| c == ' ' || c == '\t')
+}
+
+/// 把未成形的标题还原成一段普通文本：`#` 原样显示、不再折叠、不进大纲。
+fn demote_to_paragraph(src: &str, block: Block) -> Block {
+    let mut spans = Vec::new();
+    if let Some(text) = src.get(block.byte.clone()).filter(|t| !t.is_empty()) {
+        spans.push(Span {
+            kind: SpanKind::Text,
+            byte: block.byte.clone(),
+            text: text.to_owned(),
+            style: Style::default(),
+        });
+    }
+    Block {
+        id: block.id,
+        kind: BlockKind::Paragraph,
+        byte: block.byte,
+        spans,
+        hidden: Vec::new(),
+        markers: Vec::new(),
+    }
 }
 
 /// 在 `start` 之前找最近的换行，把它登记为可见的硬换行。
@@ -529,6 +579,35 @@ mod tests {
     #[test]
     fn heading_marker_is_hidden() {
         assert_eq!(hidden_text("## 标题"), vec!["## "]);
+    }
+
+    #[test]
+    fn bare_hashes_are_not_a_heading() {
+        // 逐字输入 `#` 时不能先跳成标题再掉回段落：标记要一直看得见
+        for src in ["#", "##", "######", "  #"] {
+            let block = first_block(src);
+            assert_eq!(block.kind, BlockKind::Paragraph, "{src} 被当成了标题");
+            assert!(block.hidden.is_empty(), "{src} 的标记被折叠了");
+            assert_eq!(block.plain_text(), src.trim(), "{src} 的字符丢了");
+        }
+    }
+
+    #[test]
+    fn space_turns_hashes_into_a_heading() {
+        // 敲下空格才算成形，之后输入内容不会再变回段落
+        for src in ["# ", "## ", "# 标题", "## 标题"] {
+            assert!(
+                matches!(first_block(src).kind, BlockKind::Heading(_)),
+                "{src} 应当是标题"
+            );
+        }
+    }
+
+    #[test]
+    fn bare_hashes_stay_out_of_outline() {
+        let parsed = parse("#\n\n# 甲\n", MarkdownParser::gfm().options());
+        assert_eq!(parsed.outline.len(), 1);
+        assert_eq!(parsed.outline[0].title, "甲");
     }
 
     #[test]

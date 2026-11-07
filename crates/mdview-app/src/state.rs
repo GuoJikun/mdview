@@ -808,6 +808,27 @@ mod tests {
     }
 
     #[test]
+    fn typing_hash_does_not_flip_the_line_into_a_heading() {
+        // 逐字输入 `#`：CommonMark 允许裸 `#` 成标题，但编辑器里那会先跳成 H1
+        // 再在输入文字后掉回段落。空格才是「我要开始写标题」的信号。
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "");
+
+        type_text(&mut app, &files, "#");
+        assert_eq!(app.frames()[0].kind, "paragraph", "裸 # 不该升格为标题");
+        assert!(
+            !app.frames()[0].html.contains("class=\"mk\""),
+            "# 必须看得见，不能被当成折叠标记"
+        );
+
+        type_text(&mut app, &files, " ");
+        assert_eq!(app.frames()[0].kind, "heading", "敲了空格才是标题");
+
+        type_text(&mut app, &files, "标题");
+        assert_eq!(app.frames()[0].kind, "heading", "补内容之后不该退回段落");
+    }
+
+    #[test]
     fn preview_click_converts_byte_to_char_offset() {
         let (files, mut app) = fixture();
         // "正文内容" 前有 "# 标题\n\n" = 2 + 6 + 2 = 10 bytes，且均为多字节字符。
