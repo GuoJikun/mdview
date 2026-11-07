@@ -571,9 +571,20 @@ impl AppState {
         }
     }
 
+    /// 段落内回车：切出一个新段落，光标落到下一段。
+    ///
+    /// 正常段落要插两个换行——Markdown 的段落边界就是空行。但光标本来就在
+    /// **文档中间的空段落**里时，它下面已经有一行分隔了，再插两个换行会一次
+    /// 多出两行空行（连按回车像在「跳行」）。这种块是零长的，位置也必须
+    /// 小于文档长度：末尾那个零长块是虚拟的，它后面并没有分隔空行。
     fn split_paragraph(&mut self) -> Vec<Effect> {
         let at = self.caret_char_offset();
-        self.apply(at..at, "\n\n")
+        let in_empty_paragraph = self
+            .layout
+            .locate(self.selection.head)
+            .and_then(|(id, _)| self.parsed.blocks.get(id.0))
+            .is_some_and(|b| b.byte.is_empty() && b.byte.start < self.document.len_bytes());
+        self.apply(at..at, if in_empty_paragraph { "\n" } else { "\n\n" })
     }
 
     fn move_caret(&mut self, delta: isize, extend: bool) -> Vec<Effect> {
@@ -1311,6 +1322,24 @@ mod tests {
         assert_eq!(app.parsed.blocks[block.0].byte, 13..13, "光标没停在空段落里");
         type_text(&mut app, &files, "文");
         assert_eq!(app.document.text(), "- 甲\n- 乙\n\n文\n\n- 丙\n");
+    }
+
+    #[test]
+    fn enter_in_empty_paragraph_advances_one_line() {
+        // 空段落下面本来就有一行分隔，再插两个换行会一次多出两行（像在跳行）
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "- 甲\n- 乙\n\n正文\n");
+        click(&mut app, &files, 11);
+        app.update(Message::Newline, &files);
+        app.update(Message::Newline, &files);
+        assert_eq!(app.document.text(), "- 甲\n- 乙\n\n\n\n正文\n");
+        app.update(Message::Newline, &files);
+        assert_eq!(app.document.text(), "- 甲\n- 乙\n\n\n\n\n正文\n");
+        let (block, _) = app.layout.locate(app.selection.head).unwrap();
+        assert!(
+            app.parsed.blocks[block.0].byte.is_empty(),
+            "回车之后光标应当还在空段落里"
+        );
     }
 
     #[test]
