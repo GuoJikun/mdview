@@ -1,8 +1,9 @@
 //! 前端脚本的守门测试。
 //!
-//! 这一层没有 Rust 代码可测，但 `web/` 里的输入法状态机不该靠肉眼验证：
-//! `ime.js` 刻意不碰 DOM，因此可以直接用 Node 跑。这里做两件事——
-//! 语法检查所有前端脚本，再跑一遍 `ime.test.js`。
+//! 这一层没有 Rust 代码可测，但 `web/` 里的纯逻辑不该靠肉眼验证：
+//! `ime.js`（输入法状态机）与 `caretline.js`（上下移动的几何）都刻意不碰 DOM，
+//! 因此可以直接用 Node 跑。这里做两件事——语法检查所有前端脚本，再把两套
+//! 用例跑一遍。
 //!
 //! 没装 Node 时整组跳过（打印原因），不让缺工具链阻塞 Rust 侧的流水线。
 
@@ -37,7 +38,13 @@ fn frontend_scripts_are_syntactically_valid() {
         eprintln!("跳过：本机没有 node");
         return;
     }
-    for script in ["app.js", "ime.js", "ime.test.js"] {
+    for script in [
+        "app.js",
+        "ime.js",
+        "ime.test.js",
+        "caretline.js",
+        "caretline.test.js",
+    ] {
         let (ok, output) = run_node(&["--check", script]);
         assert!(ok, "{script} 语法错误：\n{output}");
     }
@@ -52,5 +59,16 @@ fn ime_state_machine_passes_its_suite() {
     let (ok, output) = run_node(&["ime.test.js"]);
     assert!(ok, "输入法状态机测试失败：\n{output}");
     // 断言用例确实跑了，避免文件被清空后「零项全过」的假绿
+    assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
+}
+
+#[test]
+fn vertical_motion_geometry_passes_its_suite() {
+    if !node_ready() {
+        eprintln!("跳过：本机没有 node");
+        return;
+    }
+    let (ok, output) = run_node(&["caretline.test.js"]);
+    assert!(ok, "上下移动几何测试失败：\n{output}");
     assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
 }

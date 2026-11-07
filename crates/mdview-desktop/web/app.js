@@ -14,7 +14,9 @@ const toastEl = document.getElementById('toast');
 let byBefore = new Map();   // 停靠点 → 从它开始的元素
 let byAfter = new Map();    // 停靠点 → 在它结束的元素
 let marks = [];             // 全部带 data-b 的元素
+let maxStop = -1;           // 最大停靠点序号，供上下移动取上界
 let caret = null;           // 最近一次内核回报的光标
+let pendingStop = null;     // 已发出、尚未回包的垂直移动落点
 let meta = { revision: 0, dirty: false, path: null, stops: 0 };
 let dragging = false;
 let imeAnchorEl = null;     // preedit 复制字号用的参照元素（光标所在的字）
@@ -32,10 +34,14 @@ function reindex() {
   byBefore = new Map();
   byAfter = new Map();
   marks = [];
+  maxStop = -1;
   for (const el of docEl.querySelectorAll('[data-b]')) {
     const before = Number(el.dataset.b);
     if (!byBefore.has(before)) byBefore.set(before, el);
-    if (el.hasAttribute('data-a')) byAfter.set(Number(el.dataset.a), el);
+    const after = el.hasAttribute('data-a') ? Number(el.dataset.a) : before;
+    if (el.hasAttribute('data-a')) byAfter.set(after, el);
+    if (before > maxStop) maxStop = before;
+    if (after > maxStop) maxStop = after;
     marks.push(el);
   }
 }
@@ -72,6 +78,9 @@ function applyPatch(patch) {
 /**
  * 停靠点 → 像素。停靠点的 x 就是「以它结尾的元素的右边缘」，
  * 没有这个元素时取「以它开始的元素的左边缘」。全部由浏览器测量，内核不参与。
+ *
+ * `mk` 用于上下移动时的并列判决：折叠标记零宽，它的右端与相邻文字共享同一列，
+ * 落到标记里会让下一次退格先碰标记。`self-test` 里对这一点有断言。
  */
 function rectOf(stop) {
   const probes = [
@@ -82,14 +91,29 @@ function rectOf(stop) {
     if (!el) continue;
     const rect = el.getBoundingClientRect();
     if (rect.height > 0) {
-      return { x: edge === 'right' ? rect.right : rect.left, top: rect.top, height: rect.height, el };
+      const mk = el.classList.contains('mk');
+      return {
+        x: edge === 'right' ? rect.right : rect.left,
+        top: rect.top, height: rect.height, el, mk,
+      };
     }
   }
   return null;
 }
 
+/**
+ * 上下移动的几何。放在前端而不是内核：软换行只有浏览器知道，
+ * 内核只认「停靠点 + 视觉列」，它眼里的下一行只能是下一块。
+ */
+const lines = createLineMotion({
+  count: () => maxStop + 1,
+  rect: (stop) => rectOf(stop),
+});
+
 function applyCaret(next) {
   caret = next;
+  // 只有回包落点与预期一致才作废：连按时可能还在路上（见 moveVertical）
+  if (pendingStop !== null && next && next.stop === pendingStop) pendingStop = null;
   if (!next) {
     caretEl.style.display = 'none';
     return;
@@ -154,12 +178,39 @@ function toast(text) {
 // 所有消息串行发出：内核虽然有锁，但 DOM 的 patch 必须按顺序应用
 let queue = Promise.resolve();
 
-function send(message) {
+/** 只入队，不动状态。上下移动专用，否则期望列每步都被清掉。 */
+function enqueue(message) {
   queue = queue.then(() => dispatchOne(message)).catch((err) => {
     console.error(err);
     toast('内核报错：' + err);
   });
   return queue;
+}
+
+/**
+ * 普通消息。任何非上下移动的操作都要清掉「期望列」——
+ * 否则按过上下键之后再点击、输入，列还会被上一次的方向键带跑。
+ */
+function send(message) {
+  lines.reset();
+  pendingStop = null;
+  return enqueue(message);
+}
+
+/**
+ * 上下方向键：按真实视觉行移动，落点是目标行里离当前 x 最近的停靠点。
+ *
+ * 按住不放时按键比 IPC 回包快，`caret` 会落后一步，于是每一下都从同一个位置
+ * 起算、原地不动。这里用 `pendingStop` 记住「还没回包但已发出」的落点。
+ */
+function moveVertical(dir, extend) {
+  if (!caret) return;
+  const from = pendingStop === null ? caret.stop : pendingStop;
+  const target = lines.step(from, dir);
+  // 已在首行/末行：标准行为是不动，而不是跳到块首
+  if (target === null) return;
+  pendingStop = target;
+  enqueue({ kind: 'setCaret', stop: target, extend });
 }
 
 async function dispatchOne(message) {
@@ -272,6 +323,14 @@ window.addEventListener('keydown', (event) => {
       event.preventDefault();
       send({ kind: 'moveCaret', delta: 1, extend: event.shiftKey });
       return;
+    case 'ArrowUp':
+      event.preventDefault();
+      moveVertical(-1, event.shiftKey);
+      return;
+    case 'ArrowDown':
+      event.preventDefault();
+      moveVertical(1, event.shiftKey);
+      return;
     case 'Home': {
       const bounds = blockBounds();
       if (bounds) { event.preventDefault(); send({ kind: 'setCaret', stop: bounds.start, extend: event.shiftKey }); }
@@ -358,7 +417,8 @@ window.addEventListener('mousemove', (event) => {
 window.addEventListener('mouseup', () => { dragging = false; });
 
 window.addEventListener('scroll', () => { if (caret) applyCaret(caret); }, { passive: true });
-window.addEventListener('resize', () => { if (caret) applyCaret(caret); });
+// 窗口宽度变了，行会重新折行，旧的期望 x 已经没意义
+window.addEventListener('resize', () => { lines.reset(); if (caret) applyCaret(caret); });
 
 // ---- 自检 ------------------------------------------------------------
 
@@ -409,6 +469,48 @@ window.__mdviewSelfTest = async function () {
     send({ kind: 'insertText', text: '丙' });
     await queue;
     check('取消组合后仍能输入', docEl.textContent.indexOf('丙') >= 0);
+
+    // ---- 上下移动 ----
+    // 软换行只有浏览器算得出来，所以这一段的判据只能在这里跑。
+    const press = (key, shift) => window.dispatchEvent(
+      new KeyboardEvent('keydown', { key, shiftKey: !!shift, bubbles: true, cancelable: true })
+    );
+    const caretX = () => {
+      const pos = caret && rectOf(caret.stop);
+      return pos ? Math.round(pos.x) : -1;
+    };
+
+    send({ kind: 'setCaret', stop: 0, extend: false });
+    await queue;
+    const firstBlock = caret.block;
+    const firstX = caretX();
+    press('ArrowDown');
+    await queue;
+    check('↓ 从标题进到下一块', caret.block === firstBlock + 1, caret.block + ' vs ' + (firstBlock + 1));
+    check('↓ 之后 x 仍对齐同一列', Math.abs(caretX() - firstX) <= 3, caretX() + ' vs ' + firstX);
+
+    press('ArrowDown');
+    await queue;
+    check('↓ 继续进到列表块', caret.block === firstBlock + 2, String(caret.block));
+
+    press('ArrowUp');
+    await queue;
+    press('ArrowUp');
+    await queue;
+    check('↑ 两次回到标题块', caret.block === firstBlock, String(caret.block));
+
+    press('ArrowUp');
+    await queue;
+    check('首行再按 ↑ 不动', caret.block === firstBlock, String(caret.block));
+    check('首行按 ↑ 后停在停靠点 0', caret.stop === 0, String(caret.stop));
+
+    // 按键连发：两下都还没回包就发出了，落点必须依次推进而不是原地打转
+    send({ kind: 'setCaret', stop: 0, extend: false });
+    await queue;
+    press('ArrowDown');
+    press('ArrowDown');
+    await queue;
+    check('连发 ↓ 两次跨两块', caret.block === firstBlock + 2, String(caret.block));
   } catch (err) {
     check('自检未抛异常', false, String(err));
   }

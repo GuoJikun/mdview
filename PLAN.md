@@ -36,6 +36,7 @@
    - 前端资源由 `generate_context!` 在编译期嵌入，`build.rs` 要写 `rerun-if-changed=web`，否则改了 JS 窗口行为不变。
 10. **同步滚动按锚点块插值**，禁止用滚动百分比换算。
 11. **文档必须永远至少有一个块**：`split_blocks` 在「整篇为空」或「以空行结尾」时补一个零长块。否则空文档没有停靠点、在末尾回车后光标只能贴在上一段行尾。（改动前 `split` 会丢弃空行段，M3 实测踩到）
+12. **纵向位置一律问浏览器**：视觉行、行高、折行只有渲染器知道。`ArrowUp/Down`、`Home/End` 这类「上一行/行首」的判断必须基于 `getBoundingClientRect`，不能在核心里用「视觉列 + 块索引」推算——内核不知道一个字有多宽，会把折行当成块边界。反过来，横向移动（左/右、点选）仍然走内核的停靠点表，因为「哪些字节不可见」只有解析层知道。两套坐标的分界线就是这条。
 
 ---
 
@@ -151,7 +152,14 @@ byte   0  2  5  8  10
   - 失焦时自行收尾，不依赖浏览器补发 `compositionend`
   - `--self-test` 在真实 WebView2 里合成 composition 事件，跑通「事件 → 状态机 → IPC → 事务 → 补丁 → 光标 → 撤销 → 取消后恢复输入」，当前 11/11
 - ✅ **标记整删**：`Block.markers` 由容器事件推出成对标记，退格/Delete 落在标记里时整对抽掉并保留中间原文，一次事务、一次撤销
-- ⬜ 行内软换行后的上下方向键、选区拖动中的自动滚动
+- ✅ **上下方向键按真实视觉行移动**（前端像素判据，`web/caretline.js`）
+  - 放前端的原因：软换行只有浏览器知道。内核只认「停靠点 + 视觉列」，它眼里的下一行只能是下一块，长段落里按一下会整段跳走
+  - 判据：同一视觉行 = 矩形纵向重叠超过较矮者一半；目标是下一行里离当前 x 最近的停靠点
+  - 期望 x 跨多次按键保持（经过短行不会缩水），任何非上下移动的操作都重置
+  - 按键连发用 `pendingStop` 记住「已发出未回包」的落点，否则每下都从同一位置起算、原地不动
+  - `--self-test` 里验证真实像素：从标题 ↓ 到正文块后 x 仍为 122（对齐同一列）
+- ⬜ 选区拖动到窗口边缘时的自动滚动
+- ⬜ `Home` / `End` 仍按块首 / 块尾，未按视觉行（软换行段落里会跳到段首）
 - ⬜ `selectionchange` 隔离，抑制原生选区与自绘 caret 的抖动
 - 🔶 输入格式化：回车拆分与列表/引用延续已做；Tab 缩进、`**` 自动配对、Delete 合并块未做
 
@@ -169,9 +177,9 @@ byte   0  2  5  8  10
 ## 7. 当前进度快照
 
 - 日期：2026-11-07
-- 测试：**115 项全过**（markdown 60 / app 34 / desktop 9 / support 7 / core 5），无编译告警；其中 desktop 有两项是前端守门（`node --check` + `ime.test.js` 的 13 项）
+- 测试：**116 项全过**（markdown 60 / app 34 / desktop 10 / support 7 / core 5），无编译告警；其中 desktop 三项是前端守门（`node --check` 全部脚本 + `ime.test.js` 13 项 + `caretline.test.js` 10 项）
 - 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 输入法自检：`cargo run -p mdview-desktop -- <file> --self-test`，日志出现「自检通过：OK 11/11」即链路通
+- 自检：`cargo run -p mdview-desktop -- <file> --self-test`，日志出现「自检通过：OK 18/18」即链路通（含 IME 11 项、上下移动 7 项）
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
 - 最近提交（Angular 规范）：
   - `feat: 初始化内核、解析投影与日志`
@@ -182,6 +190,7 @@ byte   0  2  5  8  10
   - `feat(desktop): 接入输入法镜像输入层与自检`
   - `fix(desktop): 取消组合时复位内核挂起态，避免输入被永久吞掉`
   - `feat(mdview): 退格与 Delete 按标记对整删，不再啃坏语法`
+  - `feat(desktop): 上下方向键按真实视觉行移动`
 - 远端：`origin/main` 停在 `feat: 初始化内核…`，本地历史已分叉，同步需 `git push --force-with-lease`
 
 ---
@@ -200,16 +209,18 @@ byte   0  2  5  8  10
 8. **列表嵌套未验证**：多级列表的 `Item` 边界换行只测了单层。
 9. ~~**退格会先吃掉标记字符**~~ **已修（M3）**：`Block.markers` 记录成对标记（`**…**`、`` `…` ``、`[…]() `），配对来自 pulldown 的容器事件而不是猜。退格/Delete 落在标记里时按「整对抽掉、保留中间原文」处理，一次事务完成。副作用是**语义选择**：在加粗词首退格 = 去掉加粗，而不是删掉前一个可见字。想反过来的话改 `marker_edit_at` 的调用点即可，但那样就没有「不删字去格式」的入口了。
 10. **原生选区未隔离**：`#doc` 不参与焦点，但浏览器仍可能留下原生选区，和自绘高亮叠加。需要监听 `selectionchange` 并清空。
+11. **`Home` / `End` 按块首块尾**：软换行段落里按 `Home` 会跳到段首而不是行首。修法同上下移动——`caretline.js` 已有 `lineAround`，加一对「行首/行尾」查询即可。
+12. **上下移动依赖当前视口的矩形**：`desiredX` 是视口坐标，窗口缩放或正文容器宽度变化会让它失效，因此 `resize` 时重置。若将来支持水平滚动或分栏，需要一并重置。
 
 ---
 
 ## 9. 下一步（按推荐顺序）
 
-1. **行内上下移动**：`ArrowUp/Down` 需要跨块 + 视觉列对齐，靠 `Caret::visual` 与块内 `stop_at_visual` 实现。
+1. **`Home` / `End` 按视觉行**：`caretline.js` 的 `lineAround` 已能圈出一条视觉行，补两个查询即可（见第 8 节第 11 条）。这是上下移动做完之后最容易补的一致性缺口。
 2. **`selectionchange` 隔离**：清掉原生选区，只留自绘高亮（见第 8 节第 10 条）。
-3. **表格子工程**：`<table>` 渲染 + 单元格内停靠点，替代当前的文本流占位。
-4. **`Watcher` 落地**（`notify`），把外部修改从「保存时被动发现」变成主动提示。
-5. **删字后留空标记**：`**粗**` 里把唯一的字删掉会剩下 `****`，目前没有自动坍缩。需要「容器内容为空则一并收起」的判断。
+3. **删字后留空标记**：`**粗**` 里把唯一的字删掉会剩下 `****`，目前没有自动坍缩。需要「容器内容为空则一并收起」的判断。
+4. **表格子工程**：`<table>` 渲染 + 单元格内停靠点，替代当前的文本流占位。这是剩余最大的一块。
+5. **`Watcher` 落地**（`notify`），把外部修改从「保存时被动发现」变成主动提示。
 
 每完成一项，更新第 6 节状态、第 7 节快照，并用 Angular 规范提交。
 
@@ -231,9 +242,10 @@ cargo run -p mdview-cli -- <file> html      # 阅读态 HTML
 cargo run -p mdview-desktop -- <file>       # 起窗（Tauri 2）
 cargo run -p mdview-desktop -- <file> --self-test   # 输入法链路自检，跑完自动退出
 node crates/mdview-desktop/web/ime.test.js  # 输入法状态机单测（cargo test 已含）
+node crates/mdview-desktop/web/caretline.test.js  # 上下移动几何单测（cargo test 已含）
 ```
 
-`--self-test` 会在真实 WebView2 里合成 composition 事件串，把结果写进日志并以 0/1 退出，是唯一不需要人打字的端到端验证。
+`--self-test` 会在真实 WebView2 里合成 composition 事件与方向键，把结果写进日志并以 0/1 退出，是唯一不需要人打字的端到端验证。它同时是唯一能验证「像素对齐」的地方——纯 Node 用例只能喂合成矩形。
 
 日志落在可执行文件同级 `logs/`：`mdview.log`（5×1MB 滚动）、`error.log`（error 独占，5×1MB）。只读目录自动回落到 `%LOCALAPPDATA%/mdview/logs`。
 
@@ -258,7 +270,8 @@ node crates/mdview-desktop/web/ime.test.js  # 输入法状态机单测（cargo t
 | **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包） | `crates/mdview-desktop/src/session.rs` |
 | **编辑页**（停靠点 → 像素、按键 → 消息、增量应用、自检入口） | `crates/mdview-desktop/web/app.js` |
 | **输入法状态机**（不碰 DOM，Node 可测） | `crates/mdview-desktop/web/ime.js`、`ime.test.js` |
-| 前端守门测试（语法检查 + 跑 `ime.test.js`） | `crates/mdview-desktop/tests/web_ime.rs` |
+| **上下移动几何**（视觉行判定 + 期望列，不碰 DOM，Node 可测） | `crates/mdview-desktop/web/caretline.js`、`caretline.test.js` |
+| 前端守门测试（语法检查 + 跑两套 Node 用例） | `crates/mdview-desktop/tests/web_ime.rs` |
 
 ---
 
