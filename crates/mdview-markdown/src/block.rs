@@ -82,6 +82,19 @@ impl Span {
     }
 }
 
+/// 一对配对的折叠标记，例如 `**…**` 的两个 `**`、`` `…` `` 的两个反引号、
+/// `[文字](url)` 的 `[` 与 `](url)`。
+///
+/// 编辑时必须成对处理：`**粗**` 只删掉一半会退化成可见的 `*粗**`。
+/// 配对关系来自 pulldown 的容器事件（`End` 区间覆盖整个容器），不是猜的。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkerPair {
+    /// 起始标记的源码区间（已折叠）
+    pub open: Range<usize>,
+    /// 结束标记的源码区间（已折叠）
+    pub close: Range<usize>,
+}
+
 /// 一个块：完整源码区间 + 可见片段序列 + 折叠掉的标记区间。
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -92,6 +105,8 @@ pub struct Block {
     pub spans: Vec<Span>,
     /// 差集结果，按 byte 升序且互不相交。渲染时折叠为零宽单元。
     pub hidden: Vec<Range<usize>>,
+    /// 成对标记的配对表，按 `open.start` 升序。
+    pub markers: Vec<MarkerPair>,
 }
 
 impl Block {
@@ -120,6 +135,26 @@ impl Block {
         self.hidden
             .iter()
             .position(|r| r.start <= byte && byte < r.end)
+    }
+
+    /// 落在哪个折叠区间（整段返回，编辑时按整段处理）。
+    pub fn hidden_range_at(&self, byte: usize) -> Option<Range<usize>> {
+        self.hidden_at(byte).map(|i| self.hidden[i].clone())
+    }
+
+    /// byte 落在某一对标记里时返回该对，编辑时据此整对删除。
+    pub fn marker_pair_at(&self, byte: usize) -> Option<&MarkerPair> {
+        self.markers
+            .iter()
+            .find(|p| p.open.contains(&byte) || p.close.contains(&byte))
+    }
+
+    /// 落在原子控件（图片、分隔线、任务框）内部时返回该片段。
+    /// 这些片段的源码比可见文本长得多，删单个字节同样会毁掉语法。
+    pub fn control_span_at(&self, byte: usize) -> Option<&Span> {
+        self.spans
+            .iter()
+            .find(|s| s.is_control() && s.byte.start <= byte && byte < s.byte.end)
     }
 
     /// 把任意 byte 归一到最近的可见位置：落在隐藏区间时吸附到区间右侧。

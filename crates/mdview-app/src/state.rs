@@ -105,6 +105,19 @@ pub struct AppState {
     parser: MarkdownParser,
 }
 
+/// 退格 / Delete 落在标记上时，「整体删掉什么」的两种目标。
+///
+/// 纯字节删除在这里必错：`**粗**` 少一个 `*` 就变成可见的 `*粗**`。
+enum MarkerEdit {
+    /// 成对标记，两头一起抽掉
+    Pair {
+        open: Range<usize>,
+        close: Range<usize>,
+    },
+    /// 独占区间：标题 / 列表 / 引用的前缀，或图片这类原子控件
+    Run(Range<usize>),
+}
+
 impl AppState {
     pub fn open(
         content: impl AsRef<str>,
@@ -283,6 +296,17 @@ impl AppState {
 
     /// 唯一的文本写入口：一次事务 = 一步撤销，之后统一重解析、重定位光标、求增量帧。
     fn apply(&mut self, span: Range<usize>, insert: &str) -> Vec<Effect> {
+        self.apply_with_caret(span, insert, None)
+    }
+
+    /// `caret` 为 `None` 时落在插入文本之后（普通输入）；显式给出时用于
+    /// 「成对删标记」——删掉 `**` 后光标必须留在词首，而不是跳到词尾。
+    fn apply_with_caret(
+        &mut self,
+        span: Range<usize>,
+        insert: &str,
+        caret: Option<usize>,
+    ) -> Vec<Effect> {
         if span.is_empty() && insert.is_empty() {
             return Vec::new();
         }
@@ -290,7 +314,7 @@ impl AppState {
             return Vec::new();
         }
         self.dirty = true;
-        let caret = span.start + insert.chars().count();
+        let caret = caret.unwrap_or(span.start + insert.chars().count());
         // 先摘走旧帧再重解析，避免为求差集克隆整份 HTML
         let old = std::mem::take(&mut self.frames);
         self.reparse();
@@ -326,9 +350,17 @@ impl AppState {
         if let Some(sel) = self.selection_chars() {
             return self.apply(sel, "");
         }
-        let at = self.caret_char_offset();
+        let Some(byte) = self.caret_byte() else {
+            return Vec::new();
+        };
+        let at = self.document.byte_to_char(byte);
         if at == 0 {
             return Vec::new();
+        }
+        // 前一个字符若落在折叠标记里，按整体删除，绝不啃单个字节
+        let prev = self.document.char_to_byte(at - 1);
+        if let Some(edit) = self.marker_edit_at(prev) {
+            return self.delete_marker(edit);
         }
         self.apply(at - 1..at, "")
     }
@@ -340,11 +372,61 @@ impl AppState {
         if let Some(sel) = self.selection_chars() {
             return self.apply(sel, "");
         }
-        let at = self.caret_char_offset();
+        let Some(byte) = self.caret_byte() else {
+            return Vec::new();
+        };
+        let at = self.document.byte_to_char(byte);
         if at >= self.document.len_chars() {
             return Vec::new();
         }
+        if let Some(edit) = self.marker_edit_at(byte) {
+            return self.delete_marker(edit);
+        }
         self.apply(at..at + 1, "")
+    }
+
+    /// 判断这个 byte 是否落在「不可按字节删」的位置。
+    ///
+    /// 三种情况：成对标记（`**`、`` ` ``、`[]()`）、独占的折叠区间（标题/列表前缀）、
+    /// 原子控件（图片、分隔线）。删掉其中任意一个字节都会把语法写坏。
+    fn marker_edit_at(&self, byte: usize) -> Option<MarkerEdit> {
+        let block = self
+            .parsed
+            .blocks
+            .iter()
+            .find(|b| b.byte.start <= byte && byte < b.byte.end)?;
+        if let Some(pair) = block.marker_pair_at(byte) {
+            return Some(MarkerEdit::Pair {
+                open: pair.open.clone(),
+                close: pair.close.clone(),
+            });
+        }
+        if let Some(run) = block.hidden_range_at(byte) {
+            return Some(MarkerEdit::Run(run));
+        }
+        block
+            .control_span_at(byte)
+            .map(|span| MarkerEdit::Run(span.byte.clone()))
+    }
+
+    fn delete_marker(&mut self, edit: MarkerEdit) -> Vec<Effect> {
+        match edit {
+            // 一对标记：把中间的内容原样留下，只抽掉两头。
+            // 一次事务完成，撤销一次即可恢复，不会出现「还原了一半标记」的中间态。
+            MarkerEdit::Pair { open, close } => {
+                let keep = self.document.slice_bytes(open.end..close.start);
+                let span =
+                    self.document.byte_to_char(open.start)..self.document.byte_to_char(close.end);
+                let caret = self.document.byte_to_char(open.start);
+                self.apply_with_caret(span, &keep, Some(caret))
+            }
+            MarkerEdit::Run(range) => {
+                let span =
+                    self.document.byte_to_char(range.start)..self.document.byte_to_char(range.end);
+                let caret = self.document.byte_to_char(range.start);
+                self.apply_with_caret(span, "", Some(caret))
+            }
+        }
     }
 
     fn hard_break(&mut self) -> Vec<Effect> {
@@ -774,6 +856,74 @@ mod tests {
         app.update(Message::Backspace, &files);
         assert_eq!(app.document.text(), "文abc");
         assert_eq!(caret_byte(&app), 0);
+    }
+
+    #[test]
+    fn backspace_inside_strong_removes_the_marker_pair() {
+        // 光标停在「标记之后、文字之前」的双停靠点。纯字节删除会啃掉一个 `*`，
+        // 留下可见的 `*粗**`；正确做法是把两头 `**` 一起抽掉。
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "**粗**");
+        click(&mut app, &files, 2);
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "粗");
+        assert_eq!(app.parsed.blocks[0].hidden, Vec::new());
+        // 光标落在词首，而不是跳到词尾
+        assert_eq!(caret_byte(&app), 0);
+        // 一次事务 = 一步撤销
+        app.update(Message::Undo, &files);
+        assert_eq!(app.document.text(), "**粗**");
+    }
+
+    #[test]
+    fn backspace_at_bold_start_keeps_the_neighbours() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "请**粗**体");
+        click(&mut app, &files, 5);
+        app.update(Message::Backspace, &files);
+        // 只去掉加粗，前后文一字不动
+        assert_eq!(app.document.text(), "请粗体");
+        assert_eq!(caret_byte(&app), 3);
+    }
+
+    #[test]
+    fn backspace_after_heading_prefix_removes_the_prefix() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "# 标题");
+        click(&mut app, &files, 2);
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "标题");
+        assert_eq!(app.parsed.blocks[0].kind, BlockKind::Paragraph);
+    }
+
+    #[test]
+    fn delete_before_closing_marker_removes_the_pair() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "**粗**");
+        click(&mut app, &files, 5);
+        app.update(Message::DeleteForward, &files);
+        assert_eq!(app.document.text(), "粗");
+    }
+
+    #[test]
+    fn backspace_on_image_removes_the_whole_syntax() {
+        // 图片在源码里是 `![图](a.png)`，可见只有一个占位符；
+        // 按字节退格会把 `)` 单独删掉，把链接写坏。
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "前![图](a.png)");
+        let end = app.document.len_bytes();
+        click(&mut app, &files, end);
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "前");
+    }
+
+    #[test]
+    fn backspace_on_plain_text_is_unchanged() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "普通文字");
+        click(&mut app, &files, 12);
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "普通文");
     }
 
     #[test]

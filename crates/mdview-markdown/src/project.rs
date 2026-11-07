@@ -14,7 +14,9 @@ use std::ops::Range;
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use crate::block::{Block, BlockId, BlockKind, OutlineItem, ParseResult, Span, SpanKind, Style};
+use crate::block::{
+    Block, BlockId, BlockKind, MarkerPair, OutlineItem, ParseResult, Span, SpanKind, Style,
+};
 use crate::split::split_blocks;
 
 /// Markdown 解析入口。所有区间均为 byte offset（与 `into_offset_iter` 一致）。
@@ -58,7 +60,61 @@ impl Default for MarkdownParser {
 struct Acc {
     spans: Vec<Span>,
     covered: Vec<Range<usize>>,
+    /// 需要成对删除的容器区间（Strong / Emphasis / Strikethrough / Link）
+    containers: Vec<Range<usize>>,
     kind: Option<BlockKind>,
+}
+
+/// 把容器区间翻译成「标记对」。
+///
+/// `hidden` 是差集结果，容器首尾各自落下一段折叠区间；两头一配就是一对。
+/// 行内代码没有容器事件（`Event::Code` 是单点事件），只能靠片段边缘反推。
+fn collect_markers(
+    hidden: &[Range<usize>],
+    containers: &[Range<usize>],
+    spans: &[Span],
+) -> Vec<MarkerPair> {
+    let mut pairs: Vec<MarkerPair> = Vec::new();
+    let mut remember = |open: &Range<usize>, close: &Range<usize>| {
+        if open.end > close.start {
+            return;
+        }
+        // 嵌套同形标记（`***a***`）会产生重复的容器区间
+        if pairs
+            .iter()
+            .any(|p| p.open.start == open.start && p.close.end == close.end)
+        {
+            return;
+        }
+        pairs.push(MarkerPair {
+            open: open.clone(),
+            close: close.clone(),
+        });
+    };
+
+    for container in containers {
+        let open = hidden
+            .iter()
+            .find(|h| h.start == container.start && h.end <= container.end);
+        let close = hidden
+            .iter()
+            .rev()
+            .find(|h| h.end == container.end && h.start >= container.start);
+        if let (Some(open), Some(close)) = (open, close) {
+            remember(open, close);
+        }
+    }
+
+    for span in spans.iter().filter(|s| s.kind == SpanKind::Code) {
+        let open = hidden.iter().find(|h| h.end == span.byte.start);
+        let close = hidden.iter().find(|h| h.start == span.byte.end);
+        if let (Some(open), Some(close)) = (open, close) {
+            remember(open, close);
+        }
+    }
+
+    pairs.sort_by_key(|p| p.open.start);
+    pairs
 }
 
 pub fn parse(src: &str, options: Options) -> ParseResult {
@@ -125,7 +181,16 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
                     _ => {}
                 }
             }
-            Event::End(_) => {
+            Event::End(tag) => {
+                // End 的区间覆盖整个容器（硬约束 4），正好拿来给首尾标记配对
+                if matches!(
+                    tag,
+                    TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link
+                ) {
+                    if let Some(owner) = owner_of(&ranges, range.start) {
+                        accs[owner].containers.push(range.clone());
+                    }
+                }
                 style = stack.pop().unwrap_or_default();
             }
             Event::Text(text) => {
@@ -228,7 +293,12 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
     let mut outline = Vec::new();
 
     for (index, acc) in accs.into_iter().enumerate() {
-        let Acc { spans, covered, kind } = acc;
+        let Acc {
+            spans,
+            covered,
+            containers,
+            kind,
+        } = acc;
         let byte = ranges[index].clone();
         let kind = kind.unwrap_or_else(|| {
             if spans.first().is_some_and(|s| s.kind == SpanKind::Rule) {
@@ -238,12 +308,14 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
             }
         });
         let hidden = subtract(byte.clone(), &merge(covered));
+        let markers = collect_markers(&hidden, &containers, &spans);
         let block = Block {
             id: BlockId(index),
             kind,
             byte,
             spans,
             hidden,
+            markers,
         };
         if let BlockKind::Heading(level) = &block.kind {
             outline.push(OutlineItem {
@@ -402,6 +474,51 @@ mod tests {
             .into_iter()
             .next()
             .expect("至少一个块")
+    }
+
+    #[test]
+    fn strong_markers_are_paired() {
+        // 配对是「退格整对删除」的唯一依据，配错了会把标记写坏
+        let block = first_block("**粗**");
+        assert_eq!(block.markers.len(), 1);
+        assert_eq!(block.markers[0].open, 0..2);
+        assert_eq!(block.markers[0].close, 5..7);
+    }
+
+    #[test]
+    fn heading_prefix_has_no_pair() {
+        // 标题前缀是单边的，整段删掉即可，不能去配一个不存在的尾巴
+        let block = first_block("# 标题");
+        assert!(block.markers.is_empty());
+        assert_eq!(block.hidden, vec![0..2]);
+    }
+
+    #[test]
+    fn nested_emphasis_pairs_stay_distinct() {
+        let block = first_block("**a *b* c**");
+        assert_eq!(block.markers.len(), 2, "外层加粗与内层斜体各一对");
+        // 外层必须包住内层，否则退格会拆错那一对
+        let outer = &block.markers[0];
+        let inner = &block.markers[1];
+        assert!(outer.open.start < inner.open.start);
+        assert!(outer.close.end > inner.close.end);
+    }
+
+    #[test]
+    fn inline_code_backticks_are_paired() {
+        // 行内代码没有容器事件，只能靠片段边缘反推
+        let block = first_block("前`x`后");
+        assert_eq!(block.markers.len(), 1);
+        assert_eq!(block.markers[0].open, 3..4);
+        assert_eq!(block.markers[0].close, 5..6);
+    }
+
+    #[test]
+    fn link_brackets_are_paired() {
+        let block = first_block("[文字](https://a.b)");
+        assert_eq!(block.markers.len(), 1);
+        assert_eq!(&block.markers[0].open, &(0..1));
+        assert_eq!(block.markers[0].close.end, block.byte.end);
     }
 
     #[test]

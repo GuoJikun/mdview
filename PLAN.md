@@ -150,6 +150,7 @@ byte   0  2  5  8  10
   - 补掉「确认候选那一下回车」在 `compositionend` 之后补发 `keydown` 导致的误分段
   - 失焦时自行收尾，不依赖浏览器补发 `compositionend`
   - `--self-test` 在真实 WebView2 里合成 composition 事件，跑通「事件 → 状态机 → IPC → 事务 → 补丁 → 光标 → 撤销 → 取消后恢复输入」，当前 11/11
+- ✅ **标记整删**：`Block.markers` 由容器事件推出成对标记，退格/Delete 落在标记里时整对抽掉并保留中间原文，一次事务、一次撤销
 - ⬜ 行内软换行后的上下方向键、选区拖动中的自动滚动
 - ⬜ `selectionchange` 隔离，抑制原生选区与自绘 caret 的抖动
 - 🔶 输入格式化：回车拆分与列表/引用延续已做；Tab 缩进、`**` 自动配对、Delete 合并块未做
@@ -168,9 +169,10 @@ byte   0  2  5  8  10
 ## 7. 当前进度快照
 
 - 日期：2026-11-07
-- 测试：**104 项全过**（markdown 55 / app 28 / desktop 9 / support 7 / core 5），无编译告警；其中 desktop 有两项是前端守门（`node --check` + `ime.test.js` 的 13 项）
+- 测试：**115 项全过**（markdown 60 / app 34 / desktop 9 / support 7 / core 5），无编译告警；其中 desktop 有两项是前端守门（`node --check` + `ime.test.js` 的 13 项）
 - 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
 - 输入法自检：`cargo run -p mdview-desktop -- <file> --self-test`，日志出现「自检通过：OK 11/11」即链路通
+- **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
 - 最近提交（Angular 规范）：
   - `feat: 初始化内核、解析投影与日志`
   - `feat(markdown): 新增视觉布局与停靠点表`
@@ -178,6 +180,8 @@ byte   0  2  5  8  10
   - `feat(mdview): 打通输入到光标的编辑闭环与增量重绘`
   - `feat(desktop): 新增 Tauri 外壳与前端编辑接线`
   - `feat(desktop): 接入输入法镜像输入层与自检`
+  - `fix(desktop): 取消组合时复位内核挂起态，避免输入被永久吞掉`
+  - `feat(mdview): 退格与 Delete 按标记对整删，不再啃坏语法`
 - 远端：`origin/main` 停在 `feat: 初始化内核…`，本地历史已分叉，同步需 `git push --force-with-lease`
 
 ---
@@ -186,7 +190,7 @@ byte   0  2  5  8  10
 
 按影响排序，接手时不要误以为是新 bug：
 
-1. **真实输入法未人工回归**：`--self-test` 用合成 composition 事件覆盖了除 IME 本体之外的全部环节，但候选窗位置、preedit 宽度、各输入法 `data` 差异只能靠人打字确认。另外 preedit 是**覆盖层**：长词会盖住后面的文字而不推动排版，真实输入法下需要重点看这一条。
+1. **删字后可能留下空标记**：把 `**粗**` 里唯一的字删掉会剩下 `****`，退格路径已按整对处理，但「删掉容器内最后一个可见字」还没有坍缩逻辑。
 2. **表格没有网格**：markdown 层把 `|` 与 `---` 折叠后，表格退化成普通文本流。当前只做到「行分行、单元格加间隙」。
 3. **每字符一个 DOM 元素**：`preview.rs` 为了让停靠点可寻址，把每个字符渲染成独立 `<span>`。副作用是英文单词任意处可断行，DOM 节点数也偏高。生产实现应改为「每片段一个元素 + 内核 `align` 换算 char↔byte」。
 4. **Windows 原子写窗口期**：见 M1。
@@ -194,18 +198,18 @@ byte   0  2  5  8  10
 6. **图片只渲染占位符**：不加载真实图片，路径沙箱与尺寸测量未做。
 7. **`Watcher` 无实现**：外部修改只在保存时靠指纹被动发现。
 8. **列表嵌套未验证**：多级列表的 `Item` 边界换行只测了单层。
-9. **退格会先吃掉标记字符**：光标停在「标记之后、文字之前」这个双停靠点位置时，退格删的是标记里的一个字节，`**粗**` 会退化成 `*粗**`。Typora 的做法是把标记对整删，或干脆让该位置不可停靠。这是纯字节编辑的固有代价，不是新 bug，修法在 M3 细节里排。
+9. ~~**退格会先吃掉标记字符**~~ **已修（M3）**：`Block.markers` 记录成对标记（`**…**`、`` `…` ``、`[…]() `），配对来自 pulldown 的容器事件而不是猜。退格/Delete 落在标记里时按「整对抽掉、保留中间原文」处理，一次事务完成。副作用是**语义选择**：在加粗词首退格 = 去掉加粗，而不是删掉前一个可见字。想反过来的话改 `marker_edit_at` 的调用点即可，但那样就没有「不删字去格式」的入口了。
 10. **原生选区未隔离**：`#doc` 不参与焦点，但浏览器仍可能留下原生选区，和自绘高亮叠加。需要监听 `selectionchange` 并清空。
 
 ---
 
 ## 9. 下一步（按推荐顺序）
 
-1. **标记对整删**：退格/Delete 落在隐藏区间边缘时按「标记对」删除（见第 8 节第 9 条）。这是当前最影响手感的一条。
-2. **行内上下移动**：`ArrowUp/Down` 需要跨块 + 视觉列对齐，靠 `Caret::visual` 与块内 `stop_at_visual` 实现。
-3. **`selectionchange` 隔离**：清掉原生选区，只留自绘高亮（见第 8 节第 10 条）。
-4. **表格子工程**：`<table>` 渲染 + 单元格内停靠点，替代当前的文本流占位。
-5. **`Watcher` 落地**（`notify`），把外部修改从「保存时被动发现」变成主动提示。
+1. **行内上下移动**：`ArrowUp/Down` 需要跨块 + 视觉列对齐，靠 `Caret::visual` 与块内 `stop_at_visual` 实现。
+2. **`selectionchange` 隔离**：清掉原生选区，只留自绘高亮（见第 8 节第 10 条）。
+3. **表格子工程**：`<table>` 渲染 + 单元格内停靠点，替代当前的文本流占位。
+4. **`Watcher` 落地**（`notify`），把外部修改从「保存时被动发现」变成主动提示。
+5. **删字后留空标记**：`**粗**` 里把唯一的字删掉会剩下 `****`，目前没有自动坍缩。需要「容器内容为空则一并收起」的判断。
 
 每完成一项，更新第 6 节状态、第 7 节快照，并用 Angular 规范提交。
 
@@ -243,8 +247,8 @@ node crates/mdview-desktop/web/ime.test.js  # 输入法状态机单测（cargo t
 |---|---|
 | 文本与撤销 | `crates/mdview-core/src/document.rs`、`transaction.rs` |
 | 块切分（含末尾空段落） | `crates/mdview-markdown/src/split.rs` |
-| 投影（差集、图片原子化、内联代码内缩） | `crates/mdview-markdown/src/project.rs` |
-| 片段模型、`align`、HTML | `crates/mdview-markdown/src/block.rs` |
+| 片段模型、`align`、HTML、**标记配对表**（`Block::markers`） | `crates/mdview-markdown/src/block.rs` |
+| 投影（差集、图片原子化、内联代码内缩、标记配对推导） | `crates/mdview-markdown/src/project.rs` |
 | **视觉布局与停靠点** | `crates/mdview-markdown/src/layout.rs` |
 | **分块帧与增量 patch**（`block_frames` / `diff_frames`）+ 验证页 | `crates/mdview-markdown/src/preview.rs` |
 | **编辑闭环**（输入 → 事务 → 光标回填 → patch） | `crates/mdview-app/src/state.rs` |
