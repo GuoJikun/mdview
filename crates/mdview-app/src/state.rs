@@ -348,7 +348,7 @@ impl AppState {
             return Vec::new();
         }
         if let Some(sel) = self.selection_chars() {
-            return self.apply(sel, "");
+            return self.apply(self.expand_deletion(sel), "");
         }
         let Some(byte) = self.caret_byte() else {
             return Vec::new();
@@ -362,7 +362,7 @@ impl AppState {
         if let Some(edit) = self.marker_edit_at(prev) {
             return self.delete_marker(edit);
         }
-        self.apply(at - 1..at, "")
+        self.apply(self.expand_deletion(at - 1..at), "")
     }
 
     fn delete_forward(&mut self) -> Vec<Effect> {
@@ -370,7 +370,7 @@ impl AppState {
             return Vec::new();
         }
         if let Some(sel) = self.selection_chars() {
-            return self.apply(sel, "");
+            return self.apply(self.expand_deletion(sel), "");
         }
         let Some(byte) = self.caret_byte() else {
             return Vec::new();
@@ -382,7 +382,71 @@ impl AppState {
         if let Some(edit) = self.marker_edit_at(byte) {
             return self.delete_marker(edit);
         }
-        self.apply(at..at + 1, "")
+        self.apply(self.expand_deletion(at..at + 1), "")
+    }
+
+    /// 把删除区间扩到「整块语法单元」的边界。
+    ///
+    /// 两件事都必须在**同一次事务**里做完：
+    ///
+    /// 1. 与折叠标记相交就吃到标记边界。只删掉半个 `**` 会留下可见的 `*`，
+    ///    选区恰好从标记中间起手时很容易踩到。
+    /// 2. 容器内容被吃空就**连标记一起删**。删掉 `**粗**` 里的 `粗` 之后源码是
+    ///    `****`，pulldown 已经不把它当容器，四个星号会变成可见文字——
+    ///    这时再想补救也找不到配对了，所以只能在删的当下处理。
+    fn expand_deletion(&self, span: Range<usize>) -> Range<usize> {
+        if span.is_empty() {
+            return span;
+        }
+        let start = self.document.char_to_byte(span.start);
+        let end = self.document.char_to_byte(span.end);
+        // 跨块删除不在这里处理：块的边界本身就是语法边界
+        let Some(block) = self
+            .parsed
+            .blocks
+            .iter()
+            .find(|b| b.byte.start <= start && start < b.byte.end)
+        else {
+            return span;
+        };
+        if end > block.byte.end {
+            return span;
+        }
+
+        let (mut lo, mut hi) = (start, end);
+        for pair in &block.markers {
+            for range in [&pair.open, &pair.close] {
+                if range.start < hi && lo < range.end {
+                    lo = lo.min(range.start);
+                    hi = hi.max(range.end);
+                }
+            }
+        }
+        for range in &block.hidden {
+            if range.start < hi && lo < range.end {
+                lo = lo.min(range.start);
+                hi = hi.max(range.end);
+            }
+        }
+
+        // 内容全被吃掉就继续向外扩，嵌套容器（`**a *b* c**`）会连锁收起
+        loop {
+            let mut grown = false;
+            for pair in &block.markers {
+                let content = pair.open.end..pair.close.start;
+                let swallowed = lo <= content.start && content.end <= hi;
+                if swallowed && (lo > pair.open.start || hi < pair.close.end) {
+                    lo = lo.min(pair.open.start);
+                    hi = hi.max(pair.close.end);
+                    grown = true;
+                }
+            }
+            if !grown {
+                break;
+            }
+        }
+
+        self.document.byte_to_char(lo)..self.document.byte_to_char(hi)
     }
 
     /// 判断这个 byte 是否落在「不可按字节删」的位置。
@@ -903,6 +967,93 @@ mod tests {
         click(&mut app, &files, 5);
         app.update(Message::DeleteForward, &files);
         assert_eq!(app.document.text(), "粗");
+    }
+
+    #[test]
+    fn backspace_on_last_visible_char_collapses_the_container() {
+        // 删掉 `**粗**` 里唯一的字之后，源码会变成 `****`——pulldown 不再把
+        // 它当容器，四个星号就成了可见文字。必须在那一次事务里连标记一起删。
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "正文**粗**");
+        let after_char = "正文**粗".len();
+        click(&mut app, &files, after_char);
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "正文");
+        // 一次撤销完整还原，不留「还原一半标记」的中间态
+        app.update(Message::Undo, &files);
+        assert_eq!(app.document.text(), "正文**粗**");
+    }
+
+    #[test]
+    fn container_with_remaining_text_is_not_collapsed() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "**粗体**");
+        click(&mut app, &files, "**粗".len());
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "**体**");
+    }
+
+    #[test]
+    fn strikethrough_and_code_collapse_like_bold() {
+        // 删除线、行内代码走的是同一套配对：删空内容后都会留下可见的标记
+        for (source, deleted) in [("前~~删~~后", "前后"), ("前`用`后", "前后")] {
+            let mut files = InMemoryFileStore::default();
+            let mut app = open(&mut files, source);
+            // 光标停在内容最后一个字之后（汉字 3 字节）
+            let after_char = source.find(|c| c == '删' || c == '用').unwrap() + 3;
+            click(&mut app, &files, after_char);
+            app.update(Message::Backspace, &files);
+            assert_eq!(app.document.text(), deleted, "源码 {source}");
+        }
+    }
+
+    #[test]
+    fn delete_forward_on_last_visible_char_collapses_the_container() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "**粗**");
+        click(&mut app, &files, 2);
+        app.update(Message::DeleteForward, &files);
+        assert_eq!(app.document.text(), "");
+    }
+
+    #[test]
+    fn selection_covering_container_content_collapses_it() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲**粗**乙");
+        // 只选中内容，标记留在原处
+        app.update(Message::Select { anchor: 5, head: 8 }, &files);
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "甲乙");
+    }
+
+    #[test]
+    fn selection_touching_half_a_marker_expands_to_the_whole_pair() {
+        // 选区从内容末尾切进闭合标记一个字节：不扩就是 `**` 被削成 `*`
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲**粗**乙");
+        app.update(Message::Select { anchor: 5, head: 9 }, &files);
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "甲乙");
+    }
+
+    #[test]
+    fn nested_containers_collapse_in_one_go() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "**a *b* c**");
+        // 选中整段可见内容，外层加粗也应随之收起
+        app.update(Message::Select { anchor: 2, head: 9 }, &files);
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "");
+    }
+
+    #[test]
+    fn deletion_outside_any_container_is_unchanged() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "前缀 **粗** 后缀");
+        let end = app.document.len_bytes();
+        click(&mut app, &files, end);
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "前缀 **粗** 后");
     }
 
     #[test]

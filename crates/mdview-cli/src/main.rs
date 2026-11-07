@@ -348,6 +348,29 @@ fn run_edit_demo() {
     );
     step(&mut app, &files, "退格", Message::Backspace);
     step(&mut app, &files, "撤销", Message::Undo);
+
+    // 删空容器：第一次退格只吃掉一个字（容器还有内容），第二次连标记一起收起。
+    // 不收的话源码会变成 `****`，pulldown 已不把它当容器，四个星号就成了可见文字。
+    let text = app.document.text();
+    let end_of_content = text.find("很粗").map(|at| at + "很粗".len()).unwrap_or(0);
+    step(
+        &mut app,
+        &files,
+        "点到加粗词尾",
+        Message::Click {
+            byte_offset: end_of_content,
+        },
+    );
+    step(&mut app, &files, "退格删掉「粗」", Message::Backspace);
+    step(
+        &mut app,
+        &files,
+        "再退格：内容删空，标记一并收起",
+        Message::Backspace,
+    );
+    // 两步各占一次事务，撤销两次才回到最初
+    step(&mut app, &files, "撤销回「**很**」", Message::Undo);
+    step(&mut app, &files, "再撤销回「**很粗**」", Message::Undo);
     step(&mut app, &files, "保存", Message::Save);
 }
 
