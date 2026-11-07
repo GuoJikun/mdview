@@ -6,6 +6,8 @@ const { invoke } = window.__TAURI__.core;
 
 const docEl = document.getElementById('doc');
 const caretEl = document.getElementById('caret');
+const preeditEl = document.getElementById('preedit');
+const imeEl = document.getElementById('ime');
 const barEl = document.getElementById('bar');
 const toastEl = document.getElementById('toast');
 
@@ -15,6 +17,7 @@ let marks = [];             // 全部带 data-b 的元素
 let caret = null;           // 最近一次内核回报的光标
 let meta = { revision: 0, dirty: false, path: null, stops: 0 };
 let dragging = false;
+let imeAnchorEl = null;     // preedit 复制字号用的参照元素（光标所在的字）
 
 // ---- 渲染 ------------------------------------------------------------
 
@@ -107,6 +110,8 @@ function applyCaret(next) {
   if (top < window.scrollY || bottom > window.scrollY + window.innerHeight - 32) {
     pos.el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
+  imeAnchorEl = pos.el;
+  placeIme();
   renderStatus();
 }
 
@@ -183,12 +188,55 @@ async function boot() {
   renderAll(snap.blocks);
   applyCaret(snap.caret);
   paintSelection(snap.selection);
-  docEl.focus({ preventScroll: true });
+  // 焦点必须落在透明输入框上：输入法只认真正的可编辑元素
+  imeEl.focus({ preventScroll: true });
   // 给内核一个「页面已接管」的信号，日志里能对上游标是否真的画出来了
   invoke('ready').catch(() => {});
 }
 
 // ---- 输入 ------------------------------------------------------------
+
+/** 把透明输入框挪到光标上：它决定输入法候选窗弹在哪里。 */
+function placeIme() {
+  if (!caret) return;
+  const pos = rectOf(caret.stop);
+  if (!pos) return;
+  imeEl.style.left = pos.x + window.scrollX - 1 + 'px';
+  imeEl.style.top = pos.top + window.scrollY + 'px';
+  imeEl.style.height = Math.max(pos.height, 18) + 'px';
+}
+
+/** preedit 的字体必须跟光标所在的块一致，否则标题里组合会明显偏小。 */
+function setPreedit(text) {
+  if (!text) {
+    preeditEl.style.display = 'none';
+    preeditEl.textContent = '';
+    return;
+  }
+  if (!caret) {
+    // 极早期（还没拿到光标）也要把字显示出来，否则用户看不到任何反馈
+    preeditEl.textContent = text;
+    preeditEl.style.display = 'block';
+    return;
+  }
+  const pos = rectOf(caret.stop);
+  if (pos) {
+    // 增量重绘会换掉节点，旧引用取不到计算样式，退回当前元素
+    const anchor = imeAnchorEl && imeAnchorEl.isConnected ? imeAnchorEl : pos.el;
+    const cs = getComputedStyle(anchor);
+    preeditEl.style.fontFamily = cs.fontFamily;
+    preeditEl.style.fontSize = cs.fontSize;
+    preeditEl.style.fontWeight = cs.fontWeight;
+    preeditEl.style.lineHeight = cs.lineHeight;
+    preeditEl.style.left = pos.x + window.scrollX + 'px';
+    preeditEl.style.top = pos.top + window.scrollY + 'px';
+    preeditEl.style.minHeight = Math.max(pos.height, 18) + 'px';
+  }
+  preeditEl.textContent = text;
+  preeditEl.style.display = 'block';
+}
+
+const ime = createIme({ send: (message) => send(message), setPreedit });
 
 function blockBounds() {
   if (!caret) return null;
@@ -199,8 +247,8 @@ function blockBounds() {
 }
 
 window.addEventListener('keydown', (event) => {
-  // 输入法组合期间一律不拦，preedit 交给浏览器（内核侧同样会挂起重绘）
-  if (event.isComposing || event.keyCode === 229) return;
+  // 组合期与 229 一律放行，preedit 交给输入法自己渲染（内核侧同样会挂起重绘）
+  if (ime.shouldIgnoreKey(event)) return;
 
   const cmd = event.ctrlKey || event.metaKey;
   if (cmd) {
@@ -252,10 +300,20 @@ window.addEventListener('paste', (event) => {
   send({ kind: 'insertText', text });
 });
 
-// 输入法：composition 期间只通知内核挂起，提交时一次性送入
-docEl.addEventListener('compositionstart', () => send({ kind: 'compositionStart' }));
-docEl.addEventListener('compositionend', (event) => {
-  if (event.data) send({ kind: 'compositionCommit', text: event.data });
+// 输入法：所有 composition 事件都走 ime.js 的状态机，这里只做 DOM 搬运。
+// 有一条必须守住——组合期间不碰 docEl，否则会把浏览器正在画的 preedit 冲掉。
+imeEl.addEventListener('compositionstart', () => ime.start());
+imeEl.addEventListener('compositionupdate', (event) => ime.update(event.data));
+imeEl.addEventListener('compositionend', (event) => {
+  // 先读 value 再清空：Safari 有时不回 data，只能退回输入框里的内容
+  ime.end(event.data, imeEl.value);
+  imeEl.value = '';
+  placeIme();
+});
+
+// 不走 keydown 的输入路径（emoji 面板、死键、输入法直出）
+imeEl.addEventListener('input', () => {
+  if (ime.input(imeEl.value)) imeEl.value = '';
 });
 
 // ---- 鼠标 ------------------------------------------------------------
@@ -278,7 +336,7 @@ docEl.addEventListener('mousedown', (event) => {
   if (stop === null) return;
   event.preventDefault();
   dragging = true;
-  docEl.focus({ preventScroll: true });
+  imeEl.focus({ preventScroll: true });
   send({ kind: 'setCaret', stop, extend: event.shiftKey });
 });
 
@@ -293,5 +351,59 @@ window.addEventListener('mouseup', () => { dragging = false; });
 
 window.addEventListener('scroll', () => { if (caret) applyCaret(caret); }, { passive: true });
 window.addEventListener('resize', () => { if (caret) applyCaret(caret); });
+
+// ---- 自检 ------------------------------------------------------------
+
+/**
+ * `--self-test` 启动时由 Rust 侧在页面接管后调用。
+ *
+ * 合成 composition 事件走一遍真实链路：DOM 事件 → 状态机 → IPC → 内核事务
+ * → 增量补丁 → 光标回填 → 镜像清理。操作系统的输入法没法在无人值守下驱动，
+ * 但除 IME 本身之外，这条链路上跑的就是生产代码。
+ */
+window.__mdviewSelfTest = async function () {
+  const checks = [];
+  const check = (name, ok, detail) => checks.push({ name, ok: !!ok, detail: detail || '' });
+  const fire = (type, data) =>
+    imeEl.dispatchEvent(new CompositionEvent(type, { data: data || '', bubbles: true }));
+
+  try {
+    check('焦点落在透明输入框', document.activeElement === imeEl,
+      document.activeElement ? document.activeElement.id : 'none');
+
+    const before = docEl.textContent;
+    const rev0 = meta.revision;
+
+    fire('compositionstart');
+    await queue;
+    fire('compositionupdate', 'zijiAnCi');
+    check('组合期 preedit 可见', preeditEl.style.display === 'block');
+    check('组合期 preedit 文本正确', preeditEl.textContent === 'zijiAnCi', preeditEl.textContent);
+    check('组合期文档不变', docEl.textContent === before);
+    check('组合期不产生事务', meta.revision === rev0);
+
+    fire('compositionend', '自检词');
+    await queue;
+    check('提交后文档出现该词', docEl.textContent.indexOf('自检词') >= 0);
+    check('一次提交只走一次事务', meta.revision === rev0 + 1, meta.revision + ' vs ' + (rev0 + 1));
+    check('提交后镜像隐藏', preeditEl.style.display === 'none');
+    check('提交后光标仍在', !!caret && caret.stop > 0, caret && caret.stop);
+
+    send({ kind: 'undo' });
+    await queue;
+    check('一次撤销回到提交前', docEl.textContent === before);
+  } catch (err) {
+    check('自检未抛异常', false, String(err));
+  }
+
+  const failed = checks.filter((c) => !c.ok);
+  const lines = checks.map(
+    (c) => (c.ok ? '· ' : '× ') + c.name + (c.detail ? '(' + c.detail + ')' : '')
+  );
+  const report =
+    (failed.length ? 'FAIL ' : 'OK ') +
+    (checks.length - failed.length) + '/' + checks.length + ' ' + lines.join(' | ');
+  await invoke('selftest', { report });
+};
 
 boot();

@@ -8,10 +8,17 @@
 </head>
 <body>
 <!-- 内核持有文本真值，这里只有投影：每块一个 <section>，每个停靠点一个元素 -->
-<div id="doc" tabindex="0" spellcheck="false"></div>
+<div id="doc" tabindex="-1" spellcheck="false"></div>
 <div id="caret"></div>
+<!-- preedit 镜像层：组合期间唯一可见的输入反馈，位置贴着 caret -->
+<div id="preedit"></div>
+<!-- 输入法只能落在真正的可编辑元素上，所以留一个透明输入框承接 IME；
+     它同时决定候选窗弹在哪儿（跟着 caret 走） -->
+<textarea id="ime" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off"
+          spellcheck="false" aria-label="编辑器输入"></textarea>
 <div id="toast"></div>
 <div id="bar"></div>
+<script src="ime.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

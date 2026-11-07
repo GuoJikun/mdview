@@ -54,6 +54,27 @@ blockquote {
 }
 #caret.blink { animation: caret-blink 1.05s steps(1) infinite; }
 @keyframes caret-blink { 50% { opacity: 0; } }
+
+/* 承接输入法的透明输入框。宽度 1px、贴在 caret 上：
+   候选窗由它定位，所以位置必须实时跟随光标。 */
+#ime {
+  position: absolute; left: 0; top: 0; z-index: 1;
+  width: 1px; min-height: 18px; padding: 0; border: 0; margin: 0; resize: none;
+  overflow: hidden; background: transparent; color: transparent;
+  caret-color: transparent; outline: none;
+  opacity: .01;   /* 不用 0：个别输入法会跳过完全透明的锚点 */
+  /* 只当输入法的落点，不抢鼠标：否则光标那 1px 会吃掉点击 */
+  pointer-events: none;
+}
+/* preedit 镜像。不参与排版，只贴在光标右侧把原文盖住，
+   字号由脚本从光标所在的块复制，标题里组合也能对上。 */
+#preedit {
+  position: absolute; z-index: 6; display: none; pointer-events: none;
+  padding: 0 1px; border-radius: 2px; white-space: pre;
+  background: #fff; color: #1f2328;
+  text-decoration: underline; text-underline-offset: 3px;
+  box-shadow: 0 1px 4px rgba(31, 35, 40, .12);
+}
 #bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
   display: flex; flex-wrap: wrap; gap: 18px; align-items: center;

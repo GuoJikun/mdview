@@ -1,0 +1,56 @@
+//! 前端脚本的守门测试。
+//!
+//! 这一层没有 Rust 代码可测，但 `web/` 里的输入法状态机不该靠肉眼验证：
+//! `ime.js` 刻意不碰 DOM，因此可以直接用 Node 跑。这里做两件事——
+//! 语法检查所有前端脚本，再跑一遍 `ime.test.js`。
+//!
+//! 没装 Node 时整组跳过（打印原因），不让缺工具链阻塞 Rust 侧的流水线。
+
+use std::{path::PathBuf, process::Command};
+
+fn web_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web")
+}
+
+fn node_ready() -> bool {
+    Command::new("node")
+        .arg("--version")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
+fn run_node(args: &[&str]) -> (bool, String) {
+    let out = Command::new("node")
+        .args(args)
+        .current_dir(web_dir())
+        .output()
+        .expect("node 应当可执行");
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.success(), text)
+}
+
+#[test]
+fn frontend_scripts_are_syntactically_valid() {
+    if !node_ready() {
+        eprintln!("跳过：本机没有 node");
+        return;
+    }
+    for script in ["app.js", "ime.js", "ime.test.js"] {
+        let (ok, output) = run_node(&["--check", script]);
+        assert!(ok, "{script} 语法错误：\n{output}");
+    }
+}
+
+#[test]
+fn ime_state_machine_passes_its_suite() {
+    if !node_ready() {
+        eprintln!("跳过：本机没有 node");
+        return;
+    }
+    let (ok, output) = run_node(&["ime.test.js"]);
+    assert!(ok, "输入法状态机测试失败：\n{output}");
+    // 断言用例确实跑了，避免文件被清空后「零项全过」的假绿
+    assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
+}
