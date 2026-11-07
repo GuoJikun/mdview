@@ -1,0 +1,224 @@
+//! 无头入口：验证 core / markdown / app 三层链路，不依赖任何 GUI。
+//!
+//!   mdview <file> [outline|stats|blocks|spans|html]
+//!   mdview demo
+
+use std::{env, fs, process};
+
+use log::{error, info, warn};
+use mdview_app::{AppState, CollectingSink, InMemoryFileStore, Message, RenderSink, ViewMode};
+use mdview_core::Document;
+use mdview_markdown::{Block, BlockKind, MarkdownParser, ParseResult};
+
+const DEMO: &str = "# 标题\n\n你好 **world**\n\n```rust\nfn main() {}\n```\n";
+
+fn main() {
+    // 日志目录固定在可执行文件同级，装到只读目录时会回落到 LOCALAPPDATA
+    let log_dir = mdview_app::init_logging_default().ok();
+    let args: Vec<String> = env::args().skip(1).collect();
+    info!(
+        "启动 mdview v{} args={args:?} 日志目录={}",
+        env!("CARGO_PKG_VERSION"),
+        log_dir
+            .as_ref()
+            .map(|d| d.display().to_string())
+            .unwrap_or_else(|| "<不可用>".into())
+    );
+
+    if args.is_empty() {
+        warn!("未提供参数，打印用法");
+        usage();
+        return;
+    }
+
+    if args[0] == "demo" {
+        run_demo();
+        return;
+    }
+
+    let command = args.get(1).map(String::as_str).unwrap_or("outline");
+    let path = &args[0];
+    let content = fs::read_to_string(path).unwrap_or_else(|err| {
+        error!("读取失败 {path}: {err}");
+        eprintln!("读取失败 {path}: {err}");
+        process::exit(1);
+    });
+    let parsed = MarkdownParser::gfm().parse(&content);
+
+    match command {
+        "outline" => print_outline(&parsed),
+        "stats" => print_stats(&content, &parsed),
+        "blocks" => print_blocks(&parsed),
+        "spans" => print_spans(&content, &parsed),
+        "html" => print!("{}", parsed.to_html()),
+        other => {
+            warn!("未知子命令 {other}");
+            usage();
+            process::exit(2);
+        }
+    }
+    info!("命令 {command} 处理完成：{}", path);
+}
+
+fn print_outline(parsed: &ParseResult) {
+    if parsed.outline.is_empty() {
+        println!("(无标题)");
+        return;
+    }
+    for item in &parsed.outline {
+        println!(
+            "{}{}  [byte {}]",
+            "  ".repeat(item.level.saturating_sub(1) as usize),
+            item.title,
+            item.byte_offset
+        );
+    }
+}
+
+fn print_stats(content: &str, parsed: &ParseResult) {
+    let doc = Document::new(content);
+    let spans: usize = parsed.blocks.iter().map(|b| b.spans.len()).sum();
+    let hidden: usize = parsed.blocks.iter().map(|b| b.hidden.len()).sum();
+    let hidden_bytes: usize = parsed
+        .blocks
+        .iter()
+        .flat_map(|b| b.hidden.iter())
+        .map(|r| r.len())
+        .sum();
+
+    println!("字符数     : {}", doc.len_chars());
+    println!("字节数     : {}", doc.len_bytes());
+    println!("块数       : {}", parsed.blocks.len());
+    println!("可见片段   : {spans}");
+    println!("隐藏区间   : {hidden}（{hidden_bytes} 字节）");
+    println!("大纲条目   : {}", parsed.outline.len());
+    for (label, pred) in kind_table() {
+        let n = parsed.count(pred);
+        if n > 0 {
+            println!("  {label}: {n}");
+        }
+    }
+}
+
+fn kind_table() -> Vec<(&'static str, fn(&BlockKind) -> bool)> {
+    vec![
+        ("heading", |k| matches!(k, BlockKind::Heading(_))),
+        ("paragraph", |k| matches!(k, BlockKind::Paragraph)),
+        ("list", |k| matches!(k, BlockKind::List { .. })),
+        ("blockquote", |k| matches!(k, BlockKind::BlockQuote)),
+        ("codeblock", |k| matches!(k, BlockKind::CodeBlock { .. })),
+        ("table", |k| matches!(k, BlockKind::Table)),
+        ("rule", |k| matches!(k, BlockKind::Rule)),
+        ("html", |k| matches!(k, BlockKind::Html)),
+    ]
+}
+
+fn print_blocks(parsed: &ParseResult) {
+    for block in &parsed.blocks {
+        let preview: String = block.plain_text().chars().take(36).collect();
+        println!(
+            "#{:<3} {:<12} bytes {:>4}..{:<4} spans={:<3} hidden={:<3} {preview}",
+            block.id.0,
+            block.kind.label(),
+            block.byte.start,
+            block.byte.end,
+            block.spans.len(),
+            block.hidden.len()
+        );
+    }
+}
+
+/// 逐块打印投影结果：⟦⟧ 内是被折叠的标记。
+fn print_spans(content: &str, parsed: &ParseResult) {
+    for block in &parsed.blocks {
+        println!(
+            "\n#{} {} bytes {}..{}",
+            block.id.0,
+            block.kind.label(),
+            block.byte.start,
+            block.byte.end
+        );
+        println!("  投影 {}", annotate(content, block));
+        for span in &block.spans {
+            println!(
+                "    {:?} {:>4}..{:<4} {:?}",
+                span.kind, span.byte.start, span.byte.end, span.text
+            );
+        }
+    }
+}
+
+fn annotate(content: &str, block: &Block) -> String {
+    let mut out = String::new();
+    let mut cursor = block.byte.start;
+    for range in &block.hidden {
+        if range.start > cursor {
+            out.push_str(&content[cursor..range.start]);
+        }
+        out.push('⟦');
+        out.push_str(&content[range.clone()]);
+        out.push('⟧');
+        cursor = range.end;
+    }
+    if cursor < block.byte.end {
+        out.push_str(&content[cursor..block.byte.end]);
+    }
+    out.replace('\n', "⏎")
+}
+
+fn run_demo() {
+    let mut files = InMemoryFileStore::default();
+    files.insert("demo.md", DEMO);
+    let mut app = AppState::open(DEMO, Some("demo.md".into()), &files);
+
+    let frame = app.render_frame();
+    println!(
+        "[open] revision={} blocks={} mode={}",
+        frame.revision, frame.blocks, frame.mode
+    );
+    println!(
+        "[outline] {:?}",
+        app.parsed.outline.iter().map(|i| &i.title).collect::<Vec<_>>()
+    );
+
+    let effects = app.update(
+        Message::Edit {
+            span: 0..0,
+            insert: "> ".into(),
+        },
+        &files,
+    );
+    println!(
+        "[edit] text={:?} effects={effects:?}",
+        app.document.text().lines().next()
+    );
+
+    let byte_offset = app.parsed.blocks[1].byte.start;
+    let effects = app.update(Message::Click { byte_offset }, &files);
+    println!("[click] byte={byte_offset} effects={effects:?}");
+
+    let effects = app.update(Message::SetMode(ViewMode::Reading), &files);
+    println!("[mode] effects={effects:?}");
+
+    let effects = app.update(Message::Undo, &files);
+    println!(
+        "[undo] text={:?} effects={effects:?}",
+        app.document.text().lines().next()
+    );
+
+    let effects = app.update(Message::Save, &files);
+    println!("[save] effects={effects:?} dirty={}", app.dirty);
+
+    let mut sink = CollectingSink::default();
+    sink.render(&app.render_frame());
+    println!(
+        "[sink] frames={} revision={}",
+        sink.frames.len(),
+        sink.frames[0].revision
+    );
+}
+
+fn usage() {
+    println!("mdview <file> [outline|stats|blocks|spans|html]");
+    println!("mdview demo");
+}

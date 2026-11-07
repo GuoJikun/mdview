@@ -1,0 +1,12 @@
+[package]
+name = "mdview-app"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+mdview-core = { workspace = true }
+mdview-markdown = { workspace = true }
+mdview-support = { workspace = true }
+log = { workspace = true }

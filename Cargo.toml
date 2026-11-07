@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+mdview-core = { path = "crates/mdview-core" }
+mdview-support = { path = "crates/mdview-support" }
+mdview-markdown = { path = "crates/mdview-markdown" }
+mdview-app = { path = "crates/mdview-app" }
+ropey = "1"
+pulldown-cmark = "0.13"
+thiserror = "2"
+log = "0.4"
+time = { version = "0.3", features = ["formatting", "local-offset"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

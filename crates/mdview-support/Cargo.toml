@@ -1,0 +1,11 @@
+[package]
+name = "mdview-support"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+log = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
