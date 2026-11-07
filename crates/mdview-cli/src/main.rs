@@ -411,6 +411,7 @@ fn effect_name(effect: &Effect) -> &'static str {
         Effect::Persist => "Persist",
         Effect::MoveCursor { .. } => "MoveCursor",
         Effect::Selection { .. } => "Selection",
+        Effect::Clipboard { .. } => "Clipboard",
         Effect::Conflict => "Conflict",
     }
 }

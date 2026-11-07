@@ -47,6 +47,10 @@ pub enum Wire {
     Undo,
     Redo,
     Save,
+    /// 全选（Ctrl+A）。原生选区已被清掉（见 `selection.js`），全选只能走内核
+    SelectAll,
+    Copy,
+    Cut,
     SetMode {
         mode: String,
     },
@@ -72,6 +76,9 @@ impl Wire {
             Wire::Undo => Message::Undo,
             Wire::Redo => Message::Redo,
             Wire::Save => Message::Save,
+            Wire::SelectAll => Message::SelectAll,
+            Wire::Copy => Message::Copy,
+            Wire::Cut => Message::Cut,
             Wire::SetMode { mode } => Message::SetMode(match mode.as_str() {
                 "reading" => ViewMode::Reading,
                 "source" => ViewMode::Source,
@@ -119,6 +126,9 @@ pub struct Reply {
     pub full: Option<Vec<BlockDto>>,
     pub caret: Option<CaretDto>,
     pub selection: Option<[usize; 2]>,
+    /// 要写入系统剪贴板的文本（Ctrl+C / Ctrl+X）。前端拿到后自己写剪贴板，
+    /// 窗口层不去碰它——那需要额外的宿主能力，而文本真值本来就在内核里。
+    pub clipboard: Option<String>,
     pub conflict: bool,
     pub saved: bool,
 }
@@ -205,6 +215,7 @@ impl Session {
                 }
                 Effect::Persist => reply.saved = true,
                 Effect::Conflict => reply.conflict = true,
+                Effect::Clipboard { text } => reply.clipboard = Some(text),
                 // 增量解析调度由内核内部实现；选区高亮随 Reply 顶层字段一起下发
                 Effect::ScheduleParse { .. } | Effect::Selection { .. } => {}
             }
@@ -285,6 +296,44 @@ mod tests {
         // 取消组合漏接会在内核里留下永久挂起，契约里必须有这一条
         let wire: Wire = serde_json::from_str(r#"{"kind":"compositionCancel"}"#).unwrap();
         assert!(matches!(wire, Wire::CompositionCancel));
+        // 全选 / 复制 / 剪切：前端只发 kind，没有参数
+        let wire: Wire = serde_json::from_str(r#"{"kind":"selectAll"}"#).unwrap();
+        assert!(matches!(wire, Wire::SelectAll));
+        let wire: Wire = serde_json::from_str(r#"{"kind":"copy"}"#).unwrap();
+        assert!(matches!(wire, Wire::Copy));
+        let wire: Wire = serde_json::from_str(r#"{"kind":"cut"}"#).unwrap();
+        assert!(matches!(wire, Wire::Cut));
+    }
+
+    #[test]
+    fn select_all_then_copy_reports_the_whole_source() {
+        let session = session("甲\n\n乙");
+        let reply = session.dispatch(Wire::SelectAll);
+        assert_eq!(
+            reply.selection,
+            Some([0, session.snapshot().stops - 1]),
+            "全选要覆盖到最后一个停靠点"
+        );
+        // 全选不移动光标，避免视口被拽到文末
+        assert_eq!(reply.caret.unwrap().stop, 0);
+
+        let reply = session.dispatch(Wire::Copy);
+        assert_eq!(reply.clipboard.as_deref(), Some("甲\n\n乙"));
+        // 复制不改文档
+        assert_eq!(session.text(), "甲\n\n乙");
+        assert!(!reply.dirty);
+    }
+
+    #[test]
+    fn cut_returns_the_text_and_deletes_it() {
+        let session = session("甲乙丙");
+        session.dispatch(Wire::Select { anchor: 3, head: 6 });
+        let reply = session.dispatch(Wire::Cut);
+        assert_eq!(reply.clipboard.as_deref(), Some("乙"));
+        assert_eq!(session.text(), "甲丙");
+        assert!(reply.patch.is_some(), "剪切同样走增量重绘");
+        assert_eq!(reply.selection, None);
+        assert!(reply.dirty);
     }
 
     #[test]

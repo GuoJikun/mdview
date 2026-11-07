@@ -58,6 +58,12 @@ pub enum Message {
     SetCaret { stop: usize, extend: bool },
     /// 选区两端都是 byte offset，交给布局层吸附到停靠点
     Select { anchor: usize, head: usize },
+    /// 全选整篇（anchor 落在首个停靠点，head 落在最后一个）
+    SelectAll,
+    /// 复制选区。内核**只产出文本**，真正写剪贴板是窗口层的事
+    Copy,
+    /// 剪切：一次事务里删掉选区，再把删掉的文本交出去
+    Cut,
     Reload { content: String },
 }
 
@@ -83,6 +89,13 @@ pub enum Effect {
     Selection {
         byte: Range<usize>,
         blocks: Vec<usize>,
+    },
+    /// 把这段文本交给系统剪贴板。
+    ///
+    /// 内核不碰剪贴板（那是宿主的能力），只负责算出「该是什么文本」：
+    /// 视图里带着折叠标记，前端按 DOM 拼出来的东西不等于源码，复制必须走内核。
+    Clipboard {
+        text: String,
     },
     Conflict,
 }
@@ -282,6 +295,24 @@ impl AppState {
                 self.selection = Selection::new(snap(anchor), snap(head));
                 self.selection_effect().into_iter().collect()
             }
+            Message::SelectAll => {
+                // 整篇 = 首个停靠点到最后一个停靠点。文档末尾的零长块也有停靠点，
+                // 所以「最后一行的换行符」也在区间里，复制出来是完整源码。
+                //
+                // 方向刻意是「锚点在文末、光标在文首」：光标画在哪儿，输入法的
+                // 候选窗就弹在哪儿，而全选之后打字是从文首开始替换的——把光标
+                // 放在文末会让候选窗飘到最后一屏去。
+                let last = self.layout.stops().saturating_sub(1);
+                self.selection = Selection::new(last, 0);
+                // 不报 `MoveCursor`：落点由 head 决定，Session 会自己回填；
+                // 这里再发一条只是重复
+                self.selection_effect().into_iter().collect()
+            }
+            Message::Copy => self
+                .selection_text()
+                .map(|text| vec![Effect::Clipboard { text }])
+                .unwrap_or_default(),
+            Message::Cut => self.cut(),
             Message::Reload { content } => {
                 self.document = Document::new(content);
                 self.reparse();
@@ -641,6 +672,60 @@ impl AppState {
         Some(self.document.byte_to_char(byte.start)..self.document.byte_to_char(byte.end))
     }
 
+    /// 选区是否覆盖了整篇：首尾两个停靠点都贴到文档两端。
+    ///
+    /// 拖选到头也会命中——它不是「按过 Ctrl+A」才有的状态，而是「停靠点一个不落」。
+    /// 这件事只影响复制：块首的折叠标记（`# `、`- `）左边没有停靠点（硬约束 13），
+    /// 所以按停靠点取源码会漏掉第一行的标记；全选时补回来，粘贴出去才是完整文件。
+    fn selects_whole_document(&self) -> bool {
+        if self.selection.is_collapsed() {
+            return false;
+        }
+        let (lo, hi) = self.selection.normalized();
+        lo == 0 && hi + 1 == self.layout.stops()
+    }
+
+    /// 选区的源码文本。收起的光标返回 `None`：没有选区就没有可复制的东西。
+    ///
+    /// 取的是**源码**而不是可见文本：视图里 `**`、`# ` 是折叠的，
+    /// 但复制出去必须是能重新解析回同样结构的文本，否则粘贴一次格式就丢了。
+    /// 整篇选中时直接取文件本身——停靠点模型拿不到首块之前的那几个标记。
+    fn selection_text(&self) -> Option<String> {
+        if self.selects_whole_document() {
+            return Some(self.document.text());
+        }
+        let byte = self.selection.byte_range(&self.layout)?;
+        (byte.start < byte.end).then(|| self.document.slice_bytes(byte))
+    }
+
+    /// 剪切 = 复制选区 + 删掉它。
+    ///
+    /// 剪贴板里放的是**用户选中的那一段**（源码形态），删除却走 `expand_deletion`
+    /// ——和退格同一条路：选区正好掏空了 `**粗**` 这样的容器时，光删字会留下
+    /// 一段字面的 `****`，而重解析之后配对信息已经没了，事后补不回来。
+    /// 「删得比复制多一点」在这里是对的：被删掉的是空壳，不是内容。
+    fn cut(&mut self) -> Vec<Effect> {
+        if self.composing {
+            return Vec::new();
+        }
+        let whole = self.selects_whole_document();
+        let Some(range) = self.selection_chars() else {
+            return Vec::new();
+        };
+        let Some(text) = self.selection_text() else {
+            return Vec::new();
+        };
+        // 全选时删的就是整篇，不该再走「扩到语法边界」那套
+        let span = if whole {
+            0..self.document.len_chars()
+        } else {
+            self.expand_deletion(range)
+        };
+        let mut effects = self.apply(span, "");
+        effects.push(Effect::Clipboard { text });
+        effects
+    }
+
     /// char 位置 → 停靠点。
     ///
     /// 用 `Upstream`：刚打的字右侧若紧跟闭合标记（`**粗**` 的尾部），光标必须留在
@@ -923,6 +1008,151 @@ mod tests {
         assert_eq!(blocks, &vec![0, 1]);
         // 选区包含块间空行，否则复制出来会把两段粘在一起
         assert_eq!(&source[byte.clone()], "题\n\n正文");
+    }
+
+    #[test]
+    fn select_all_covers_the_whole_document() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\n\n乙");
+        let effects = app.update(Message::SelectAll, &files);
+        let Some(Effect::Selection { byte, blocks }) = effects.first() else {
+            panic!("全选应产生选区效果");
+        };
+        assert_eq!(byte, &(0..app.document.len_bytes()));
+        assert_eq!(blocks, &vec![0, 1]);
+        // 光标落在文首（= 全选后开始替换的位置），锚点在文末
+        assert_eq!(app.selection.head, 0);
+        // 全选不额外报光标：落点是从 head 推出来的，不需要第二条消息
+        assert!(!effects
+            .iter()
+            .any(|e| matches!(e, Effect::MoveCursor { .. })));
+
+        // 选中之后打字就是整体替换
+        type_text(&mut app, &files, "新");
+        assert_eq!(app.document.text(), "新");
+    }
+
+    #[test]
+    fn select_all_copies_the_whole_file_including_leading_markers() {
+        // 块首折叠标记左边没有停靠点（硬约束 13），按停靠点取源码会漏掉 `# `；
+        // 全选必须补回来，否则「全选→复制→粘贴到别处」会丢掉第一行的标题级别
+        let (files, mut app) = fixture();
+        let source = app.document.text();
+        app.update(Message::SelectAll, &files);
+        let effects = app.update(Message::Copy, &files);
+        assert_eq!(
+            effects,
+            vec![Effect::Clipboard {
+                text: source.clone()
+            }]
+        );
+        assert!(source.starts_with("# "), "夹具本身应当以标题开头");
+    }
+
+    #[test]
+    fn cut_all_empties_the_document_in_one_step() {
+        let (files, mut app) = fixture();
+        let source = app.document.text();
+        app.update(Message::SelectAll, &files);
+        let effects = app.update(Message::Cut, &files);
+        assert_eq!(app.document.text(), "");
+        let Some(Effect::Clipboard { text }) = effects.last() else {
+            panic!("剪切必须交出被删的文本");
+        };
+        assert_eq!(text, &source);
+        app.update(Message::Undo, &files);
+        assert_eq!(app.document.text(), source);
+    }
+
+    #[test]
+    fn select_all_on_empty_document_stays_collapsed() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "");
+        assert!(app.update(Message::SelectAll, &files).is_empty());
+        assert!(app.selection.is_collapsed());
+    }
+
+    #[test]
+    fn copy_hands_out_the_source_not_the_visible_text() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲甲\n\n乙乙");
+        // 跨块选中：源码里两段之间是空行，视图里只是一个块间距。
+        // 复制出去必须是前者，否则粘到别处两段就粘成一段了
+        let effects = app.update(
+            Message::Select {
+                anchor: 0,
+                head: 11,
+            },
+            &files,
+        );
+        assert!(matches!(effects.first(), Some(Effect::Selection { .. })));
+
+        let effects = app.update(Message::Copy, &files);
+        assert_eq!(
+            effects,
+            vec![Effect::Clipboard {
+                text: "甲甲\n\n乙".into()
+            }]
+        );
+        assert_eq!(app.document.text(), "甲甲\n\n乙乙", "复制不该改动文档");
+    }
+
+    #[test]
+    fn copy_without_selection_does_nothing() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲乙");
+        click(&mut app, &files, 3);
+        assert!(app.update(Message::Copy, &files).is_empty());
+        assert!(app.update(Message::Cut, &files).is_empty());
+        assert_eq!(app.document.text(), "甲乙");
+    }
+
+    #[test]
+    fn cut_deletes_the_selection_and_reports_it_once() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲乙丙");
+        app.update(
+            Message::Select {
+                anchor: 3,
+                head: 6,
+            },
+            &files,
+        );
+        let effects = app.update(Message::Cut, &files);
+        assert_eq!(app.document.text(), "甲丙");
+        assert!(effects.iter().any(|e| matches!(e, Effect::Patch { .. })));
+        let Some(Effect::Clipboard { text }) = effects.last() else {
+            panic!("剪切必须交出被删的文本");
+        };
+        assert_eq!(text, "乙");
+        // 剪掉之后不该留下选区，光标就停在缺口上
+        assert!(app.selection.is_collapsed());
+        assert_eq!(caret_byte(&app), 3);
+
+        // 一次撤销就能整体回来（删除与复制共用一步事务）
+        app.update(Message::Undo, &files);
+        assert_eq!(app.document.text(), "甲乙丙");
+    }
+
+    #[test]
+    fn cut_does_not_leave_an_empty_marker_shell() {
+        // 选中 `**粗**` 里的「粗」再剪切：只删字会留下字面的 `****`，
+        // 重解析之后配对信息就没了，所以删除走退格那条前置扩展
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "**粗**");
+        app.update(
+            Message::Select {
+                anchor: 2,
+                head: 5,
+            },
+            &files,
+        );
+        let effects = app.update(Message::Cut, &files);
+        let Some(Effect::Clipboard { text }) = effects.last() else {
+            panic!("剪切必须交出被删的文本");
+        };
+        assert_eq!(text, "粗", "剪贴板里只放用户选中的那一段");
+        assert_eq!(app.document.text(), "", "空容器的标记要一起收走");
     }
 
     #[test]

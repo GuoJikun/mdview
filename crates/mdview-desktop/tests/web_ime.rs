@@ -49,6 +49,7 @@ fn frontend_scripts_are_syntactically_valid() {
         "caretline.test.js",
         "selection.js",
         "selection.test.js",
+        "clipboard.js",
     ] {
         let (ok, output) = run_node(&["--check", script]);
         assert!(ok, "{script} 语法错误：\n{output}");

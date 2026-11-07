@@ -278,9 +278,30 @@ function applyReply(reply) {
   paintSelection(reply.selection);
   meta.revision = reply.revision;
   meta.dirty = reply.dirty;
+  if (typeof reply.clipboard === 'string') writeClipboard(reply.clipboard);
   if (reply.conflict) toast('文件已被外部修改，保存被拒');
   if (reply.saved) toast('已保存');
   renderStatus();
+}
+
+/**
+ * 把内核算出的选区源码交给系统剪贴板。
+ *
+ * 写入是异步的（还要退回到 execCommand），所以**不 await**：剪贴板失败不该
+ * 拖住编辑循环，最多弹一条提示。退回路径会抢走输入框焦点，写完要还回去。
+ */
+let lastClipboard = null;   // 最近一次交出去的文本，自检用它核对整条链路
+
+function writeClipboard(text) {
+  lastClipboard = text;
+  copyText(text)
+    .then((ok) => {
+      if (!ok) toast('复制失败：系统剪贴板不可用');
+    })
+    .catch(() => toast('复制失败：系统剪贴板不可用'))
+    .finally(() => {
+      if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+    });
 }
 
 async function boot() {
@@ -357,6 +378,11 @@ window.addEventListener('keydown', (event) => {
     if (key === 's') { event.preventDefault(); send({ kind: 'save' }); return; }
     if (key === 'z') { event.preventDefault(); send({ kind: event.shiftKey ? 'redo' : 'undo' }); return; }
     if (key === 'y') { event.preventDefault(); send({ kind: 'redo' }); return; }
+    // 全选、复制、剪切都必须走内核：原生选区已被清掉（见 selection.js），
+    // 文本真值和折叠标记的状态都在内核里，浏览器默认行为给不出正确的源码
+    if (key === 'a') { event.preventDefault(); send({ kind: 'selectAll' }); return; }
+    if (key === 'c') { event.preventDefault(); send({ kind: 'copy' }); return; }
+    if (key === 'x') { event.preventDefault(); send({ kind: 'cut' }); return; }
     return;
   }
 
@@ -665,6 +691,74 @@ window.__mdviewSelfTest = async function () {
         back ? 'top=' + Math.round(back.top) : '没有光标');
       window.scrollTo(0, 0);
       await new Promise((r) => setTimeout(r, 80));
+    }
+
+    // ---- 全选 / 复制 / 剪切 ----
+    // 原生选区已被清掉（见 selection.js），Ctrl+A 只能由内核算，
+    // 复制出去的也必须是源码：视图里 `**`、`# ` 是折叠的，照 DOM 拼会丢格式。
+    const pressCtrl = (key) => window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key, ctrlKey: true, bubbles: true, cancelable: true,
+      })
+    );
+
+    send({ kind: 'setCaret', stop: 0, extend: false });
+    await queue;
+    pressCtrl('a');
+    await queue;
+    const all = await invoke('snapshot');
+    check('Ctrl+A 选到整篇',
+      !!all.selection && all.selection[0] === 0 && all.selection[1] === all.stops - 1,
+      JSON.stringify(all.selection) + ' / stops=' + all.stops);
+    check('全选后高亮铺满可见字符', docEl.querySelectorAll('.sel').length > 0,
+      String(docEl.querySelectorAll('.sel').length));
+
+    // 走真实按键：Ctrl+C → 内核 → 回复 → 写剪贴板，这条链路上的每一环都别漏
+    const beforeCopy = docEl.textContent;
+    // 第一块是标题时，源码里必然以 `#` 开头——可见文本里没有它，
+    // 所以这一条正好区分「复制源码」与「照 DOM 拼可见文本」
+    const firstIsHeading = docEl.children[0].classList.contains('kind-heading');
+    pressCtrl('c');
+    await queue;
+    const copied = lastClipboard;
+    check('Ctrl+C 把源码而不是可见文本交给剪贴板',
+      typeof copied === 'string' && copied.length > 0 &&
+        (!firstIsHeading || copied.startsWith('#')),
+      JSON.stringify((copied || '').slice(0, 24)));
+    check('Ctrl+C 之后文档没被改动',
+      docEl.textContent === beforeCopy, JSON.stringify(docEl.textContent.slice(0, 16)));
+    // 剪贴板写入可能永远不 settle：窗口没拿到焦点时 Chromium 会把写请求
+    // 挂起等一个永远不会来的授权。测试里必须自带超时，否则整条自检卡死
+    const wrote = await Promise.race([
+      copyText(copied || ''),
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), 1000)),
+    ]);
+    check('系统剪贴板可写', wrote === true, String(wrote));
+
+    // 剪切：删掉选区、把同样的文本交出去，且一次撤销就能整体回来。
+    // 拿不到足够长的文档就跳过——短文档里没有两个可选的停靠点
+    send({ kind: 'setCaret', stop: 0, extend: false });
+    await queue;
+    if (all.stops > 6) {
+      send({ kind: 'setCaret', stop: 3, extend: false });
+      await queue;
+      send({ kind: 'setCaret', stop: 5, extend: true });
+      await queue;
+      const beforeCut = docEl.textContent;
+      lastClipboard = null;
+      pressCtrl('x');
+      await queue;
+      check('Ctrl+X 带走了选中的文本',
+        typeof lastClipboard === 'string' && lastClipboard.length > 0,
+        JSON.stringify((lastClipboard || '').slice(0, 12)));
+      check('剪切后文档确实变短', docEl.textContent.length < beforeCut.length,
+        docEl.textContent.length + ' vs ' + beforeCut.length);
+      send({ kind: 'undo' });
+      await queue;
+      check('一次撤销恢复剪切', docEl.textContent === beforeCut,
+        JSON.stringify(docEl.textContent.slice(0, 20)));
+    } else {
+      check('Ctrl+X 带走了选中的文本', true, '文档太短，跳过（stops=' + all.stops + '）');
     }
 
     // 原生选区的清理**不在这里测**：自检窗口拿不到键盘焦点，`addRange` 之后
