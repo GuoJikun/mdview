@@ -137,6 +137,25 @@ test('矩形缺失的停靠点被跳过，不会卡住', () => {
   assert.ok(target !== null && target >= 4 && target <= 7, '应当落到下一行: ' + target);
 });
 
+test('Home/End 落到视觉行两端而不是块首块尾', () => {
+  const s = scene();
+  s.line({ top: 0, count: 4 });        // 块内第一视觉行：0..3
+  const second = s.line({ top: 20, count: 4 }); // 折行后的第二行：4..7
+  const m = s.motion();
+  assert.strictEqual(m.edge(5, -1), second);
+  assert.strictEqual(m.edge(5, 1), second + 3);
+  // 第二行内的 Home 不能跑到块首
+  assert.notStrictEqual(m.edge(5, -1), 0);
+});
+
+test('单行段落的 Home/End 与块首块尾一致', () => {
+  const s = scene();
+  s.line({ top: 0, count: 5 });
+  const m = s.motion();
+  assert.strictEqual(m.edge(2, -1), 0);
+  assert.strictEqual(m.edge(2, 1), 4);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

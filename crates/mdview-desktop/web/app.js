@@ -332,13 +332,20 @@ window.addEventListener('keydown', (event) => {
       moveVertical(1, event.shiftKey);
       return;
     case 'Home': {
-      const bounds = blockBounds();
-      if (bounds) { event.preventDefault(); send({ kind: 'setCaret', stop: bounds.start, extend: event.shiftKey }); }
+      if (!caret) return;
+      event.preventDefault();
+      // 行首而不是块首：软换行段落里这两个位置不一样
+      const stop = lines.edge(caret.stop, -1);
+      const target = stop !== null ? stop : (blockBounds() || {}).start;
+      if (target !== undefined) send({ kind: 'setCaret', stop: target, extend: event.shiftKey });
       return;
     }
     case 'End': {
-      const bounds = blockBounds();
-      if (bounds) { event.preventDefault(); send({ kind: 'setCaret', stop: bounds.end, extend: event.shiftKey }); }
+      if (!caret) return;
+      event.preventDefault();
+      const stop = lines.edge(caret.stop, 1);
+      const target = stop !== null ? stop : (blockBounds() || {}).end;
+      if (target !== undefined) send({ kind: 'setCaret', stop: target, extend: event.shiftKey });
       return;
     }
     default:
@@ -511,6 +518,19 @@ window.__mdviewSelfTest = async function () {
     press('ArrowDown');
     await queue;
     check('连发 ↓ 两次跨两块', caret.block === firstBlock + 2, String(caret.block));
+
+    // Home / End：单行段落里就等于块首块尾（软换行的分支由 caretline.test.js 覆盖）
+    const body = docEl.children[firstBlock + 1];
+    const bodyStart = Number(body.dataset.bb);
+    const bodyEnd = Number(body.dataset.be);
+    send({ kind: 'setCaret', stop: bodyStart + 2, extend: false });
+    await queue;
+    press('Home');
+    await queue;
+    check('Home 落到段落首', caret.stop === bodyStart, caret.stop + ' vs ' + bodyStart);
+    press('End');
+    await queue;
+    check('End 落到段落尾', caret.stop === bodyEnd, caret.stop + ' vs ' + bodyEnd);
   } catch (err) {
     check('自检未抛异常', false, String(err));
   }

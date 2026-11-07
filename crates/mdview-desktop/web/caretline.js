@@ -112,6 +112,18 @@
       },
 
       /**
+       * 当前视觉行的首/尾停靠点。
+       * @param {number} stop 当前全局停靠点序号
+       * @param {-1|1} side -1 行首，1 行尾
+       * @returns {number|null} 矩形取不到时返回 null
+       */
+      edge: function (stop, side) {
+        const line = lineAround(stop);
+        if (!line) return null;
+        return side < 0 ? line.lo : line.hi;
+      },
+
+      /**
        * 移动到相邻视觉行。
        * @param {number} stop 当前全局停靠点序号
        * @param {number} dir  1 向下，-1 向上
