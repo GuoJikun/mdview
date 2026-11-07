@@ -3,3 +3,4 @@
 .DS_Store
 .workbuddy
 /logs
+crates/mdview-desktop/gen
