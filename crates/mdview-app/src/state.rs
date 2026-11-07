@@ -538,6 +538,16 @@ impl AppState {
                     }
                     Some(_) => {
                         let end = self.caret_byte().unwrap_or(line_start + prefix.len());
+                        let start = self.document.byte_to_char(line_start);
+                        let at = self.document.byte_to_char(end);
+                        // 空项正好是文档的最后一行时，这一行连行尾换行都没有：
+                        // 删掉标记后整篇只剩列表本身，没有块能承接光标，
+                        // `stop_at_byte` 只能把它退回上一行的末尾——用户看到的
+                        // 是「回车把光标送回列表最后一行」，而且再也离不开列表
+                        // （下一次回车又造出一个空项）。这里把整行换成空段落。
+                        if end == self.document.len_bytes() {
+                            return self.apply_with_caret(start..at, "\n", Some(start + 1));
+                        }
                         self.apply_bytes(line_start..end, "")
                     }
                     None => self.split_paragraph(),
@@ -1214,8 +1224,32 @@ mod tests {
         let mut app = open(&mut files, "- 甲\n- ");
         click(&mut app, &files, 8);
         app.update(Message::Newline, &files);
-        assert_eq!(app.document.text(), "- 甲\n");
-        assert_eq!(app.parsed.blocks.len(), 1);
+        assert_eq!(app.document.text(), "- 甲\n\n");
+        assert_eq!(app.parsed.blocks.len(), 2);
+        // 光标必须落在列表之后的新段落，而不是退回列表最后一行
+        assert_eq!(app.layout.locate(app.selection.head).unwrap().0 .0, 1);
+        type_text(&mut app, &files, "乙");
+        assert_eq!(app.document.text(), "- 甲\n\n乙");
+    }
+
+    #[test]
+    fn enter_twice_walks_out_of_the_last_list() {
+        // 末尾的列表项没有行尾换行（刚起窗、光标型输入常见）：连按两次回车
+        // 必须走到列表外面，否则光标退回最后一行、再也离不开列表
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "- 甲");
+        click(&mut app, &files, 5);
+        app.update(Message::Newline, &files);
+        assert_eq!(app.document.text(), "- 甲\n- ");
+        app.update(Message::Newline, &files);
+        assert_eq!(app.document.text(), "- 甲\n\n");
+        assert_eq!(
+            app.layout.locate(app.selection.head).unwrap().0 .0,
+            1,
+            "光标退回了列表最后一行"
+        );
+        type_text(&mut app, &files, "乙");
+        assert_eq!(app.document.text(), "- 甲\n\n乙");
     }
 
     #[test]
@@ -1425,3 +1459,4 @@ mod tests {
         assert!(analyze_line("2026 年").is_none(), "数字后没跟 . 或 ) 不算列表");
     }
 }
+
