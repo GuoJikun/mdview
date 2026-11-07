@@ -75,6 +75,11 @@ impl Layout {
         let mut stops: Vec<Stop> = Vec::new();
         let mut visual = 0usize;
         let mut cursor = block.byte.start;
+        // 左边是否已经出现过可见内容。块首的 `**`、`# `、`- ` 这类折叠标记
+        // 左侧空空如也，「标记之前」和「文字之前」落在同一视觉列——两个停靠点
+        // 位置完全一样，但编辑语义不同（Delete 会去格式而不是删字），
+        // 用户根本分不清自己在哪一个。所以这种停靠点不产生。
+        let mut has_visible = false;
 
         for seg in &segs {
             let end = seg.end();
@@ -87,17 +92,23 @@ impl Layout {
                 // 按原文可见呈现，宁可多显示，也不能吞字。
                 let slice = src.get(cursor..start).unwrap_or("");
                 emit_visible(&mut stops, &mut visual, cursor, slice, slice);
+                has_visible |= !slice.is_empty();
             }
             match seg {
                 Seg::Collapsed(_) => {
-                    // 零宽：前后两个停靠点共享同一视觉列，这正是「多停靠点」的来源
-                    push_stop(&mut stops, start, visual);
+                    // 零宽：前后两个停靠点共享同一视觉列，这正是「多停靠点」的来源。
+                    // 但左侧没有可见文字时只留右端，右侧的那个位置由后面的片段产出，
+                    // 否则光标会先停进标记里，Delete 变成「整对去格式」。
+                    if has_visible {
+                        push_stop(&mut stops, start, visual);
+                    }
                     push_stop(&mut stops, end, visual);
                 }
                 Seg::Atom(_) => {
                     push_stop(&mut stops, start, visual);
                     visual += 1;
                     push_stop(&mut stops, end, visual);
+                    has_visible = true;
                 }
                 Seg::Visible { byte, text } => {
                     let (slice, text) = if start > byte.start {
@@ -111,6 +122,7 @@ impl Layout {
                         (src.get(byte.clone()).unwrap_or(""), *text)
                     };
                     emit_visible(&mut stops, &mut visual, start, slice, text);
+                    has_visible |= !text.is_empty();
                 }
             }
             cursor = end;
@@ -547,19 +559,18 @@ mod tests {
     #[test]
     fn strong_markers_collapse_to_zero_width() {
         let layout = first("**加粗**");
-        assert_eq!(
-            pairs(&layout),
-            vec![(0, 0), (2, 0), (5, 1), (8, 2), (10, 2)]
-        );
+        // 块首的 `**` 左侧没有可见文字，「标记之前」与「文字之前」同列同位置，
+        // 留着只会让光标停进不可见的标记里，所以只有右端成为停靠点。
+        assert_eq!(pairs(&layout), vec![(2, 0), (5, 1), (8, 2), (10, 2)]);
         assert_eq!(layout.width(), 2);
     }
 
     #[test]
     fn upstream_gravity_sticks_to_visible_text() {
         let layout = first("**加粗**");
-        // 列 0 左侧没有文字，只能跳到文字前
-        assert_eq!(layout.stop_at_visual(0, Gravity::Upstream), 1);
-        assert_eq!(layout.byte(1), Some(2));
+        // 列 0 左侧没有文字，只能跳到文字前（也就是 0 号停靠点本身）
+        assert_eq!(layout.stop_at_visual(0, Gravity::Upstream), 0);
+        assert_eq!(layout.byte(0), Some(2));
         // 列 2 左侧有文字，停在「粗」之后而非闭合标记之后
         assert_eq!(layout.byte(layout.stop_at_visual(2, Gravity::Upstream)), Some(8));
     }
@@ -594,8 +605,26 @@ mod tests {
             caret = next;
             path.push(caret.to_byte(&doc).unwrap());
         }
-        // 视觉列依次是 0 0 1 1：前两站与后两站视觉不动，标记被跨过而非停进去
-        assert_eq!(path, vec![0, 2, 3, 5]);
+        // 视觉列依次是 0 1 2：起点已在文字前，标记被跨过而非停进去
+        assert_eq!(path, vec![2, 3, 5]);
+    }
+
+    #[test]
+    fn block_start_marker_is_not_a_resting_place() {
+        // 块首标记之前与文字之前完全同位置，用户分不清自己停在哪一个。
+        // 那个位置必须消失：否则按 Delete 会「整对去格式」而不是删第一个字。
+        for src in ["**加粗**", "# 标题", "- 甲", "> 引"] {
+            let (parsed, doc) = build(src);
+            let block = &parsed.blocks[0];
+            let layout = Layout::build(src, block);
+            assert_eq!(
+                layout.stops()[0].byte,
+                block.hidden[0].end,
+                "{src}: 首个停靠点必须落在标记之后"
+            );
+            // 首停靠点必须能直接落到文字上，而不是只存在于表里
+            assert_eq!(doc.byte(0), Some(block.hidden[0].end), "{src}");
+        }
     }
 
     #[test]

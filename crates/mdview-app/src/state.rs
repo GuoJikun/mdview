@@ -1007,6 +1007,47 @@ mod tests {
         }
     }
 
+    /// 词首的 Delete 必须删字，不能变成「整对去格式」。
+    ///
+    /// 块首 `**` 的左右两端落在同一视觉列上，若两个停靠点都保留，
+    /// 光标可能停在标记内部，Delete 就把整对标记抽掉——用户看到的是
+    /// 「加粗没了、字还在」，与退格完全一样，而他想删的是第一个字。
+    #[test]
+    fn delete_at_bold_head_removes_first_char_not_formatting() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "**很粗**");
+        click(&mut app, &files, 2);
+        app.update(Message::DeleteForward, &files);
+        assert_eq!(app.document.text(), "**粗**");
+        // 光标留在词首，下一次 Delete 继续删下一个字
+        assert_eq!(caret_byte(&app), 2);
+    }
+
+    /// 同一起点：退格仍是「去格式、留文字」，两条键位分工必须分开。
+    #[test]
+    fn backspace_at_bold_head_strips_the_pair_and_keeps_text() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "**很粗**");
+        click(&mut app, &files, 2);
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "很粗");
+        assert_eq!(caret_byte(&app), 0);
+    }
+
+    /// 词首再按左移不能「空转」：原来会掉进块首标记里，视觉不动却换了位置。
+    #[test]
+    fn left_arrow_at_bold_head_does_not_enter_the_marker() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "**很粗**");
+        click(&mut app, &files, 2);
+        let before = caret_byte(&app);
+        app.update(Message::MoveCaret { delta: -1, extend: false }, &files);
+        assert_eq!(caret_byte(&app), before, "词首左移应当无动作，而不是进标记");
+        // 并且此时 Delete 仍然是删字
+        app.update(Message::DeleteForward, &files);
+        assert_eq!(app.document.text(), "**粗**");
+    }
+
     #[test]
     fn delete_forward_on_last_visible_char_collapses_the_container() {
         let mut files = InMemoryFileStore::default();

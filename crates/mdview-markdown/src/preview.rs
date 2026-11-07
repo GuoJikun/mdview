@@ -562,8 +562,10 @@ mod tests {
     fn every_visible_char_gets_an_element() {
         let html = preview_html("**加粗**与`code`");
         assert!(html.contains("data-block=\"0\""));
-        // 折叠标记与可见字符都必须是独立元素，否则无法按停靠点定位
-        assert_eq!(html.matches("class=\"mk\"").count(), 4);
+        // 可见字符与「能停靠的」折叠标记都必须是独立元素，否则无法按停靠点定位。
+        // 块首的 `**` 不产生停靠点（见 layout 的 block_start_marker_is_not_a_resting_place），
+        // 因此这里只有 3 个标记元素。
+        assert_eq!(html.matches("class=\"mk\"").count(), 3);
         assert_eq!(html.matches("class=\"ch ").count(), 7);
     }
 
