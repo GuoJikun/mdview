@@ -397,12 +397,48 @@ function stopFromPoint(x, y) {
   const hit = document.elementFromPoint(x, y);
   if (!hit) return null;
   const el = hit.closest('[data-b]');
-  if (!el) return null;
+  // 没命中任何字符说明点在空白处（行尾右侧、行间、块内留白）。
+  // 这里不能直接放弃：编辑器的惯例是「点哪儿光标就落在那一行」。
+  if (!el) return stopFromBlank(x, y);
   const before = Number(el.dataset.b);
   if (!el.hasAttribute('data-a')) return before;
   const rect = el.getBoundingClientRect();
   if (rect.width === 0) return before;
   return x > rect.left + rect.width / 2 ? Number(el.dataset.a) : before;
+}
+
+/**
+ * 空白处的落点：先借浏览器给出的「最近文本位置」定位到某一视觉行，
+ * 再在这一行里按 x 选最近的停靠点。
+ *
+ * 不能按 y 遍历所有停靠点自己找行——那在长文档里拖拽时会退化成全表扫描。
+ * `caretRangeFromPoint` 是浏览器自己实现的命中测试，代价与排版一致。
+ */
+function stopFromBlank(x, y) {
+  const seed = nearestStopFromBrowser(x, y);
+  if (seed === null) return null;
+  const stop = lines.nearestInLine(seed, x);
+  return stop === null ? seed : stop;
+}
+
+/** 浏览器认为离这一点最近的文本位置，换算成停靠点序号。 */
+function nearestStopFromBrowser(x, y) {
+  let node = null;
+  if (document.caretRangeFromPoint) {
+    const range = document.caretRangeFromPoint(x, y);
+    node = range ? range.startContainer : null;
+  } else if (document.caretPositionFromPoint) {
+    const pos = document.caretPositionFromPoint(x, y);
+    node = pos ? pos.offsetNode : null;
+  }
+  if (!node) return null;
+  const host = node.nodeType === 1 ? node : node.parentElement;
+  const holder = host && host.closest('[data-b]');
+  if (!holder) return null;
+  // 只用来定位行，方向由 nearestInLine 按 x 重选；给右端是为了让
+  // 「点在字与字之间的空隙」也落到靠右的位置，与系统 caret 的习惯一致。
+  const after = holder.dataset.a;
+  return Number(after !== undefined ? after : holder.dataset.b);
 }
 
 docEl.addEventListener('mousedown', (event) => {
@@ -531,17 +567,41 @@ window.__mdviewSelfTest = async function () {
     press('End');
     await queue;
     check('End 落到段落尾', caret.stop === bodyEnd, caret.stop + ' vs ' + bodyEnd);
+
+    // 点行尾右侧空白：那个位置没有命中任何字符，光标必须落到这一行的末尾。
+    // 只靠 elementFromPoint 会直接放弃，用户看到的是「点了没反应」。
+    send({ kind: 'setCaret', stop: bodyStart, extend: false });
+    await queue;
+    const tailStop = lines.edge(bodyEnd, 1);
+    const tailRect = tailStop !== null ? rectOf(tailStop) : null;
+    if (tailRect) {
+      const docRect = docEl.getBoundingClientRect();
+      const blankX = Math.min(tailRect.x + 80, docRect.right - 8);
+      const blankY = tailRect.top + tailRect.height / 2;
+      const at = document.elementFromPoint(blankX, blankY);
+      check('空白处确实没有命中字符', !(at && at.closest('[data-b]')),
+        at ? at.className || at.tagName : 'null');
+      docEl.dispatchEvent(new MouseEvent('mousedown', {
+        clientX: blankX, clientY: blankY, bubbles: true, cancelable: true,
+      }));
+      await queue;
+      window.dispatchEvent(new MouseEvent('mouseup'));
+      check('点行尾空白落到行尾', caret.stop === tailStop, caret.stop + ' vs ' + tailStop);
+    } else {
+      check('点行尾空白落到行尾', false, '取不到行尾矩形');
+    }
   } catch (err) {
     check('自检未抛异常', false, String(err));
   }
 
   const failed = checks.filter((c) => !c.ok);
-  const lines = checks.map(
+  // 不能叫 lines：那会遮蔽全局的视觉行模块，函数内前面用到它时直接 TDZ 报错
+  const summary = checks.map(
     (c) => (c.ok ? '· ' : '× ') + c.name + (c.detail ? '(' + c.detail + ')' : '')
   );
   const report =
     (failed.length ? 'FAIL ' : 'OK ') +
-    (checks.length - failed.length) + '/' + checks.length + ' ' + lines.join(' | ');
+    (checks.length - failed.length) + '/' + checks.length + ' ' + summary.join(' | ');
   await invoke('selftest', { report });
 };
 

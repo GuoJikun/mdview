@@ -124,6 +124,44 @@
       },
 
       /**
+       * 给定停靠点所在的视觉行，返回该行里离 x 最近的停靠点。
+       *
+       * 点击行尾空白时会用到：那个位置没有命中任何字符，只能先借浏览器
+       * 给出的「最近文本位置」定位到行，再按 x 在这行内选一个落点。
+       *
+       * 点在行外（x 超出最左/最右停靠点）时直接取行首/行尾，不走「最近」：
+       * 词尾常常有两个同位置的停靠点（闭合标记前后），按距离比会受并列规则
+       * 影响落到小的那个，而 End 键落的是大的那个——两处必须一致。
+       *
+       * @param {number} stop 行内任一停靠点
+       * @param {number} x    点击的横坐标
+       */
+      nearestInLine: function (stop, x) {
+        const line = lineAround(stop);
+        if (!line) return null;
+        let left = -1;
+        let leftX = Infinity;
+        let right = -1;
+        let rightX = -Infinity;
+        for (let i = line.lo; i <= line.hi; i++) {
+          const r = rectAt(i);
+          if (!r) continue;
+          if (r.x < leftX) {
+            leftX = r.x;
+            left = i;
+          }
+          if (r.x >= rightX) {
+            // 并列时取序号更大的：那就是 End 键的落点
+            rightX = r.x;
+            right = i;
+          }
+        }
+        if (right >= 0 && x >= rightX) return right;
+        if (left >= 0 && x <= leftX) return left;
+        return nearest(line.lo, line.hi, x);
+      },
+
+      /**
        * 移动到相邻视觉行。
        * @param {number} stop 当前全局停靠点序号
        * @param {number} dir  1 向下，-1 向上

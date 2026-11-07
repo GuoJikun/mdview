@@ -146,6 +146,7 @@ byte   0  2  5  8  10
   - 回车按块类型分派：段落 `\n\n`、代码块/表格 `\n`、列表延续标记（有序序号 +1）、空项回车退出该层、引用延续 `> `
 - ✅ **增量重绘帧**：`block_frames` 出每块 HTML + 全局停靠点区间，`diff_frames` 用前后缀比对只替换变化段；编辑只发 `Effect::Patch`，结构变化才发 `Effect::Render`
 - ✅ **桌面端输入接线**：`keydown` / `paste` / 鼠标 → `Wire` → `Message`；消费 `Patch` 做块节点替换，用 `MoveCursor { stop, block, visual }` 对齐像素
+- ✅ **空白处点击定位**：`elementFromPoint` 没命中字符时（行尾右侧、行间、块内留白），退到 `caretRangeFromPoint` 借浏览器的命中测试定位视觉行，再按 x 取行首/行尾。点在行外直接取端点而不走「最近」——词尾有两个同位置停靠点，取「最近」会落到与 `End` 不一致的那个
 - ✅ **输入法输入层**：透明 `textarea#ime` 贴住 caret 承接 IME（候选窗跟着走），`#preedit` 镜像层按光标所在块的字体画 preedit，`web/ime.js` 是纯状态机（不碰 DOM，Node 可直接测）
   - 组合期只发一条 `CompositionStart`，之后不重绘、不碰 `#doc`，避免冲掉浏览器正在渲染的 preedit
   - 提交走 `CompositionCommit`，整段一次事务 = 一步撤销；取消候选走 `CompositionCancel` 复位挂起态（漏了会让内核永久吞输入）
@@ -184,9 +185,9 @@ byte   0  2  5  8  10
 ## 7. 当前进度快照
 
 - 日期：2026-11-07
-- 测试：**128 项全过**（markdown 61 / app 45 / desktop 10 / support 7 / core 5），无编译告警；其中 desktop 三项是前端守门（`node --check` 全部脚本 + `ime.test.js` 13 项 + `caretline.test.js` 12 项）
+- 测试：**128 项全过**（markdown 61 / app 45 / desktop 10 / support 7 / core 5），无编译告警；其中 desktop 三项是前端守门（`node --check` 全部脚本 + `ime.test.js` 13 项 + `caretline.test.js` 16 项）
 - 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`cargo run -p mdview-desktop -- <file> --self-test`，日志出现「自检通过：OK 20/20」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项）
+- 自检：`cargo run -p mdview-desktop -- <file> --self-test`，日志出现「自检通过：OK 22/22」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项）
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
 - 最近提交（Angular 规范）：
   - `feat: 初始化内核、解析投影与日志`
@@ -201,6 +202,7 @@ byte   0  2  5  8  10
   - `feat(desktop): Home/End 按视觉行两端定位`
   - `fix(mdview): 删空容器时连标记一起收起，不再留下可见星号`
   - `fix(markdown): 块首折叠标记不再产生不可见停靠点`
+  - `feat(desktop): 点击行尾空白也落到这一行的末尾`
 - 远端：`origin/main` 停在 `feat: 初始化内核…`，本地历史已分叉，同步需 `git push --force-with-lease`
 
 ---

@@ -156,6 +156,41 @@ test('单行段落的 Home/End 与块首块尾一致', () => {
   assert.strictEqual(m.edge(2, 1), 4);
 });
 
+test('点击行尾右侧空白落到行尾', () => {
+  const s = scene();
+  s.line({ top: 0, count: 4, x0: 10, step: 10 }); // x = 10,20,30,40
+  const m = s.motion();
+  // 点得再远也必须停在行尾，而不是「离得最近的字」——它俩本来就是同一个
+  assert.strictEqual(m.nearestInLine(0, 400), 3);
+  assert.strictEqual(m.nearestInLine(0, 41), 3);
+});
+
+test('点击行首左侧空白落到行首', () => {
+  const s = scene();
+  s.line({ top: 0, count: 4, x0: 10, step: 10 });
+  const m = s.motion();
+  assert.strictEqual(m.nearestInLine(2, 0), 0);
+});
+
+test('词尾并列时点击空白取 End 的落点', () => {
+  const s = scene();
+  // 4 与 5 是闭合标记前后两端，共享同一 x；End 落在序号大的 5
+  s.line({ top: 0, count: 6, x0: 10, step: 10, markers: [5] });
+  s.rects[5].x = s.rects[4].x;
+  const m = s.motion();
+  assert.strictEqual(m.nearestInLine(4, 200), 5, '行外取序号更大的停靠点');
+  // 行内落在标记左侧的字上时，仍按最近选，不会强行跳到行尾
+  assert.strictEqual(m.nearestInLine(4, 12), 0);
+});
+
+test('行内空白按最近停靠点落，不跳到行尾', () => {
+  const s = scene();
+  s.line({ top: 0, count: 4, x0: 10, step: 20 }); // x = 10,30,50,70
+  const m = s.motion();
+  // 点在 40：离 30 与 50 各 10，取靠左的 1（与系统 caret 的向下取整一致）
+  assert.strictEqual(m.nearestInLine(0, 40), 1);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {
