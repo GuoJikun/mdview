@@ -183,6 +183,25 @@ function paintSelection(range) {
   }
 }
 
+/**
+ * 原生选区一律清掉，选区只由内核的 anchor/head 决定（判据见 `selection.js`）。
+ *
+ * `mousedown` 的 `preventDefault` 挡不住所有路径：Ctrl+A、焦点回到 body 之后
+ * 的拖动、程序化 `addRange`，都会在本体上留下一片浏览器蓝底，和自绘的 `.sel`
+ * 叠在一起——颜色不对，边界也不对。
+ *
+ * 透明输入框内部的选区要放行，否则输入法组合会被打断。
+ */
+let clearingSelection = false;
+document.addEventListener('selectionchange', () => {
+  if (clearingSelection) return;
+  const sel = document.getSelection();
+  if (!shouldClearSelection(sel, imeEl)) return;
+  clearingSelection = true;
+  sel.removeAllRanges();
+  clearingSelection = false;
+});
+
 function renderStatus() {
   const blocks = docEl.children.length;
   const block = caret && caret.block !== null && caret.block !== undefined ? caret.block + 1 : '-';
@@ -647,6 +666,10 @@ window.__mdviewSelfTest = async function () {
       window.scrollTo(0, 0);
       await new Promise((r) => setTimeout(r, 80));
     }
+
+    // 原生选区的清理**不在这里测**：自检窗口拿不到键盘焦点，`addRange` 之后
+    // 浏览器立刻就把选区收走了，关不关清理逻辑读到的都是 rangeCount=0——
+    // 那种断言只会给假绿。判据由 `selection.test.js` 覆盖。
   } catch (err) {
     check('自检未抛异常', false, String(err));
   }

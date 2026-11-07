@@ -48,6 +48,9 @@ blockquote {
 }
 .atom.task { color: #57606a; }
 .sel { background: rgba(37, 99, 235, .18); border-radius: 2px; }
+/* 原生选区不上色：选区只由自绘 .sel 表达（见 app.js 的 selectionchange）。
+   留着这条兜底，是怕清理晚一帧时用户看到两套高亮叠在一起。 */
+#doc ::selection { background: transparent; }
 #caret {
   position: absolute; width: 2px; background: #0969da; border-radius: 1px;
   pointer-events: none; display: none;

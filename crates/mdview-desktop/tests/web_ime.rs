@@ -1,9 +1,12 @@
 //! 前端脚本的守门测试。
 //!
 //! 这一层没有 Rust 代码可测，但 `web/` 里的纯逻辑不该靠肉眼验证：
-//! `ime.js`（输入法状态机）与 `caretline.js`（上下移动的几何）都刻意不碰 DOM，
-//! 因此可以直接用 Node 跑。这里做两件事——语法检查所有前端脚本，再把两套
-//! 用例跑一遍。
+//! `ime.js`（输入法状态机）、`caretline.js`（上下移动与滚动的几何）与
+//! `selection.js`（原生选区判据）都刻意不碰 DOM，因此可以直接用 Node 跑。
+//! 这里做两件事——语法检查所有前端脚本，再把几套用例跑一遍。
+//!
+//! 浏览器行为本身（滚轮、真实选区）在这里测不了：合成事件不触发默认行为，
+//! 那部分只能靠 `--self-test` 的不变量与真人验收。
 //!
 //! 没装 Node 时整组跳过（打印原因），不让缺工具链阻塞 Rust 侧的流水线。
 
@@ -44,6 +47,8 @@ fn frontend_scripts_are_syntactically_valid() {
         "ime.test.js",
         "caretline.js",
         "caretline.test.js",
+        "selection.js",
+        "selection.test.js",
     ] {
         let (ok, output) = run_node(&["--check", script]);
         assert!(ok, "{script} 语法错误：\n{output}");
@@ -70,5 +75,16 @@ fn vertical_motion_geometry_passes_its_suite() {
     }
     let (ok, output) = run_node(&["caretline.test.js"]);
     assert!(ok, "上下移动几何测试失败：\n{output}");
+    assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
+}
+
+#[test]
+fn native_selection_rule_passes_its_suite() {
+    if !node_ready() {
+        eprintln!("跳过：本机没有 node");
+        return;
+    }
+    let (ok, output) = run_node(&["selection.test.js"]);
+    assert!(ok, "原生选区判据测试失败：\n{output}");
     assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
 }

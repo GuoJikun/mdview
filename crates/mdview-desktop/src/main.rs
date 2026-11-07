@@ -18,6 +18,13 @@ use std::{path::PathBuf, process};
 use session::{Reply, Session, Snapshot, Wire};
 use tauri::Manager;
 
+/// 前端资源的内容指纹，由 `build.rs` 注入。
+///
+/// 值本身没有用处，引用它是为了让 cargo 把 `MDVIEW_WEB_STAMP` 记进编译指纹：
+/// 只要 `web/` 里的内容变了，crate 就会重编，嵌进二进制的页面才是新的。
+#[allow(dead_code)]
+const WEB_STAMP: &str = env!("MDVIEW_WEB_STAMP");
+
 #[tauri::command]
 fn snapshot(session: tauri::State<'_, Session>) -> Snapshot {
     session.snapshot()

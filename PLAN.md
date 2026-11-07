@@ -175,7 +175,7 @@ byte   0  2  5  8  10
   - 空段落里再按回车只往下走一行（`split_paragraph` 在零长块里只插一个换行）：否则一次多出两行空行，像在跳行
 - ✅ **标题必须「成形」才升格**：ATX 标题要求 `#` 后有空格。pulldown 把行尾裸 `#` 也当合法标题（内容为空），于是逐字输入会出现两次跳变：敲 `#` 整行先变成一级标题（`#` 被折叠、字号变大），再输入文字又掉回段落（`#` 重新可见）。现在 `heading_is_bare` 把「只有 `#`、后面没空格」的块降级成段落——标记始终可见，敲下空格那一刻才升格，之后不会再变回来
 - ⬜ 选区拖动到窗口边缘时的自动滚动
-- ⬜ `selectionchange` 隔离，抑制原生选区与自绘 caret 的抖动
+- ✅ **原生选区隔离**：`selectionchange` 时清掉浏览器自己的选区（Ctrl+A、焦点回到 body 之后的拖动、程序化 `addRange` 都会留下它），页面上只保留自绘的 `.sel`；判据在 `selection.js`，4 项 Node 用例覆盖
 - 🔶 输入格式化：回车拆分与列表/引用延续已做；Tab 缩进、`**` 自动配对、Delete 合并块未做
 
 ### M4 细节 ⬜
@@ -192,7 +192,7 @@ byte   0  2  5  8  10
 ## 7. 当前进度快照
 
 - 日期：2026-11-07
-- 测试：**141 项全过**（markdown 69 / app 50 / desktop 10 / support 7 / core 5），无编译告警；其中 desktop 三项是前端守门（`node --check` 全部脚本 + `ime.test.js` 13 项 + `caretline.test.js` 21 项）
+- 测试：**142 项全过**（markdown 69 / app 50 / desktop 11 / support 7 / core 5），无编译告警；其中 desktop 四项是前端守门（`node --check` 全部脚本 + `ime.test.js` 13 项 + `caretline.test.js` 21 项 + `selection.test.js` 4 项）
 - 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
 - 自检：`cargo run -p mdview-desktop -- <file> --self-test`，日志出现「自检通过：OK 22/22」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项）
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
@@ -233,7 +233,7 @@ byte   0  2  5  8  10
    - 由此带出**重合停靠点**的坑，两端已经区别处理：
      - **词首（已修）**：块首 `**`、`# `、`- `、`> ` 的左右两端落在同一视觉列，「标记之前」这个位置用户永远分不清，Delete 会变成「整对去格式」而不是删第一个字。现在**左侧没有可见文字时只产生右端停靠点**（`Layout::build` 的 `has_visible`），← 也不会再空转一步。
      - **词尾（保留）**：闭合标记之前 / 之后仍是两个停靠点——前者退格删字、后者去格式。点选与 `End` 落到后者，`←` 先经过前者。要统一为「删字」也行，但会失去「不删字只去格式」的入口，等手感反馈再定。
-10. **原生选区未隔离**：`#doc` 不参与焦点，但浏览器仍可能留下原生选区，和自绘高亮叠加。需要监听 `selectionchange` 并清空。
+10. ~~**原生选区未隔离**~~ **已修**：`selectionchange` 时清空浏览器选区，只留自绘 `.sel`；透明输入框内部的选区放行（清掉会打断输入法）。`#doc ::selection` 留了一条透明兜底，防清理晚一帧时两套高亮叠加。代价是 **Ctrl+A 什么都不发生**——连原生全选也被清掉了，要真正的全选得给内核加一条 `selectAll`（见第 9 节）。
 11. ~~**`Home` / `End` 按块首块尾**~~ **已修（M3）**：改用 `caretline.js` 的 `edge()`，按视觉行两端定位；矩形取不到时回退到块首/块尾。
 12. **上下移动依赖当前视口的矩形**：`desiredX` 是视口坐标，窗口缩放或正文容器宽度变化会让它失效，因此 `resize` 时重置。若将来支持水平滚动或分栏，需要一并重置。
 13. **空标题显示为字面 `#`**：这是「标题必须成形」的刻意取舍（见第 6 节 M3）。代价是文件里真有 `#` 独自成行的空标题时，打开后会显示成段落文本 `#`。要区分「用户正在输入」与「文件本来如此」，得把光标位置引到投影层；目前不做。
@@ -245,7 +245,7 @@ byte   0  2  5  8  10
 
 ## 9. 下一步（按推荐顺序）
 
-1. **`selectionchange` 隔离**：清掉原生选区，只留自绘高亮（见第 8 节第 10 条）。
+1. **`selectAll`**：Ctrl+A 现在什么都不发生（原生选区已被清掉，见第 8 节第 10 条）。内核加一条消息（anchor 归零 + head 放到末停靠点）即可，前端顺手把 `Ctrl+A` 接上。
 2. **词尾重合停靠点的退格语义**：词首已经收敛为一处（不可见的那端不再产生停靠点），词尾仍保留两个（见第 8 节第 9 条），需要按实际手感定方向。
 3. **选区拖动到窗口边缘的自动滚动**：目前拖出视口就停住了。
 4. **表格子工程**：`<table>` 渲染 + 单元格内停靠点，替代当前的文本流占位。这是剩余最大的一块。
@@ -273,6 +273,7 @@ cargo run -p mdview-desktop -- <file>       # 起窗（Tauri 2）
 cargo run -p mdview-desktop -- <file> --self-test   # 输入法链路自检，跑完自动退出
 node crates/mdview-desktop/web/ime.test.js  # 输入法状态机单测（cargo test 已含）
 node crates/mdview-desktop/web/caretline.test.js  # 上下移动几何单测（cargo test 已含）
+node crates/mdview-desktop/web/selection.test.js # 原生选区判据单测（cargo test 已含）
 ```
 
 `--self-test` 会在真实 WebView2 里合成 composition 事件与方向键，把结果写进日志并以 0/1 退出，是唯一不需要人打字的端到端验证。它同时是唯一能验证「像素对齐」的地方——纯 Node 用例只能喂合成矩形。
@@ -301,6 +302,7 @@ node crates/mdview-desktop/web/caretline.test.js  # 上下移动几何单测（c
 | **编辑页**（停靠点 → 像素、按键 → 消息、增量应用、自检入口） | `crates/mdview-desktop/web/app.js` |
 | **输入法状态机**（不碰 DOM，Node 可测） | `crates/mdview-desktop/web/ime.js`、`ime.test.js` |
 | **上下移动几何**（视觉行判定 + 期望列，不碰 DOM，Node 可测） | `crates/mdview-desktop/web/caretline.js`、`caretline.test.js` |
+| **视口与原生选区**（滚多少才露头、哪些原生选区该清，不碰 DOM） | `crates/mdview-desktop/web/caretline.js`（`scrollDelta`）、`selection.js`、`selection.test.js` |
 | 前端守门测试（语法检查 + 跑两套 Node 用例） | `crates/mdview-desktop/tests/web_ime.rs` |
 
 ---
