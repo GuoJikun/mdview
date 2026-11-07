@@ -45,6 +45,8 @@ pub enum Message {
     CompositionStart,
     /// 输入法提交：整段文本作为**一次**事务落盘，一次撤销即可回退整个词
     CompositionCommit { text: String },
+    /// 输入法取消（Esc、失焦、空提交）：必须复位挂起态，否则内核永久吞输入
+    CompositionCancel,
     Undo,
     Redo,
     SetMode(ViewMode),
@@ -170,6 +172,12 @@ impl AppState {
             Message::CompositionCommit { text } => {
                 self.composing = false;
                 self.insert_text(&text)
+            }
+            // 取消候选（Esc、失焦）：必须复位 composing。漏了这一条，
+            // 内核会永远停在挂起态，之后所有输入被静默吞掉。
+            Message::CompositionCancel => {
+                self.composing = false;
+                Vec::new()
             }
             Message::Undo | Message::Redo => {
                 let changed = if is_undo {
@@ -914,6 +922,23 @@ mod tests {
         // 一次组合 = 一步撤销
         app.update(Message::Undo, &files);
         assert_eq!(app.document.text(), "正文");
+    }
+
+    #[test]
+    fn composition_cancel_releases_the_suspended_state() {
+        // 取消候选（Esc / 失焦）不发这一条，内核就永远停在 composing，
+        // 之后所有输入被静默吞掉——用户视角是「编辑器死了」。
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "正文");
+        click(&mut app, &files, 0);
+
+        app.update(Message::CompositionStart, &files);
+        assert!(app.composing);
+        app.update(Message::CompositionCancel, &files);
+        assert!(!app.composing);
+
+        app.update(Message::InsertText { text: "甲".into() }, &files);
+        assert_eq!(app.document.text(), "甲正文");
     }
 
     #[test]

@@ -80,12 +80,24 @@ test('data 缺失时退回输入框 value', () => {
   assert.deepStrictEqual(sent[1], { kind: 'compositionCommit', text: '你好' });
 });
 
-test('取消候选（空提交）不产生事务', () => {
+test('取消候选不产生事务，但必须通知内核复位挂起态', () => {
   const { ime, sent } = harness();
   ime.start();
   ime.end('', '');
-  assert.deepStrictEqual(sent, [{ kind: 'compositionStart' }]);
+  assert.deepStrictEqual(sent, [
+    { kind: 'compositionStart' },
+    // 少这一条，内核会永远停在 composing，之后所有输入被吞
+    { kind: 'compositionCancel' },
+  ]);
   assert.strictEqual(ime.isComposing(), false);
+});
+
+test('取消之后输入恢复正常', () => {
+  const { ime, sent } = harness();
+  ime.start();
+  ime.end('', '');
+  assert.strictEqual(ime.input('甲'), true);
+  assert.deepStrictEqual(sent[2], { kind: 'insertText', text: '甲' });
 });
 
 test('组合期与非组合期的按键都要放行', () => {

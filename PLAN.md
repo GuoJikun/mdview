@@ -32,6 +32,7 @@
    - 输入法只认真正的可编辑元素，所以 `#doc` 之外必须有一个透明 `textarea` 承接焦点，位置实时贴住 caret（候选窗跟着它）。
    - `compositionend` 之后紧跟的那一下回车要吞掉：浏览器会补发 `keydown`，此时 `isComposing` 已是 false，不拦就多分一段。
    - `compositionend` 的 `data` 可能为空（Safari），必须退回输入框的 `value`。
+   - **取消组合也必须给内核发消息**（`CompositionCancel`）。内核的 `composing` 只认结束信号，漏发就永久挂起，之后所有输入被静默吞掉——现象是「编辑器死了」，且日志里什么都没有。失焦同样要自己收尾。
    - 前端资源由 `generate_context!` 在编译期嵌入，`build.rs` 要写 `rerun-if-changed=web`，否则改了 JS 窗口行为不变。
 10. **同步滚动按锚点块插值**，禁止用滚动百分比换算。
 11. **文档必须永远至少有一个块**：`split_blocks` 在「整篇为空」或「以空行结尾」时补一个零长块。否则空文档没有停靠点、在末尾回车后光标只能贴在上一段行尾。（改动前 `split` 会丢弃空行段，M3 实测踩到）
@@ -145,9 +146,10 @@ byte   0  2  5  8  10
 - ✅ **桌面端输入接线**：`keydown` / `paste` / 鼠标 → `Wire` → `Message`；消费 `Patch` 做块节点替换，用 `MoveCursor { stop, block, visual }` 对齐像素
 - ✅ **输入法输入层**：透明 `textarea#ime` 贴住 caret 承接 IME（候选窗跟着走），`#preedit` 镜像层按光标所在块的字体画 preedit，`web/ime.js` 是纯状态机（不碰 DOM，Node 可直接测）
   - 组合期只发一条 `CompositionStart`，之后不重绘、不碰 `#doc`，避免冲掉浏览器正在渲染的 preedit
-  - 提交走 `CompositionCommit`，整段一次事务 = 一步撤销；空提交（取消候选）不产生事务
+  - 提交走 `CompositionCommit`，整段一次事务 = 一步撤销；取消候选走 `CompositionCancel` 复位挂起态（漏了会让内核永久吞输入）
   - 补掉「确认候选那一下回车」在 `compositionend` 之后补发 `keydown` 导致的误分段
-  - `--self-test` 在真实 WebView2 里合成 composition 事件，跑通「事件 → 状态机 → IPC → 事务 → 补丁 → 光标 → 撤销」，当前 10/10
+  - 失焦时自行收尾，不依赖浏览器补发 `compositionend`
+  - `--self-test` 在真实 WebView2 里合成 composition 事件，跑通「事件 → 状态机 → IPC → 事务 → 补丁 → 光标 → 撤销 → 取消后恢复输入」，当前 11/11
 - ⬜ 行内软换行后的上下方向键、选区拖动中的自动滚动
 - ⬜ `selectionchange` 隔离，抑制原生选区与自绘 caret 的抖动
 - 🔶 输入格式化：回车拆分与列表/引用延续已做；Tab 缩进、`**` 自动配对、Delete 合并块未做
@@ -166,9 +168,9 @@ byte   0  2  5  8  10
 ## 7. 当前进度快照
 
 - 日期：2026-11-07
-- 测试：**103 项全过**（markdown 55 / app 27 / desktop 9 / support 7 / core 5），无编译告警；其中 desktop 有两项是前端守门（`node --check` + `ime.test.js` 的 12 项）
+- 测试：**104 项全过**（markdown 55 / app 28 / desktop 9 / support 7 / core 5），无编译告警；其中 desktop 有两项是前端守门（`node --check` + `ime.test.js` 的 13 项）
 - 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 输入法自检：`cargo run -p mdview-desktop -- <file> --self-test`，日志出现「自检通过：OK 10/10」即链路通
+- 输入法自检：`cargo run -p mdview-desktop -- <file> --self-test`，日志出现「自检通过：OK 11/11」即链路通
 - 最近提交（Angular 规范）：
   - `feat: 初始化内核、解析投影与日志`
   - `feat(markdown): 新增视觉布局与停靠点表`

@@ -33,6 +33,8 @@ pub enum Wire {
     CompositionCommit {
         text: String,
     },
+    /// 取消组合（Esc / 失焦 / 空提交）。不送这一条，内核会永远挂着 composing。
+    CompositionCancel,
     /// 前端按「停靠点 → 像素」映射算出落点，直接报全局序号
     SetCaret {
         stop: usize,
@@ -64,6 +66,7 @@ impl Wire {
             },
             Wire::CompositionStart => Message::CompositionStart,
             Wire::CompositionCommit { text } => Message::CompositionCommit { text },
+            Wire::CompositionCancel => Message::CompositionCancel,
             Wire::SetCaret { stop, extend } => Message::SetCaret { stop, extend },
             Wire::Select { anchor, head } => Message::Select { anchor, head },
             Wire::Undo => Message::Undo,
@@ -279,6 +282,9 @@ mod tests {
         assert!(matches!(wire, Wire::SetCaret { stop: 3, extend: true }));
 
         assert!(serde_json::from_str::<Wire>(r#"{"kind":"backspace"}"#).is_ok());
+        // 取消组合漏接会在内核里留下永久挂起，契约里必须有这一条
+        let wire: Wire = serde_json::from_str(r#"{"kind":"compositionCancel"}"#).unwrap();
+        assert!(matches!(wire, Wire::CompositionCancel));
     }
 
     #[test]

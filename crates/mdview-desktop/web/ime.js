@@ -55,8 +55,10 @@
        * 组合结束。
        *
        * `data` 为空时退回输入框的 value：Safari 在部分输入法下单不回报 data，
-       * 只看 data 会吞掉整个词。空串（取消候选 / 只按了 Esc）不提交，
-       * 否则文档里会留下一个不该存在的空事务和一步撤销。
+       * 只看 data 会吞掉整个词。
+       *
+       * 空串（取消候选 / 只按了 Esc）也必须给内核一条消息。内核的 composing
+       * 只有收到结束信号才复位，漏发会让它永久挂起，之后所有输入被静默吞掉。
        */
       end: function (data, fallback) {
         const text = data ? data : fallback || '';
@@ -65,6 +67,7 @@
         endedAt = clock();
         hooks.setPreedit('');
         if (text) send({ kind: 'compositionCommit', text: text });
+        else send({ kind: 'compositionCancel' });
         return text;
       },
 

@@ -316,6 +316,14 @@ imeEl.addEventListener('input', () => {
   if (ime.input(imeEl.value)) imeEl.value = '';
 });
 
+// 失焦时浏览器可能不发 compositionend（切窗口、点标题栏）。自己收尾，
+// 否则内核会停在挂起态，回来之后任何输入都无声无息。
+imeEl.addEventListener('blur', () => {
+  if (!ime.isComposing()) return;
+  ime.end('', '');
+  imeEl.value = '';
+});
+
 // ---- 鼠标 ------------------------------------------------------------
 
 /** 点击点 → 停靠点：命中元素左半取左边界，右半取右边界。 */
@@ -392,6 +400,15 @@ window.__mdviewSelfTest = async function () {
     send({ kind: 'undo' });
     await queue;
     check('一次撤销回到提交前', docEl.textContent === before);
+
+    // 取消候选之后内核必须已复位，否则后续输入全被静默吞掉
+    fire('compositionstart');
+    await queue;
+    fire('compositionend', '');
+    await queue;
+    send({ kind: 'insertText', text: '丙' });
+    await queue;
+    check('取消组合后仍能输入', docEl.textContent.indexOf('丙') >= 0);
   } catch (err) {
     check('自检未抛异常', false, String(err));
   }
