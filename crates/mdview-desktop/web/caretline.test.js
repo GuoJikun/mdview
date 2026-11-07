@@ -3,7 +3,7 @@
 'use strict';
 
 const assert = require('assert');
-const { createLineMotion, sameLine } = require('./caretline.js');
+const { createLineMotion, sameLine, scrollDelta } = require('./caretline.js');
 
 /**
  * 用矩形数组描述版面：一行 = 一批同 top 的停靠点。
@@ -189,6 +189,38 @@ test('行内空白按最近停靠点落，不跳到行尾', () => {
   const m = s.motion();
   // 点在 40：离 30 与 50 各 10，取靠左的 1（与系统 caret 的向下取整一致）
   assert.strictEqual(m.nearestInLine(0, 40), 1);
+});
+
+// ---- 光标进出视口 ---------------------------------------------------
+
+test('光标完整在视口内时纹丝不动', () => {
+  assert.strictEqual(scrollDelta({ top: 200, height: 22 }, 800, 32), 0);
+  // 上下恰好卡在留白边界也算在里面，不然会一直微调
+  assert.strictEqual(scrollDelta({ top: 32, height: 22 }, 800, 32), 0);
+  assert.strictEqual(scrollDelta({ top: 800 - 32 - 22, height: 22 }, 800, 32), 0);
+});
+
+test('光标被推到视口上沿之上要向上滚回留白处', () => {
+  // 负的 top 是滚动之后光标跑到视口外的样子
+  assert.strictEqual(scrollDelta({ top: -12, height: 20 }, 800, 32), -44);
+  // 还在视口里但贴得太近，也要让出留白
+  assert.strictEqual(scrollDelta({ top: 10, height: 20 }, 800, 32), -22);
+});
+
+test('光标掉到视口下方要向下滚', () => {
+  assert.strictEqual(scrollDelta({ top: 830, height: 20 }, 800, 32), 82);
+  assert.strictEqual(scrollDelta({ top: 780, height: 20 }, 800, 32), 32);
+});
+
+test('margin 为 0 时只保证可见', () => {
+  assert.strictEqual(scrollDelta({ top: 0, height: 20 }, 800, 0), 0);
+  assert.strictEqual(scrollDelta({ top: -1, height: 20 }, 800, 0), -1);
+  assert.strictEqual(scrollDelta({ top: 800, height: 20 }, 800, 0), 20);
+});
+
+test('比视口还高的目标不会来回跳', () => {
+  // 上沿在上面：只把上沿拉回，不会因为「下沿看不见」又往下滚
+  assert.strictEqual(scrollDelta({ top: -200, height: 2000 }, 800, 32), -232);
 });
 
 let failed = 0;

@@ -20,6 +20,10 @@ let pendingStop = null;     // 已发出、尚未回包的垂直移动落点
 let meta = { revision: 0, dirty: false, path: null, stops: 0 };
 let dragging = false;
 let imeAnchorEl = null;     // preedit 复制字号用的参照元素（光标所在的字）
+let revealedStop = null;    // 上一次把光标滚进视口时的停靠点
+
+/** 光标进出视口时上下各留的余量，避免贴着边缘打字。 */
+const REVEAL_MARGIN = 32;
 
 // ---- 渲染 ------------------------------------------------------------
 
@@ -110,7 +114,33 @@ const lines = createLineMotion({
   rect: (stop) => rectOf(stop),
 });
 
-function applyCaret(next) {
+/**
+ * 让光标回到视口内，只滚到「刚好露出来 + 一点余量」。
+ *
+ * 不用 `scrollIntoView`：它对齐的是 `pos.el` 这个元素的边，
+ * 元素可能是一个 600px 高的代码块，也可能是零宽的折叠标记；
+ * 我们要的是**光标那一行**的位置。`margin` 同时是上下留白。
+ */
+function revealCaret(pos) {
+  const delta = scrollDelta(
+    { top: pos.top, height: Math.max(pos.height, 18) },
+    window.innerHeight,
+    REVEAL_MARGIN,
+  );
+  if (delta !== 0) window.scrollBy(0, delta);
+}
+
+/**
+ * `reveal = false` 时只把光标画到新位置，绝不滚动页面。
+ *
+ * 滚动事件里必须关掉它：光标是 `position: absolute` 的文档坐标，
+ * 页面滚动时它自己会跟着走，不需要任何重画。若这里还去「保证可见」，
+ * 用户每往下滚一点、光标被推出视口上沿，就被拉回原位——
+ * 表现为「光标在页面顶端时完全滚不动」。
+ *
+ * `force` 用于视口本身变了（窗口缩放）：那时光标没动，但仍要重新露出来。
+ */
+function applyCaret(next, reveal = true, force = false) {
   caret = next;
   // 只有回包落点与预期一致才作废：连按时可能还在路上（见 moveVertical）
   if (pendingStop !== null && next && next.stop === pendingStop) pendingStop = null;
@@ -129,10 +159,11 @@ function applyCaret(next) {
   caretEl.style.top = pos.top + window.scrollY + 'px';
   caretEl.style.height = Math.max(pos.height, 18) + 'px';
 
-  const top = pos.top + window.scrollY;
-  const bottom = top + pos.height;
-  if (top < window.scrollY || bottom > window.scrollY + window.innerHeight - 32) {
-    pos.el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  // 只有落点真的变了才追视口。滚动是用户自己的意图，不该被「光标还停在那儿」
+  // 这件事打断；同一落点重复回包（重绘、状态刷新）也同理。
+  if (reveal && (force || revealedStop !== next.stop)) {
+    revealCaret(pos);
+    revealedStop = next.stop;
   }
   imeAnchorEl = pos.el;
   placeIme();
@@ -459,9 +490,12 @@ window.addEventListener('mousemove', (event) => {
 
 window.addEventListener('mouseup', () => { dragging = false; });
 
-window.addEventListener('scroll', () => { if (caret) applyCaret(caret); }, { passive: true });
-// 窗口宽度变了，行会重新折行，旧的期望 x 已经没意义
-window.addEventListener('resize', () => { lines.reset(); if (caret) applyCaret(caret); });
+// 滚动时**不能**把光标拉回视口：光标是文档坐标，自己会跟着走。
+// 这里只刷新像素（元素可能被 patch 换掉），滚动意图完全交给用户。
+window.addEventListener('scroll', () => { if (caret) applyCaret(caret, false); }, { passive: true });
+// 窗口宽度变了，行会重新折行，旧的期望 x 已经没意义；光标可能因此落到视口外，
+// 这里的落点没变却必须重新露出来，所以带 force
+window.addEventListener('resize', () => { lines.reset(); if (caret) applyCaret(caret, true, true); });
 
 // ---- 自检 ------------------------------------------------------------
 
@@ -589,6 +623,29 @@ window.__mdviewSelfTest = async function () {
       check('点行尾空白落到行尾', caret.stop === tailStop, caret.stop + ' vs ' + tailStop);
     } else {
       check('点行尾空白落到行尾', false, '取不到行尾矩形');
+    }
+    // 光标被滚出视口之后，按键要能把它找回来。
+    //
+    // 这里只测「reveal 仍然生效」，不测「滚动不被拽回」：`self-test` 里
+    // 只能用 `scrollTo` 模拟滚动，而 Chromium 会抑制滚动过程中脚本发起的
+    // 滚动，所以无论有没有这层修复都测不出差别——那种断言是假绿。
+    send({ kind: 'setCaret', stop: 0, extend: false });
+    await queue;
+    const scroller = document.scrollingElement || document.documentElement;
+    const maxScroll = scroller.scrollHeight - window.innerHeight;
+    if (maxScroll < 120) {
+      check('按键后光标重新可见', true, '文档太短，跳过（可滚 ' + maxScroll + 'px）');
+    } else {
+      window.scrollTo(0, maxScroll);
+      await new Promise((r) => setTimeout(r, 120));
+      press('ArrowDown');
+      await queue;
+      const back = caret ? rectOf(caret.stop) : null;
+      check('按键后光标重新可见',
+        !!back && back.top >= 0 && back.top < window.innerHeight,
+        back ? 'top=' + Math.round(back.top) : '没有光标');
+      window.scrollTo(0, 0);
+      await new Promise((r) => setTimeout(r, 80));
     }
   } catch (err) {
     check('自检未抛异常', false, String(err));

@@ -25,6 +25,28 @@
   }
 
   /**
+   * 让 rect 进入视口需要滚动多少像素（正数向下）。已经在里面就返回 0。
+   *
+   * 不用 `scrollIntoView`：它对齐的是元素的边，而元素可能是一个 600px 高的
+   * 代码块、也可能是零宽折叠标记，我们要的只是**光标那一行**。
+   * `margin` 是上下留白，避免光标贴着视口边缘打字。
+   *
+   * 入参一律是**视口坐标**（`getBoundingClientRect` 的 top 就是），
+   * 这样返回值可以直接交给 `scrollBy`。
+   *
+   * @param {{top: number, height: number}} rect 视口坐标（可以是负数，表示在视口上方）
+   * @param {number} viewHeight 视口高度，即 `window.innerHeight`
+   * @param {number} margin
+   */
+  function scrollDelta(rect, viewHeight, margin) {
+    const inset = Math.max(margin, 0);
+    const bottom = rect.top + Math.max(rect.height, 0);
+    if (rect.top - inset < 0) return rect.top - inset;
+    if (bottom + inset > viewHeight) return bottom + inset - viewHeight;
+    return 0;
+  }
+
+  /**
    * @param {{
    *   count: () => number,
    *   rect: (stop: number) => ({x: number, top: number, height: number, mk?: boolean}|null),
@@ -180,11 +202,12 @@
     };
   }
 
-  const api = { createLineMotion: createLineMotion, sameLine: sameLine };
+  const api = { createLineMotion: createLineMotion, sameLine: sameLine, scrollDelta: scrollDelta };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = api;
   } else {
     root.createLineMotion = createLineMotion;
     root.sameLine = sameLine;
+    root.scrollDelta = scrollDelta;
   }
 })(typeof window !== 'undefined' ? window : this);
