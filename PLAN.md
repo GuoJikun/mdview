@@ -1,6 +1,6 @@
 # PLAN.md — mdview 开发计划与执行进度
 
-> 最后更新：2026-11-07 17:35
+> 最后更新：2026-11-08 19:30
 > 适用对象：接手本项目的 AI 或开发者。**本文自包含**，读完即可继续，不需要任何历史对话。
 > 每次有实质进展请同步更新第 6 节的状态和第 7 节的快照。
 
@@ -39,6 +39,7 @@
 12. **纵向位置一律问浏览器**：视觉行、行高、折行只有渲染器知道。`ArrowUp/Down`、`Home/End` 这类「上一行/行首」的判断必须基于 `getBoundingClientRect`，不能在核心里用「视觉列 + 块索引」推算——内核不知道一个字有多宽，会把折行当成块边界。反过来，横向移动（左/右、点选）仍然走内核的停靠点表，因为「哪些字节不可见」只有解析层知道。两套坐标的分界线就是这条。
 13. **不能让光标停在「视觉上看不见的位置」**：同一视觉列上的多个停靠点，只有在编辑语义确实不同、且用户能通过操作区分时才可以都保留。块首折叠标记（`**`、`# `、`- `、`> `）左侧没有可见文字，它的「标记之前」必须不产生停靠点，否则 Delete 会整对去格式而不是删字，`←` 还会空转一步。判定见 `Layout::build` 的 `has_visible`。
 14. **空段落必须被空行夹在中间**：块只能由非空行组成，所以文档中间的「等待输入的空段落」只能写成三行空行——首尾两行当分隔，中间那行才是空段落（`split_blocks` 的 `collect_blank_paragraphs`）。只留一行空行当空段落的话，用户敲下第一个字符时那一行就不再是空行，文字立刻粘到隔壁块上（`- 乙\nX` 是列表项的懒续行，`甲\nX` 是同段落软换行），而且事后再也补不回来。
+15. **拖动选区时的落点探针不能压在视口边缘上**：视口最下面那几十像素归固定状态栏 `#bar` 所有，`elementFromPoint` 命中的是状态栏而不是正文，落点一路返回 null——现象是「页面自己在滚，选区一动不动」，日志里什么错都没有。探针点必须先压进「正文可见区」（`probeBox()` = 正文矩形 ∩ 视口 ∩ 状态栏上沿），见 `dragscroll.js` 的 `clampToBox`。
 
 ---
 
@@ -174,7 +175,14 @@ byte   0  2  5  8  10
   - 后面只剩空行时：末尾空段落本来就接得住光标，删掉标记即可，不必再堆空行
   - 空段落里再按回车只往下走一行（`split_paragraph` 在零长块里只插一个换行）：否则一次多出两行空行，像在跳行
 - ✅ **标题必须「成形」才升格**：ATX 标题要求 `#` 后有空格。pulldown 把行尾裸 `#` 也当合法标题（内容为空），于是逐字输入会出现两次跳变：敲 `#` 整行先变成一级标题（`#` 被折叠、字号变大），再输入文字又掉回段落（`#` 重新可见）。现在 `heading_is_bare` 把「只有 `#`、后面没空格」的块降级成段落——标记始终可见，敲下空格那一刻才升格，之后不会再变回来
-- ⬜ 选区拖动到窗口边缘时的自动滚动
+- ✅ **选区拖动到窗口边缘时的自动滚动**（`web/dragscroll.js`）
+  - 纯几何不碰 DOM，Node 直接测（`dragscroll.test.js` 16 项）；帧循环、滚动、落点回写全部由 hooks 注入
+  - **必须自走帧循环**：拖选靠 `mousemove` 驱动，而指针停在边缘时浏览器不再发新事件，选区就冻结在那一屏。这里每帧「滚一点 + 重新求指针下的落点」，指针不动、页面在动，落点自然一路延伸
+  - 速度与「陷进边缘多深」成正比（48px 边缘带，满速 24px/帧），拖出窗口后封顶；视口极矮时边缘带压到高度的一半，免得上下两条带互相吃掉、滚动永远停不下来
+  - 探针点先压进 `probeBox()`（正文 ∩ 视口 ∩ 状态栏上沿）。踩过的坑：直接压到视口下沿会命中固定状态栏，`elementFromPoint` 拿不到正文 → 落点全是 null，页面在滚而选区不动（自检抓到的就是这条）
+  - 三个收尾口子都要堵：`mouseup`、`blur`（切走窗口收不到 mouseup）、`mousemove` 里 `buttons === 0`（在窗口外松手）
+  - 拖动期间抑制 `revealCaret`：光标就在指针底下，本来就在视口里；追视口会每帧多滚 30px、越过指针对应那一行，观感是一顿一顿的
+  - `--self-test` 三项：自动滚了 `+384px` / 选区 head 从 0 伸到 348 / 松手后 `384 → 384` 不再动（rAF 被节流的窗口会显式跳过而不是假红）
 - ✅ **原生选区隔离**：`selectionchange` 时清掉浏览器自己的选区（Ctrl+A、焦点回到 body 之后的拖动、程序化 `addRange` 都会留下它），页面上只保留自绘的 `.sel`；判据在 `selection.js`，4 项 Node 用例覆盖
 - ✅ **全选 / 复制 / 剪切**：`selectAll` / `copy` / `cut` 三条消息，`Ctrl+A` / `Ctrl+C` / `Ctrl+X` 全部走内核
   - 复制出去的是**源码**而不是可见文本（视图里 `**`、`# ` 是折叠的，照 DOM 拼出来再粘贴回去格式就没了）
@@ -196,10 +204,11 @@ byte   0  2  5  8  10
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-07
-- 测试：**152 项全过**（markdown 69 / app 58 / desktop 13 / support 7 / core 5），无编译告警；其中 desktop 四项是前端守门（`node --check` 全部脚本（含 `clipboard.js`）+ `ime.test.js` 13 项 + `caretline.test.js` 21 项 + `selection.test.js` 4 项）
+- 日期：2026-11-08
+- 测试：**Rust 153 项全过**（markdown 69 / app 58 / desktop 14 / support 7 / core 5），无编译告警；desktop 那一组里 5 项是前端守门（`node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`）+ 四套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项，共 54 项）
 - 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`cargo run -p mdview-desktop -- <file> --self-test`，日志出现「自检通过：OK 31/31」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、视口 1 项、全选/复制/剪切 8 项）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+- 自检：`cargo run -p mdview-desktop -- crates/mdview-desktop/tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 34/34」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+  - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
 - 最近提交（Angular 规范）：
   - `feat: 初始化内核、解析投影与日志`
@@ -219,6 +228,7 @@ byte   0  2  5  8  10
   - `fix(app): 空项回不到上一行，文末退出列表后光标落进新段落`
   - `fix(markdown): 空项退出列表时留下可停靠的空段落`
   - `feat(app): 全选、复制、剪切走内核，Ctrl+A/C/X 接上`
+  - `feat(desktop): 拖动选区到窗口边缘时自动滚动`
 - 分支：全部特性/修复分支已按线性顺序快进并入 `main`（`3110c20`），`origin/main` 只差在 `feat: 初始化内核…`，普通 `git push origin main` 即可，不需要 force
 
 ---
@@ -253,8 +263,8 @@ byte   0  2  5  8  10
 ## 9. 下一步（按推荐顺序）
 
 1. ~~**`selectAll`**~~ **已完成**：全选 / 复制 / 剪切三条消息 + `Ctrl+A` / `Ctrl+C` / `Ctrl+X`。剩下的相关缺口是 **粘贴**——`paste` 事件直接把 `clipboardData` 的纯文本发给 `InsertText`，还没有 HTML→Markdown 的规范化（见 M4）
-2. **词尾重合停靠点的退格语义**：词首已经收敛为一处（不可见的那端不再产生停靠点），词尾仍保留两个（见第 8 节第 9 条），需要按实际手感定方向。
-3. **选区拖动到窗口边缘的自动滚动**：目前拖出视口就停住了。
+2. ~~**选区拖动到窗口边缘的自动滚动**~~ **已完成**：`web/dragscroll.js` + `--self-test` 三项。剩下的相邻缺口只有「拖到窗口左右两侧时横向自动滚动」——正文不横向滚动，当前不需要。
+3. **词尾重合停靠点的退格语义**：词首已经收敛为一处（不可见的那端不再产生停靠点），词尾仍保留两个（见第 8 节第 9 条），需要按实际手感定方向。
 4. **表格子工程**：`<table>` 渲染 + 单元格内停靠点，替代当前的文本流占位。这是剩余最大的一块。
 5. **`Watcher` 落地**（`notify`），把外部修改从「保存时被动发现」变成主动提示。
 6. **引用 / 分隔线的成形判定**：见第 8 节第 17 条，与标题同源，可复用判定函数。
@@ -277,10 +287,12 @@ cargo run -p mdview-cli -- <file> layout    # 停靠点表：列 / byte / 字符
 cargo run -p mdview-cli -- <file> preview   # 生成 <file>.preview.html
 cargo run -p mdview-cli -- <file> html      # 阅读态 HTML
 cargo run -p mdview-desktop -- <file>       # 起窗（Tauri 2）
-cargo run -p mdview-desktop -- <file> --self-test   # 输入法链路自检，跑完自动退出
+cargo run -p mdview-desktop -- crates/mdview-desktop/tests/fixtures/selftest.md --self-test
+                                            # 端到端自检（含拖选自动滚动），跑完自动退出
 node crates/mdview-desktop/web/ime.test.js  # 输入法状态机单测（cargo test 已含）
 node crates/mdview-desktop/web/caretline.test.js  # 上下移动几何单测（cargo test 已含）
 node crates/mdview-desktop/web/selection.test.js # 原生选区判据单测（cargo test 已含）
+node crates/mdview-desktop/web/dragscroll.test.js # 边缘自动滚动几何单测（cargo test 已含）
 ```
 
 `--self-test` 会在真实 WebView2 里合成 composition 事件与方向键，把结果写进日志并以 0/1 退出，是唯一不需要人打字的端到端验证。它同时是唯一能验证「像素对齐」的地方——纯 Node 用例只能喂合成矩形。
@@ -310,6 +322,8 @@ node crates/mdview-desktop/web/selection.test.js # 原生选区判据单测（ca
 | **输入法状态机**（不碰 DOM，Node 可测） | `crates/mdview-desktop/web/ime.js`、`ime.test.js` |
 | **上下移动几何**（视觉行判定 + 期望列，不碰 DOM，Node 可测） | `crates/mdview-desktop/web/caretline.js`、`caretline.test.js` |
 | **视口与原生选区**（滚多少才露头、哪些原生选区该清，不碰 DOM） | `crates/mdview-desktop/web/caretline.js`（`scrollDelta`）、`selection.js`、`selection.test.js` |
+| **拖选时的边缘自动滚动**（速度曲线、探针点压缩、自走帧循环，不碰 DOM） | `crates/mdview-desktop/web/dragscroll.js`、`dragscroll.test.js` |
+| 自检样张（必须是「一块一行」的文档） | `crates/mdview-desktop/tests/fixtures/selftest.md` |
 | **剪贴板写入**（内核给文本、前端写系统剪贴板，`execCommand` 兜底） | `crates/mdview-desktop/web/clipboard.js` |
 | **键位契约**（`Ctrl+A/C/X` → `selectAll`/`copy`/`cut`，见 `app.js` 的 keydown） | `crates/mdview-desktop/web/app.js`、`crates/mdview-desktop/src/session.rs` |
 | 前端守门测试（语法检查 + 跑两套 Node 用例） | `crates/mdview-desktop/tests/web_ime.rs` |

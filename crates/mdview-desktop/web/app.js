@@ -19,11 +19,16 @@ let caret = null;           // 最近一次内核回报的光标
 let pendingStop = null;     // 已发出、尚未回包的垂直移动落点
 let meta = { revision: 0, dirty: false, path: null, stops: 0 };
 let dragging = false;
+let dragPoint = null;       // 拖动期间指针的视口坐标（自动滚动要按它反复求落点）
+let dragStop = null;        // 拖动中已发出的落点，避免同一落点每帧都过一趟 IPC
 let imeAnchorEl = null;     // preedit 复制字号用的参照元素（光标所在的字）
 let revealedStop = null;    // 上一次把光标滚进视口时的停靠点
 
 /** 光标进出视口时上下各留的余量，避免贴着边缘打字。 */
 const REVEAL_MARGIN = 32;
+/** 拖动时指针进入视口上下多深就开始自动滚动，以及每帧最多滚多少。 */
+const DRAG_EDGE = 48;
+const DRAG_MAX_SPEED = 24;
 
 // ---- 渲染 ------------------------------------------------------------
 
@@ -161,7 +166,11 @@ function applyCaret(next, reveal = true, force = false) {
 
   // 只有落点真的变了才追视口。滚动是用户自己的意图，不该被「光标还停在那儿」
   // 这件事打断；同一落点重复回包（重绘、状态刷新）也同理。
-  if (reveal && (force || revealedStop !== next.stop)) {
+  //
+  // 拖动期间也不追：光标就在指针底下，本来就在视口里；而拖到边缘时
+  // `revealCaret` 会额外多滚一段余量，把自动滚动的节奏顶乱（每帧多滚 30px、
+  // 越过指针对应的行，观感是「滚起来一顿一顿的」）。
+  if (reveal && (force || (!dragging && revealedStop !== next.stop))) {
     revealCaret(pos);
     revealedStop = next.stop;
   }
@@ -517,30 +526,110 @@ function nearestStopFromBrowser(x, y) {
   return Number(after !== undefined ? after : holder.dataset.b);
 }
 
+/**
+ * 拖动落点的探测范围：**正文真正可见的那一块**，而不是整块视口。
+ *
+ * 视口边缘会被固定浮层盖住——本项目的状态栏 `#bar` 就是 `position: fixed`，
+ * 视口最下面那几十像素归它。若把探针压到视口下沿，`elementFromPoint` 命中
+ * 状态栏，落点一路返回 null：页面自己在滚、选区却一动不动（自检正是这么抓到的）。
+ */
+function probeBox() {
+  const doc = docEl.getBoundingClientRect();
+  const bar = barEl.getBoundingClientRect();
+  const top = Math.max(doc.top, 0);
+  const bottom = Math.min(
+    doc.bottom,
+    window.innerHeight,
+    bar.height > 0 ? bar.top : window.innerHeight,
+  );
+  return {
+    left: Math.max(doc.left, 0),
+    top: top,
+    // 状态栏比正文还高（窗口被压到极扁）时退回视口，别造出一个空的探测区
+    right: Math.min(doc.right, window.innerWidth),
+    bottom: bottom > top ? bottom : window.innerHeight,
+  };
+}
+
+/**
+ * 边缘自动滚动：指针停在视口上下沿（或拖出窗口）时，选区要自己往下长。
+ *
+ * 为什么要自走的帧循环：拖选靠 `mousemove` 驱动，而指针停在边缘时浏览器
+ * 不再发新事件——选区就冻结在那一屏。这里每帧「滚一点 + 重新求指针下的落点」，
+ * 指针不动、页面在动，落点自然一路延伸。
+ *
+ * 落在指针外的位置一律先压进正文可见区：拖出窗口时 `elementFromPoint` 返回 null，
+ * 求不出落点；用户的意思很明确——选到屏幕边缘那一行。
+ */
+const dragScroll = createDragAutoScroll({
+  speed: (y) => edgeSpeed(y, window.innerHeight, { margin: DRAG_EDGE, maxSpeed: DRAG_MAX_SPEED }),
+  scrollBy: (dy) => window.scrollBy(0, dy),
+  commit: () => {
+    if (!dragging || !dragPoint) return;
+    const point = clampToBox(dragPoint, probeBox(), 1);
+    const stop = stopFromPoint(point.x, point.y);
+    if (stop === null || stop === dragStop) return;
+    dragStop = stop;
+    // 走 enqueue 而不是 send：一帧一次的连续落点不该反复重置期望列
+    enqueue({ kind: 'setCaret', stop, extend: true });
+  },
+  schedule: (fn) => window.requestAnimationFrame(fn),
+  cancel: (id) => window.cancelAnimationFrame(id),
+});
+
+function endDrag() {
+  if (!dragging) return;
+  dragging = false;
+  dragPoint = null;
+  dragStop = null;
+  dragScroll.stop();
+}
+
 docEl.addEventListener('mousedown', (event) => {
   const stop = stopFromPoint(event.clientX, event.clientY);
   if (stop === null) return;
   event.preventDefault();
   dragging = true;
+  dragPoint = { x: event.clientX, y: event.clientY };
+  dragStop = stop;
   imeEl.focus({ preventScroll: true });
   send({ kind: 'setCaret', stop, extend: event.shiftKey });
 });
 
 window.addEventListener('mousemove', (event) => {
   if (!dragging) return;
-  const stop = stopFromPoint(event.clientX, event.clientY);
-  if (stop === null || (caret && stop === caret.stop)) return;
-  send({ kind: 'setCaret', stop, extend: true });
+  // 在窗口外松手时 `mouseup` 收不到，靠这个兜底，否则指针一回到正文里
+  // 就又接着改选区（而且自动滚动循环也停不下来）
+  if (event.buttons === 0) {
+    endDrag();
+    return;
+  }
+  dragPoint = { x: event.clientX, y: event.clientY };
+  const point = clampToBox(dragPoint, probeBox(), 1);
+  const stop = stopFromPoint(point.x, point.y);
+  if (stop !== null && stop !== dragStop) {
+    dragStop = stop;
+    send({ kind: 'setCaret', stop, extend: true });
+  }
+  // 在正文中部时这一步是空操作；进入边缘带才会真的排上帧
+  dragScroll.update(event.clientY);
 });
 
-window.addEventListener('mouseup', () => { dragging = false; });
+window.addEventListener('mouseup', endDrag);
+// 切走窗口时既收不到 mouseup，也不会有 mousemove，必须自己收尾
+window.addEventListener('blur', endDrag);
 
 // 滚动时**不能**把光标拉回视口：光标是文档坐标，自己会跟着走。
 // 这里只刷新像素（元素可能被 patch 换掉），滚动意图完全交给用户。
 window.addEventListener('scroll', () => { if (caret) applyCaret(caret, false); }, { passive: true });
 // 窗口宽度变了，行会重新折行，旧的期望 x 已经没意义；光标可能因此落到视口外，
 // 这里的落点没变却必须重新露出来，所以带 force
-window.addEventListener('resize', () => { lines.reset(); if (caret) applyCaret(caret, true, true); });
+window.addEventListener('resize', () => {
+  lines.reset();
+  if (caret) applyCaret(caret, true, true);
+  // 拖动中途缩放：边缘带的像素位置变了，重新判一次
+  if (dragging && dragPoint) dragScroll.update(dragPoint.y);
+});
 
 // ---- 自检 ------------------------------------------------------------
 
@@ -668,6 +757,63 @@ window.__mdviewSelfTest = async function () {
       check('点行尾空白落到行尾', caret.stop === tailStop, caret.stop + ' vs ' + tailStop);
     } else {
       check('点行尾空白落到行尾', false, '取不到行尾矩形');
+    }
+
+    // ---- 拖到窗口边缘自动滚动 ----
+    // 指针停在边缘时浏览器不再发 `mousemove`，选区只能靠自走的帧循环延伸。
+    // 这里合成「在正文里按下 → 拖到视口下沿之外」，断言页面自己滚下去了、
+    // 选区也跟着长。纯 Node 用例只能测几何，滚不滚得动只有这里能验。
+    {
+      window.scrollTo(0, 0);
+      await new Promise((r) => setTimeout(r, 80));
+      const dragScroller = document.scrollingElement || document.documentElement;
+      const room = dragScroller.scrollHeight - window.innerHeight;
+      // 帧循环靠 rAF 驱动，而不可见/被遮挡的窗口会把 rAF 完全停掉；
+      // 先确认帧真的会跑，否则这里只会得到一条与代码无关的假红
+      const rafAlive = await Promise.race([
+        new Promise((r) => window.requestAnimationFrame(() => r(true))),
+        new Promise((r) => setTimeout(() => r(false), 300)),
+      ]);
+      if (room < 200 || !rafAlive) {
+        check('拖到边缘会自动滚动', true,
+          '跳过（可滚 ' + room + 'px，rAF ' + (rafAlive ? '正常' : '被节流') + '）');
+      } else {
+        const firstRect = docEl.children[0].getBoundingClientRect();
+        send({ kind: 'setCaret', stop: 0, extend: false });
+        await queue;
+        const from = { x: firstRect.left + 2, y: firstRect.top + firstRect.height / 2 };
+        docEl.dispatchEvent(new MouseEvent('mousedown', {
+          clientX: from.x, clientY: from.y, buttons: 1, bubbles: true, cancelable: true,
+        }));
+        await queue;
+        const fromStop = caret ? caret.stop : 0;
+        const scrolledFrom = window.scrollY;
+        // 指针直接拖出视口下沿：合成事件里的 buttons 必须为 1，
+        // 否则会被当成「在窗口外松了手」直接结束拖动
+        window.dispatchEvent(new MouseEvent('mousemove', {
+          clientX: from.x, clientY: window.innerHeight + 60,
+          buttons: 1, bubbles: true, cancelable: true,
+        }));
+        await new Promise((r) => setTimeout(r, 260));
+        const scrolledBy = window.scrollY - scrolledFrom;
+        const dragged = await invoke('snapshot');
+        // 拖动中的锚点就是按下时的那个停靠点；head 必须已经跑到它下面几十行
+        const anchor = dragged.selection ? dragged.selection[0] : -1;
+        check('拖到边缘会自动向下滚', scrolledBy > 0, '+' + Math.round(scrolledBy) + 'px');
+        check('选区随滚动一路延伸',
+          !!dragged.selection && dragged.selection[1] > fromStop + 5,
+          'anchor=' + anchor + ' head=' + (dragged.selection ? dragged.selection[1] : 'null') +
+            ' 起点=' + fromStop);
+        // 松手必须停：否则指针离开窗口之后页面会一直滚到文件末尾
+        window.dispatchEvent(new MouseEvent('mouseup'));
+        await queue;
+        const stoppedAt = window.scrollY;
+        await new Promise((r) => setTimeout(r, 200));
+        check('松手后不再继续滚', window.scrollY === stoppedAt,
+          stoppedAt + ' → ' + window.scrollY);
+        window.scrollTo(0, 0);
+        await new Promise((r) => setTimeout(r, 80));
+      }
     }
     // 光标被滚出视口之后，按键要能把它找回来。
     //
