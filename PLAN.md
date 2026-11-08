@@ -1,6 +1,6 @@
 # PLAN.md — mdview 开发计划与执行进度
 
-> 最后更新：2026-11-08 19:30
+> 最后更新：2026-11-08 20:42
 > 适用对象：接手本项目的 AI 或开发者。**本文自包含**，读完即可继续，不需要任何历史对话。
 > 每次有实质进展请同步更新第 6 节的状态和第 7 节的快照。
 
@@ -135,6 +135,10 @@ byte   0  2  5  8  10
 - ✅ 样式：标题 / 加粗 / 斜体 / 删除线 / 行内代码 / 链接 / 引用 / 代码块 / 分隔线
 - ✅ **可交互验证页**（`mdview <file> preview`）：真实 DOM + 自绘 caret + 状态栏，用于核对停靠点
 - ✅ 列表项与表格行断行、列表项目符号逐项渲染
+- ✅ **无序 / 有序列表区分渲染**（2026-11-08 修复）
+  - 两个根因：① `classify` 只认块的第一个事件，而松散列表（项间有空行）会被切块拆成多块，后半段块的首个事件是 `Item`，整块退化成段落——序号和项目符号一起消失。现在 `project.rs` 维护「打开中的 List 容器」栈，首事件是 `Item` 的块按栈顶判 `List { ordered }`
+  - ② `.li::before` 写死 `content: "•"`。现在每项从**源码**读出自己的标记（`item_marker`：数字 + `.`/`)`）写进 `data-m`，CSS 用 `attr(data-m)` 显示。不用 CSS counter：用户写 `3.` 就显示 `3.`，`1)` 就显示 `1)`，从别处粘来的半截列表不会被悄悄改号
+  - 阅读态 `to_html` 顺带修好：以前列表输出 `<ol>甲<br>乙</ol>`，没有 `<li>`，浏览器只给一个序号；现在按项切 `<li>`，有序列表带 `<ol start="N">`。为此 `to_html` 需要 `src` 参数（`<li>` 边界与起始号只能从源码读）
 - ✅ **Tauri 2 外壳**（`crates/mdview-desktop`）：`frontendDist` 指向内嵌的 `web/`，`session.rs` 隔离 IPC 契约（前端 `kind` 字符串 → `Message`），窗口创建与 IPC 已用启动探针在日志中验证
 - ✅ 前端渲染：按块落地、增量应用 `Patch`、用停靠点 `data-b`/`data-a` 的左右边缘量出 caret 像素、点击/拖动报停靠点
 - ⬜ 主题系统、大纲侧栏
@@ -205,7 +209,7 @@ byte   0  2  5  8  10
 ## 7. 当前进度快照
 
 - 日期：2026-11-08
-- 测试：**Rust 153 项全过**（markdown 69 / app 58 / desktop 14 / support 7 / core 5），无编译告警；desktop 那一组里 5 项是前端守门（`node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`）+ 四套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项，共 54 项）
+- 测试：**Rust 163 项全过**（markdown 79 / app 58 / desktop 14 / support 7 / core 5），无编译告警；desktop 那一组里 5 项是前端守门（`node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`）+ 四套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项，共 54 项）
 - 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
 - 自检：`cargo run -p mdview-desktop -- crates/mdview-desktop/tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 34/34」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
@@ -229,6 +233,7 @@ byte   0  2  5  8  10
   - `fix(markdown): 空项退出列表时留下可停靠的空段落`
   - `feat(app): 全选、复制、剪切走内核，Ctrl+A/C/X 接上`
   - `feat(desktop): 拖动选区到窗口边缘时自动滚动`
+  - `fix(markdown): 有序列表显示序号，松散列表不再退化成段落`
 - 分支：全部特性/修复分支已按线性顺序快进并入 `main`（`3110c20`），`origin/main` 只差在 `feat: 初始化内核…`，普通 `git push origin main` 即可，不需要 force
 
 ---

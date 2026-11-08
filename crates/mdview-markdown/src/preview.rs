@@ -16,7 +16,7 @@
 
 use std::{fmt::Write as _, ops::Range};
 
-use crate::block::{escape, Block, BlockKind, ParseResult, SpanKind};
+use crate::block::{escape, item_marker, Block, BlockKind, ParseResult, SpanKind};
 use crate::layout::DocumentLayout;
 use crate::project::MarkdownParser;
 
@@ -159,7 +159,9 @@ fn block_html(src: &str, block: &Block, doc: &DocumentLayout) -> Option<String> 
     // 项与项之间的硬换行由下面的 Break 分支负责拆行。
     let is_list = matches!(block.kind, BlockKind::List { .. });
     if is_list {
-        out.push_str("<div class=\"p list\"><div class=\"li\">");
+        out.push_str("<div class=\"p list\"><div class=\"li\"");
+        push_item_marker(&mut out, src, block.byte.start);
+        out.push('>');
     } else {
         out.push_str(open);
     }
@@ -250,9 +252,13 @@ fn write_segment(
             // 其余情况交给 <br>。只标 before，让下一个字符元素承担 after，
             // 光标才不会定位到零高矩形上。
             if matches!(block.kind, BlockKind::List { .. }) {
+                out.push_str("</div><div class=\"li\"");
+                // 有序项把序号附着在这个新行上：`1. ` 那几个字节是折叠的，
+                // 视图里必须有个东西代替它，否则整份列表都长成圆点。
+                push_item_marker(out, src, stop.byte + 1);
                 let _ = write!(
                     out,
-                    "</div><div class=\"li\"><span class=\"mk\" data-b=\"{global}\" \
+                    "><span class=\"mk\" data-b=\"{global}\" \
                      data-byte=\"{}\" data-block=\"{block_id}\">&#8203;</span>",
                     stop.byte
                 );
@@ -286,6 +292,17 @@ fn write_segment(
                 escape(&ch.to_string())
             );
         }
+    }
+}
+
+/// 把这一项的**有序标记**（`1.`、`2)`）写进元素的 `data-m` 属性。
+///
+/// 序号不是用 CSS counter 数出来的，而是逐项从源码读的：用户写下 `3. 甲`，
+/// 视图里就该显示 `3.`——他可能从别处粘来半截列表，也可能就想从 3 开始。
+/// counter 会把它悄悄改成 1，「看到的就是文件里的样子」这条就破了。
+fn push_item_marker(out: &mut String, src: &str, start: usize) {
+    if let Some(marker) = item_marker(src, start) {
+        let _ = write!(out, " data-m=\"{}\"", escape(&marker));
     }
 }
 
@@ -354,6 +371,9 @@ blockquote {
 .kind-list { padding-left: 1.5em; }
 .li { position: relative; }
 .li::before { content: "•"; position: absolute; left: -1.05em; color: #8b949e; }
+/* 有序项：序号右对齐、向左生长。`data-m` 是源码里那一项自己的标记
+   （`1.` / `2)`），多位数不会把正文顶开，也不会被 counter 改号。 */
+.li[data-m]::before { content: attr(data-m); left: auto; right: calc(100% + .35em); }
 .li:has(.atom.task)::before { content: none; }
 .li:has(.atom.task) { padding-left: .1em; }
 .sep { display: inline-block; width: .55em; }
@@ -601,6 +621,40 @@ mod tests {
         let parsed = MarkdownParser::gfm().parse(src);
         let doc = DocumentLayout::build(src, &parsed);
         block_frames(src, &parsed, &doc)
+    }
+
+    #[test]
+    fn ordered_items_carry_their_own_number() {
+        // `1. ` 那三个字节是折叠的，视图里必须有个东西代替它，
+        // 否则有序列表与无序列表长得一模一样（全是圆点）
+        let html = preview_html("1. 甲\n2. 乙\n");
+        assert!(html.contains("data-m=\"1.\""), "{html}");
+        assert!(html.contains("data-m=\"2.\""), "{html}");
+    }
+
+    #[test]
+    fn unordered_items_keep_the_bullet() {
+        let html = preview_html("- 甲\n- 乙\n");
+        assert!(!html.contains("data-m="), "无序项应交给 CSS 的项目符号");
+    }
+
+    #[test]
+    fn ordered_marker_keeps_delimiter_and_start_number() {
+        // 序号按源码原样显示：用户从 3 开始、或者用 `1)` 都照做，不擅自改成 1.
+        let html = preview_html("3) 甲\n4) 乙\n");
+        assert!(html.contains("data-m=\"3)\""), "{html}");
+        assert!(html.contains("data-m=\"4)\""), "{html}");
+    }
+
+    #[test]
+    fn list_split_by_blank_line_still_renders_as_list() {
+        // 松散列表被空行切成两块，第二块也得是 `.list` 而不是普通段落
+        let frames = frames_of("1. 甲\n2. 乙\n\n3. 丙\n4. 丁\n");
+        assert_eq!(frames.len(), 2);
+        for frame in &frames {
+            assert!(frame.html.contains("class=\"p list\""), "{}", frame.html);
+            assert!(frame.html.contains("data-m="), "{}", frame.html);
+        }
     }
 
     #[test]

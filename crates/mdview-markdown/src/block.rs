@@ -166,7 +166,10 @@ impl Block {
     }
 
     /// 渲染为 HTML 片段。阅读模式与调试输出共用，不参与编辑态排版。
-    pub fn to_html(&self) -> String {
+    ///
+    /// 列表需要 `src`：`<li>` 的边界与 `<ol start>` 的起始号只能从源码读，
+    /// 片段的 byte 区间里只有位置信息，没有「这一行是不是新的一项」。
+    pub fn to_html(&self, src: &str) -> String {
         let mut out = String::new();
         let tag = match &self.kind {
             BlockKind::Heading(level) => format!("h{level}"),
@@ -185,15 +188,37 @@ impl Block {
             BlockKind::Rule => "div".to_owned(),
             BlockKind::Html => "p".to_owned(),
         };
+        // 有序列表从 3 开始时浏览器得知道，否则一律从 1 数起
+        let start = match &self.kind {
+            BlockKind::List { ordered: true } => item_number(src, self.byte.start).filter(|n| *n != 1),
+            _ => None,
+        };
+        let open = match start {
+            Some(n) => format!("<{tag} start=\"{n}\">"),
+            None => format!("<{tag}>"),
+        };
+        let is_list = matches!(self.kind, BlockKind::List { .. });
         out.push_str(&format!(
-            "<section class=\"md-block md-{}\" data-block=\"{}\" data-byte-start=\"{}\" data-byte-end=\"{}\"><{tag}>",
+            "<section class=\"md-block md-{}\" data-block=\"{}\" data-byte-start=\"{}\" data-byte-end=\"{}\">{open}",
             self.kind.label(),
             self.id.0,
             self.byte.start,
             self.byte.end
         ));
+        // 列表项之间的换行在本模型里是 Break 片段，`<li>` 边界由它切出来。
+        // 不切的话整份列表只有一个 `<li>`，浏览器只肯给一个序号。
+        if is_list {
+            out.push_str("<li>");
+        }
         for span in &self.spans {
+            if is_list && is_item_boundary(src, span) {
+                out.push_str("</li><li>");
+                continue;
+            }
             self.push_span(&mut out, span);
+        }
+        if is_list {
+            out.push_str("</li>");
         }
         out.push_str(&format!("</{tag}></section>"));
         out
@@ -270,10 +295,10 @@ impl ParseResult {
         crate::sourcemap::SourceMap::build(&self.blocks)
     }
 
-    pub fn to_html(&self) -> String {
+    pub fn to_html(&self, src: &str) -> String {
         let mut out = String::new();
         for block in &self.blocks {
-            out.push_str(&block.to_html());
+            out.push_str(&block.to_html(src));
             out.push('\n');
         }
         out
@@ -303,6 +328,64 @@ pub(crate) fn escape(s: &str) -> String {
 
 pub(crate) fn escape_attr(s: &str) -> String {
     escape(s).replace('"', "&quot;")
+}
+
+/// 行首的列表标记：有序项返回原样的标记（`1.`、`2)`），其余返回 `None`。
+///
+/// 只认「最多三个空格缩进 + 数字 + `.`/`)` + 空白或行尾」，与 CommonMark 的
+/// 列表项起始式一致；无序项（`-` / `*` / `+`）与普通正文都落到 `None`。
+/// 标记文本要**原样**保留分隔符：`1)` 就该显示成 `1)`，不能被统一成 `1.`。
+pub(crate) fn item_marker(src: &str, start: usize) -> Option<String> {
+    let line = src.get(start..)?;
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    if indent > 3 {
+        return None;
+    }
+    let rest = &line[indent..];
+    let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+    // 九位以上不可能是列表标记，多半是正文恰好以数字开头
+    if digits == 0 || digits > 9 {
+        return None;
+    }
+    let delim = rest[digits..].chars().next()?;
+    if delim != '.' && delim != ')' {
+        return None;
+    }
+    // 标记之后必须是空白或行尾：`1.x` 不是列表项
+    match rest[digits + 1..].chars().next() {
+        None | Some(' ') | Some('\t') => Some(rest[..digits + 1].to_owned()),
+        _ => None,
+    }
+}
+
+/// 有序标记里的数字，供 `<ol start="N">` 使用。
+pub(crate) fn item_number(src: &str, start: usize) -> Option<u64> {
+    let marker = item_marker(src, start)?;
+    marker[..marker.len() - 1].parse().ok()
+}
+
+/// 行首是不是一个列表项（无序 `- ` / 有序 `1. ` 都算）。
+pub(crate) fn line_starts_item(src: &str, start: usize) -> bool {
+    let Some(line) = src.get(start..) else {
+        return false;
+    };
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    if indent > 3 {
+        return false;
+    }
+    let rest = &line[indent..];
+    let mut chars = rest.chars();
+    match chars.next() {
+        Some('-') | Some('*') | Some('+') => matches!(chars.next(), Some(' ') | Some('\t')),
+        _ => item_marker(src, start).is_some(),
+    }
+}
+
+/// 这个片段是不是「两项之间」：它是个硬换行，且下一行自己又是一个列表项。
+///
+/// 只按「是不是硬换行」判断会把项内的 Shift+Enter 也当成换项。
+fn is_item_boundary(src: &str, span: &Span) -> bool {
+    matches!(span.kind, SpanKind::Break { hard: true }) && line_starts_item(src, span.byte.end)
 }
 
 /// 源码区间与投影文本的对齐：返回文本第 `target` 个字符在源码中的字节偏移。

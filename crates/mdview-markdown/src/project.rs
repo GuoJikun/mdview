@@ -123,6 +123,9 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
 
     let mut style = Style::default();
     let mut stack: Vec<Style> = Vec::new();
+    // 当前打开的 List 容器（true = 有序）。松散列表会被空行切成多块，
+    // 后半段块的首个事件是 `Item`，只能靠这个栈知道自己仍在列表里、且是有序还是无序。
+    let mut list_stack: Vec<bool> = Vec::new();
     // (起始 byte, alt, url, 所属块)
     let mut image: Option<(usize, String, String, usize)> = None;
 
@@ -156,10 +159,21 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
 
         match event {
             Event::Start(tag) => {
+                // 一个列表容器会被空行切成多块：松散的列表项之间本来就隔着空行。
+                // 后半段块的首个事件是 `Item` 而不是 `List`，走 `classify` 会退化成段落，
+                // 序号与项目符号一起消失（用户看到的是「列表变成了普通文字」）。
+                // 这里按「当前打开的 List 容器」判类型，只对首事件是 `Item` 的块生效。
+                let from_item = matches!(tag, Tag::Item).then(|| list_stack.last().copied().unwrap_or(false));
                 if let Some(owner) = owner_of(&ranges, range.start) {
                     if accs[owner].kind.is_none() {
-                        accs[owner].kind = Some(classify(&tag));
+                        accs[owner].kind = Some(match from_item {
+                            Some(ordered) => BlockKind::List { ordered },
+                            None => classify(&tag),
+                        });
                     }
+                }
+                if let Tag::List(start) = &tag {
+                    list_stack.push(start.is_some());
                 }
                 // 列表项与表格行之间的换行必须显式保留：切块按空行进行，
                 // 这些换行落在块内、又不在任何片段里，会被差集当成标记折叠掉，
@@ -190,6 +204,9 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
                     if let Some(owner) = owner_of(&ranges, range.start) {
                         accs[owner].containers.push(range.clone());
                     }
+                }
+                if matches!(tag, TagEnd::List(_)) {
+                    list_stack.pop();
                 }
                 style = stack.pop().unwrap_or_default();
             }
@@ -509,6 +526,7 @@ pub(crate) fn subtract(total: Range<usize>, cuts: &[Range<usize>]) -> Vec<Range<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::block::item_marker;
 
     fn hidden_text(src: &str) -> Vec<String> {
         parse(src, MarkdownParser::gfm().options())
@@ -724,10 +742,74 @@ mod tests {
 
     #[test]
     fn raw_html_is_not_emitted_verbatim() {
-        let parsed = parse("点击 <script>alert(1)</script> 这里\n", MarkdownParser::gfm().options());
-        let html = parsed.to_html();
+        let src = "点击 <script>alert(1)</script> 这里\n";
+        let parsed = parse(src, MarkdownParser::gfm().options());
+        let html = parsed.to_html(src);
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn list_split_by_blank_line_is_still_a_list() {
+        // 松散列表的项之间隔着空行，切块会把一个 List 容器拆成多块。
+        // 后半段块的首个事件是 `Item` 而不是 `List`，曾经因此退化成段落——
+        // 序号与项目符号一起消失，用户看到的是「列表变成了普通文字」。
+        let src = "1. 甲\n2. 乙\n\n3. 丙\n4. 丁\n";
+        let parsed = parse(src, MarkdownParser::gfm().options());
+        assert_eq!(parsed.blocks.len(), 2);
+        assert_eq!(parsed.blocks[0].kind, BlockKind::List { ordered: true });
+        assert_eq!(
+            parsed.blocks[1].kind,
+            BlockKind::List { ordered: true },
+            "空行之后的列表块仍应是有序列表"
+        );
+    }
+
+    #[test]
+    fn unordered_list_after_blank_line_keeps_its_kind() {
+        let src = "- 甲\n- 乙\n\n- 丙\n- 丁\n";
+        let parsed = parse(src, MarkdownParser::gfm().options());
+        assert_eq!(parsed.blocks.len(), 2);
+        for block in &parsed.blocks {
+            assert_eq!(block.kind, BlockKind::List { ordered: false });
+        }
+    }
+
+    #[test]
+    fn ordered_and_unordered_lists_are_distinguished() {
+        let ordered = first_block("1. 甲");
+        let unordered = first_block("- 甲");
+        assert_eq!(ordered.kind, BlockKind::List { ordered: true });
+        assert_eq!(unordered.kind, BlockKind::List { ordered: false });
+    }
+
+    #[test]
+    fn list_html_gets_one_li_per_item() {
+        // 没有 <li> 时浏览器只肯给一个序号，整份列表看起来只有一项
+        let src = "- 甲\n- 乙\n\n3. 丙\n4. 丁\n";
+        let html = parse(src, MarkdownParser::gfm().options()).to_html(src);
+        assert!(html.contains("<ul><li>甲</li><li>乙</li></ul>"), "{html}");
+        assert!(html.contains("<ol start=\"3\"><li>丙</li><li>丁</li></ol>"), "{html}");
+    }
+
+    #[test]
+    fn item_marker_reads_the_source_verbatim() {
+        assert_eq!(item_marker("1. 甲", 0).as_deref(), Some("1."));
+        assert_eq!(item_marker("12) 甲", 0).as_deref(), Some("12)"));
+        assert_eq!(item_marker("- 甲", 0), None);
+        assert_eq!(item_marker("1.x 不是列表", 0), None);
+        assert_eq!(item_marker("正文 1. 甲", 0), None);
+        // 行首三个以内空格缩进仍算列表项，四格就不再是了
+        assert_eq!(item_marker("    1. 甲", 0), None);
+        assert_eq!(item_marker("   1. 甲", 0).as_deref(), Some("1."));
+    }
+
+    #[test]
+    fn hard_break_inside_an_item_does_not_split_it() {
+        // 项内 Shift+Enter 也是硬换行，但它后面那行不是新的列表项
+        let src = "- 甲\\\n  续行\n- 乙\n";
+        let html = parse(src, MarkdownParser::gfm().options()).to_html(src);
+        assert_eq!(html.matches("<li>").count(), 2, "{html}");
     }
 
     #[test]

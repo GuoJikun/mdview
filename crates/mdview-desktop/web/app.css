@@ -26,6 +26,9 @@ blockquote {
 .kind-list { padding-left: 1.5em; }
 .li { position: relative; }
 .li::before { content: "•"; position: absolute; left: -1.05em; color: #8b949e; }
+/* 有序项：序号右对齐、向左生长。`data-m` 是源码里那一项自己的标记
+   （`1.` / `2)`），多位数不会把正文顶开，也不会被 counter 改号。 */
+.li[data-m]::before { content: attr(data-m); left: auto; right: calc(100% + .35em); }
 .li:has(.atom.task)::before { content: none; }
 .li:has(.atom.task) { padding-left: .1em; }
 .sep { display: inline-block; width: .55em; }

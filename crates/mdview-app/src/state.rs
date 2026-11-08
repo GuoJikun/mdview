@@ -174,7 +174,7 @@ impl AppState {
     pub fn render_frame(&self) -> RenderFrame {
         RenderFrame {
             revision: self.document.revision().0,
-            html: self.parsed.to_html(),
+            html: self.parsed.to_html(&self.document.text()),
             blocks: self.parsed.blocks.len(),
             mode: self.mode.label(),
         }

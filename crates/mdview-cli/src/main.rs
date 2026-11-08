@@ -58,7 +58,7 @@ fn main() {
         "spans" => print_spans(&content, &parsed),
         "layout" => print_layout(&content, &parsed),
         "preview" => write_preview(path, &content),
-        "html" => print!("{}", parsed.to_html()),
+        "html" => print!("{}", parsed.to_html(&content)),
         other => {
             warn!("未知子命令 {other}");
             usage();
