@@ -16,16 +16,28 @@
 
 use std::{fmt::Write as _, ops::Range};
 
-use crate::block::{escape, item_marker, Block, BlockKind, ColumnAlign, ParseResult, SpanKind};
+use crate::block::{
+    escape, escape_attr, item_marker, Block, BlockKind, ColumnAlign, ParseResult, SpanKind,
+};
 use crate::layout::DocumentLayout;
 use crate::project::MarkdownParser;
+
+/// 投影页里图片可以直接用 URL；编辑态则先挂透明像素，等前端装载本地文件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageMode {
+    Direct,
+    Deferred,
+}
+
+const TRANSPARENT_PIXEL: &str =
+    "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
 pub fn preview_html(src: &str) -> String {
     let parsed = MarkdownParser::gfm().parse(src);
     let doc = DocumentLayout::build(src, &parsed);
 
     let mut body = String::new();
-    for frame in block_frames(src, &parsed, &doc) {
+    for frame in block_frames_inner(src, &parsed, &doc, ImageMode::Direct) {
         body.push_str(&frame.html);
     }
 
@@ -75,9 +87,18 @@ impl Patch {
 
 /// 全文档分块帧。与 [`preview_html`] 共用同一套渲染代码，保证标定页与编辑页一致。
 pub fn block_frames(src: &str, parsed: &ParseResult, doc: &DocumentLayout) -> Vec<BlockFrame> {
+    block_frames_inner(src, parsed, doc, ImageMode::Deferred)
+}
+
+fn block_frames_inner(
+    src: &str,
+    parsed: &ParseResult,
+    doc: &DocumentLayout,
+    images: ImageMode,
+) -> Vec<BlockFrame> {
     let mut frames = Vec::with_capacity(parsed.blocks.len());
     for block in &parsed.blocks {
-        let Some(html) = block_html(src, block, doc) else {
+        let Some(html) = block_html(src, block, doc, images) else {
             continue;
         };
         let Some(base) = doc.global(block.id, 0) else {
@@ -107,6 +128,7 @@ fn table_html(
     grid: &crate::block::TableGrid,
     stops: &[crate::layout::Stop],
     first: usize,
+    images: ImageMode,
 ) -> String {
     if grid.rows.is_empty() {
         return String::new();
@@ -181,7 +203,7 @@ fn table_html(
             );
             continue;
         }
-        write_segment(&mut out, src, block, stops, index, first + index);
+        write_segment(&mut out, src, block, stops, index, first + index, images);
     }
 
     if let Some(row) = open_row {
@@ -223,7 +245,12 @@ pub fn diff_frames(old: &[BlockFrame], new: &[BlockFrame]) -> Patch {
     }
 }
 
-fn block_html(src: &str, block: &Block, doc: &DocumentLayout) -> Option<String> {
+fn block_html(
+    src: &str,
+    block: &Block,
+    doc: &DocumentLayout,
+    images: ImageMode,
+) -> Option<String> {
     let layout = doc.layout(block.id)?;
     let stops = layout.stops();
     if stops.is_empty() {
@@ -255,7 +282,7 @@ fn block_html(src: &str, block: &Block, doc: &DocumentLayout) -> Option<String> 
     // 表格走专用网格渲染：把同一组线性停靠点铺进 <table> 的单元格，
     // 每格仍是原来的 data-b/data-a，光标与选区完全不变。
     if let Some(grid) = &block.table {
-        out.push_str(&table_html(src, block, grid, stops, first));
+        out.push_str(&table_html(src, block, grid, stops, first, images));
         out.push_str("</section>\n");
         return Some(out);
     }
@@ -272,7 +299,7 @@ fn block_html(src: &str, block: &Block, doc: &DocumentLayout) -> Option<String> 
         out.push_str(open);
     }
     for index in 0..stops.len().saturating_sub(1) {
-        write_segment(&mut out, src, block, stops, index, first + index);
+        write_segment(&mut out, src, block, stops, index, first + index, images);
     }
     // 块尾锚点：最后一个停靠点没有对应字符，单独给一个零宽元素供光标停靠
     let _ = write!(
@@ -296,6 +323,7 @@ fn write_segment(
     stops: &[crate::layout::Stop],
     index: usize,
     global: usize,
+    images: ImageMode,
 ) {
     let stop = stops[index];
     let end = stops[index + 1].byte;
@@ -328,12 +356,22 @@ fn write_segment(
     let span = &block.spans[span_index];
     match &span.kind {
         SpanKind::Image => {
+            // 整张图片仍是一个原子控件：停靠点挂在外层 span 上，内层 img 不参与寻址。
+            // data-asset 保留原始 URL；桌面端据此在沙箱内读取本地文件并换成 data URL。
+            let url = span.style.link.as_deref().unwrap_or("");
+            let src = match images {
+                ImageMode::Direct => escape_attr(url),
+                ImageMode::Deferred => TRANSPARENT_PIXEL.to_string(),
+            };
             let _ = write!(
                 out,
                 "<span class=\"atom img\" data-b=\"{global}\" data-a=\"{next}\" \
-                 data-byte=\"{}\" data-block=\"{block_id}\" title=\"{}\">图</span>",
+                 data-byte=\"{}\" data-block=\"{block_id}\" data-asset=\"{}\" \
+                 title=\"{}\"><img alt=\"\" src=\"{}\"></span>",
                 stop.byte,
-                escape(&span.text)
+                escape_attr(url),
+                escape_attr(&span.text),
+                src
             );
         }
         SpanKind::TaskMarker { checked } => {
@@ -573,6 +611,11 @@ body {
   min-width: 1.6em; padding: 0 .35em; border: 1px dashed #b6bcc4; border-radius: 4px;
   color: #57606a; font-size: .82em; text-align: center; background: #fafbfc;
 }
+#doc .atom.img::before { content: "图"; }
+#doc .atom.img img { display: none; max-width: 100%; max-height: 360px; width: auto; height: auto; border-radius: 3px; }
+#doc .atom.img.loaded { padding: 0; border-color: transparent; background: transparent; }
+#doc .atom.img.loaded::before { content: none; }
+#doc .atom.img.loaded img { display: block; }
 #doc .atom.task { color: #57606a; }
 #doc .sel { background: rgba(37, 99, 235, .18); border-radius: 2px; }
 #caret {
@@ -597,6 +640,15 @@ const SCRIPT: &str = r#"
   var docEl = document.getElementById('doc');
   var caretEl = document.getElementById('caret');
   var barEl = document.getElementById('bar');
+
+  // 投影页与 Markdown 同目录，图片 URL 可以直接交给浏览器。
+  document.querySelectorAll('.atom.img[data-asset]').forEach(function (holder) {
+    var img = holder.querySelector('img');
+    if (!img) return;
+    img.addEventListener('load', function () { holder.classList.add('loaded'); });
+    img.addEventListener('error', function () { holder.classList.add('failed'); });
+    if (img.src) img.src = img.src;
+  });
 
   var byBefore = new Map();
   var byAfter = new Map();
@@ -832,6 +884,20 @@ mod tests {
             assert!(frame.html.contains("class=\"p list\""), "{}", frame.html);
             assert!(frame.html.contains("data-m="), "{}", frame.html);
         }
+    }
+
+    #[test]
+    fn image_is_an_atomic_asset_node() {
+        let frames = frames_of("![图](a.png)");
+        let html = &frames[0].html;
+        assert!(html.contains("class=\"atom img\""), "{html}");
+        assert!(html.contains("data-asset=\"a.png\""), "{html}");
+        assert!(html.contains("title=\"图\""), "{html}");
+        assert!(html.contains("<img alt=\"\" src=\"data:image/gif;base64,"), "{html}");
+        assert!(html.contains(&format!("data-b=\"{}\"", frames[0].base)));
+        assert!(html.contains(&format!("data-a=\"{}\"", frames[0].base + 1)));
+        // 投影页与文档同目录，可以直接用相对路径装载
+        assert!(preview_html("![图](a.png)").contains("src=\"a.png\""));
     }
 
     #[test]

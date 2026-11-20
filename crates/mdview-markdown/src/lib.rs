@@ -10,6 +10,7 @@
 //! `into_offset_iter` 一致）。进入 mdview-core 或编辑器光标前必须换算为 char
 //! index——`&str[非字符边界]` 会直接 panic，中文文档的坐标错位都出在这里。
 
+mod asset;
 mod block;
 mod layout;
 mod preview;
@@ -17,6 +18,7 @@ mod project;
 mod sourcemap;
 mod split;
 
+pub use asset::{is_inline_or_remote, mime_for, resolve_local};
 pub use block::{
     align, Block, BlockId, BlockKind, ColumnAlign, OutlineItem, ParseResult, Span, SpanKind,
     Style, TableCell, TableGrid, TableRow,

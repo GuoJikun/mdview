@@ -344,7 +344,16 @@ html.custom-titlebar #outline::-webkit-scrollbar { width: 0; height: 0; display:
 #doc .atom.img {
   min-width: 1.6em; padding: 0 .35em; border: 1px dashed var(--img-border); border-radius: 4px;
   color: var(--muted); font-size: .82em; text-align: center; background: var(--img-bg);
+  vertical-align: middle;
 }
+#doc .atom.img::before { content: "图"; }
+#doc .atom.img img {
+  display: none; max-width: 100%; max-height: 360px; width: auto; height: auto;
+  border-radius: 3px; vertical-align: middle;
+}
+#doc .atom.img.loaded { padding: 0; border-color: transparent; background: transparent; }
+#doc .atom.img.loaded::before { content: none; }
+#doc .atom.img.loaded img { display: block; }
 #doc .atom.task { color: var(--muted); }
 #doc .sel { background: var(--sel); border-radius: 2px; }
 /* 原生选区不上色：选区只由自绘 .sel 表达（见 app.js 的 selectionchange）。

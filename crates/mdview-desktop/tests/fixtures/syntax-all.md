@@ -263,6 +263,10 @@ https://example.com 和 www.example.com
 
 ![替代文本](https://pic1.imgdb.cn/i/0350haCGaa3B5rKAAcxl4L.png)
 
+本地图片（与本文件同目录，用于验证路径沙箱内的图片加载）：
+
+![本地图片 test.png](test.png)
+
 带标题的图片：
 
 ![替代文本](https://pic1.imgdb.cn/i/0350haCGaa3B5rKAAcxl4L.png "图片标题")

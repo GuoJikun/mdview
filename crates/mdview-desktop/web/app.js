@@ -67,6 +67,7 @@ function reindex() {
 function renderAll(blocks) {
   docEl.replaceChildren(...fragments(blocks.map((b) => b.html).join('')));
   reindex();
+  hydrateImages();
 }
 
 /**
@@ -89,6 +90,49 @@ function applyPatch(patch) {
     for (const node of nodes) docEl.appendChild(node);
   }
   reindex();
+  hydrateImages();
+}
+
+/**
+ * 图片仍是原子停靠点，只有内层 img 需要装载。
+ * 本地路径交给内核在文档目录内解析并读成 data URL；远程/data URL 直接交给浏览器。
+ * 失败就退回「图」占位符，不打断编辑与光标定位。
+ */
+function hydrateImages() {
+  docEl.querySelectorAll('.atom.img[data-asset]').forEach((holder) => {
+    if (holder.dataset.imgState) return;
+    const img = holder.querySelector('img');
+    if (!img) return;
+
+    const url = holder.dataset.asset || '';
+    holder.dataset.imgState = 'loading';
+    const fail = () => {
+      if (!holder.isConnected) return;
+      holder.dataset.imgState = 'failed';
+      holder.classList.add('failed');
+      img.remove();
+    };
+    const done = () => {
+      if (!holder.isConnected) return;
+      holder.dataset.imgState = 'loaded';
+      holder.classList.add('loaded');
+    };
+    img.addEventListener('load', done);
+    img.addEventListener('error', fail);
+
+    if (/^(data:|https?:\/\/)/i.test(url)) {
+      if (url) img.src = url;
+      else fail();
+      return;
+    }
+    invoke('load_image', { url })
+      .then((dataUrl) => {
+        if (!holder.isConnected) return;
+        if (!dataUrl) fail();
+        else img.src = dataUrl;
+      })
+      .catch(fail);
+  });
 }
 
 // ---- 大纲侧栏 --------------------------------------------------------

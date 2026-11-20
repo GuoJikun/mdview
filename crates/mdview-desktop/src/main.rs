@@ -37,6 +37,29 @@ fn dispatch(session: tauri::State<'_, Session>, message: Wire) -> Reply {
     session.dispatch(message)
 }
 
+/// 前端遇到 Markdown 里的本地图片时调用。
+///
+/// 路径解析在 Session 里完成并限制在文档目录内；这里只做读盘与 data URL 编码，
+/// 不把任意路径暴露给 webview。超过上限的文件直接拒绝，避免大图撑爆 IPC。
+#[tauri::command]
+fn load_image(url: String, session: tauri::State<'_, Session>) -> Option<String> {
+    image_data_url(&session, &url)
+}
+
+fn image_data_url(session: &Session, url: &str) -> Option<String> {
+    const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+    let (path, mime) = session.resolve_image(url)?;
+    let meta = std::fs::metadata(&path).ok()?;
+    if meta.len() > MAX_IMAGE_BYTES {
+        log::warn!("图片过大，跳过：{}", path.display());
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Some(format!("data:{mime};base64,{encoded}"))
+}
+
 /// 前端 boot 完成后回一次，用于确认「窗口 → 页面 → IPC」整条链路活着。
 /// 起不来时日志里没有这一行，比界面空白好排查。
 ///
@@ -270,6 +293,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             snapshot,
             dispatch,
+            load_image,
             ready,
             selftest,
             open_file,
@@ -326,4 +350,23 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("窗口启动失败");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_data_url_is_read_from_document_dir() {
+        let dir = std::env::temp_dir().join(format!("mdview-image-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let image = dir.join("a.png");
+        std::fs::write(&image, b"png-bytes").expect("写测试图片失败");
+        let session = Session::from_text("![图](a.png)", Some(dir.join("doc.md")));
+
+        let data = image_data_url(&session, "a.png").expect("图片应能读取");
+        assert!(data.starts_with("data:image/png;base64,"), "{data}");
+        assert_eq!(image_data_url(&session, "../secret.png"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

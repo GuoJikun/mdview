@@ -6,12 +6,12 @@
 //! 前端只做两件事：把停靠点画成像素、把输入翻译成消息。文本真值始终在内核里。
 
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use mdview_app::{AppState, Effect, FileStore, Message, StdFileStore, ViewMode};
-use mdview_markdown::BlockFrame;
+use mdview_markdown::{BlockFrame, mime_for, resolve_local};
 use serde::{Deserialize, Serialize};
 
 /// 前端发来的消息。
@@ -214,6 +214,22 @@ impl Session {
         Ok(self.snapshot())
     }
 
+    /// 把图片 URL 解析为当前文档目录内的文件，并给出 MIME 类型。
+    ///
+    /// 沙箱在 `mdview_markdown::resolve_local` 里做；这里只负责提供基准目录。
+    /// 未保存的文档退到进程工作目录，行为仍然可预期。
+    pub fn resolve_image(&self, url: &str) -> Option<(PathBuf, &'static str)> {
+        let app = self.state.lock().ok()?;
+        let base = app
+            .path
+            .as_deref()
+            .and_then(|p| p.parent())
+            .map(Path::to_path_buf)
+            .or_else(|| std::env::current_dir().ok())?;
+        let path = resolve_local(&base, url)?;
+        Some((path.clone(), mime_for(&path)))
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         let app = self.state.lock().expect("状态锁中毒");
         Snapshot {
@@ -356,6 +372,20 @@ mod tests {
 
     fn session(src: &str) -> Session {
         Session::from_text(src, None)
+    }
+
+    #[test]
+    fn image_paths_resolve_against_document_dir() {
+        let dir = std::env::temp_dir().join("mdview-session-assets");
+        let doc = dir.join("doc.md");
+        let session = Session::from_text("![图](img/a.png)", Some(doc));
+
+        assert_eq!(
+            session.resolve_image("img/a.png"),
+            Some((dir.join("img").join("a.png"), "image/png"))
+        );
+        assert_eq!(session.resolve_image("../secret.png"), None);
+        assert_eq!(session.resolve_image("https://example.com/a.png"), None);
     }
 
     #[test]

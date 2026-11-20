@@ -1749,6 +1749,7 @@ dependencies = [
 name = "mdview-desktop"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "log",
  "mdview-app",
  "mdview-markdown",
