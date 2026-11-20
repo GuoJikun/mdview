@@ -1,6 +1,6 @@
 # PLAN.md — mdview 开发计划与执行进度
 
-> 最后更新：2026-11-20 13:40（跨平台标题栏与菜单）
+> 最后更新：2026-11-20 19:30（前端工程化：Vite + Vue 外壳）
 > 适用对象：接手本项目的 AI 或开发者。**本文自包含**，读完即可继续，不需要任何历史对话。
 > 每次有实质进展请同步更新第 6 节的状态和第 7 节的快照。
 
@@ -33,7 +33,7 @@
    - `compositionend` 之后紧跟的那一下回车要吞掉：浏览器会补发 `keydown`，此时 `isComposing` 已是 false，不拦就多分一段。
    - `compositionend` 的 `data` 可能为空（Safari），必须退回输入框的 `value`。
    - **取消组合也必须给内核发消息**（`CompositionCancel`）。内核的 `composing` 只认结束信号，漏发就永久挂起，之后所有输入被静默吞掉——现象是「编辑器死了」，且日志里什么都没有。失焦同样要自己收尾。
-   - 前端资源由 `generate_context!` 在编译期嵌入，`build.rs` 要写 `rerun-if-changed=web`，否则改了 JS 窗口行为不变。
+   - 前端资源由 `generate_context!` 在编译期嵌入，`build.rs` 要写 `rerun-if-changed=../dist`（并对整目录做指纹），否则改了 JS 窗口行为不变。
 10. **同步滚动按锚点块插值**，禁止用滚动百分比换算。
 11. **文档必须永远至少有一个块**：`split_blocks` 在「整篇为空」或「以空行结尾」时补一个零长块。否则空文档没有停靠点、在末尾回车后光标只能贴在上一段行尾。（改动前 `split` 会丢弃空行段，M3 实测踩到）
 12. **纵向位置一律问浏览器**：视觉行、行高、折行只有渲染器知道。`ArrowUp/Down`、`Home/End` 这类「上一行/行首」的判断必须基于 `getBoundingClientRect`，不能在核心里用「视觉列 + 块索引」推算——内核不知道一个字有多宽，会把折行当成块边界。反过来，横向移动（左/右、点选）仍然走内核的停靠点表，因为「哪些字节不可见」只有解析层知道。两套坐标的分界线就是这条。
@@ -73,8 +73,13 @@ crates/
   mdview-support/   运行期基础设施：logging（滚动落盘）/ error（AppError）
   mdview-app/       状态机：State / Message / update / Effect + ports trait
   mdview-cli/       无头入口，所有验证都从这里跑
-  mdview-desktop/   Tauri 2 外壳：session.rs（IPC 契约，可单测）+ web/（只做像素与输入）
+  mdview-desktop/   已上提为仓库根的 src-tauri/：session.rs（IPC 契约，可单测）
 ```
+
+前端工程根 = 仓库根：`src/`（Vite + Vue 3 + TypeScript）、`index.html`、`dist/`（构建产物，不入库）。
+`src/app.js` 是编辑内核投影层；七个纯逻辑模块（`ime/caretline/selection/dragscroll/clipboard/outline/theme`）保持 `.js` 原样；
+外壳（标题栏 / 菜单 / 状态栏 / toast）由 `src/components/*.vue` 渲染，经 `src/bridge.ts` 与内核单向通信。
+大纲与正文区是 Vue 覆盖层上的「洞」，不进任何组件模板。
 
 依赖方向：`cli → app → markdown → core`，`support` 被 app 与 cli 共用。**core 不得依赖 markdown**。
 
@@ -139,17 +144,17 @@ byte   0  2  5  8  10
   - 两个根因：① `classify` 只认块的第一个事件，而松散列表（项间有空行）会被切块拆成多块，后半段块的首个事件是 `Item`，整块退化成段落——序号和项目符号一起消失。现在 `project.rs` 维护「打开中的 List 容器」栈，首事件是 `Item` 的块按栈顶判 `List { ordered }`
   - ② `.li::before` 写死 `content: "•"`。现在每项从**源码**读出自己的标记（`item_marker`：数字 + `.`/`)`）写进 `data-m`，CSS 用 `attr(data-m)` 显示。不用 CSS counter：用户写 `3.` 就显示 `3.`，`1)` 就显示 `1)`，从别处粘来的半截列表不会被悄悄改号
   - 阅读态 `to_html` 顺带修好：以前列表输出 `<ol>甲<br>乙</ol>`，没有 `<li>`，浏览器只给一个序号；现在按项切 `<li>`，有序列表带 `<ol start="N">`。为此 `to_html` 需要 `src` 参数（`<li>` 边界与起始号只能从源码读）
-- ✅ **Tauri 2 外壳**（`crates/mdview-desktop`）：`frontendDist` 指向内嵌的 `web/`，`session.rs` 隔离 IPC 契约（前端 `kind` 字符串 → `Message`），窗口创建与 IPC 已用启动探针在日志中验证
+- ✅ **Tauri 2 外壳**（`src-tauri/`）：`frontendDist` 指向 Vite 产物 `../dist`，`session.rs` 隔离 IPC 契约（前端 `kind` 字符串 → `Message`），窗口创建与 IPC 已用启动探针在日志中验证
 - ✅ 前端渲染：按块落地、增量应用 `Patch`、用停靠点 `data-b`/`data-a` 的左右边缘量出 caret 像素、点击/拖动报停靠点
 - ✅ **主题系统**（2026-11-20）：`app.css` 颜色全部改为 CSS 变量，`[data-theme="dark"]` 覆盖为深色。`theme.js` 默认跟随系统 `prefers-color-scheme`，手动切换存 localStorage、可恢复跟随系统。状态栏按钮一键切换。7 项单测 + 自检验证
-- ✅ **大纲侧栏**（2026-11-20）：`Snapshot` / `Reply` 经 `OutlineDto` 下发标题表（`level`/`title`/`block`）；`web/outline.js` 按锚点实际坐标判定当前节（硬约束 10：不用滚动百分比），侧栏点击按锚点位置跳转。10 项单测 + 自检验证
+- ✅ **大纲侧栏**（2026-11-20）：`Snapshot` / `Reply` 经 `OutlineDto` 下发标题表（`level`/`title`/`block`）；`src/outline.js` 按锚点实际坐标判定当前节（硬约束 10：不用滚动百分比），侧栏点击按锚点位置跳转。10 项单测 + 自检验证
 - ✅ **同步滚动（锚点插值）**（2026-11-20）：滚动正文时按 `activeIndex(锚点, 阅读基准线)` 高亮当前节，侧栏自动把高亮项滚进视野；resize / 编辑后重测锚点。纯函数 `outline.js` 可在 Node 下测，判定依据是标题块真实纵坐标而非序号均分
 - ✅ **跨平台标题栏与菜单**（2026-11-20）：
-  - Windows/Linux 用 `tauri.windows.conf.json` / `tauri.linux.conf.json` 关掉原生装饰（数组整体替换，须重复完整 window 配置），`web/titlebar.js` 自绘 VSCode 风格标题栏：文件/编辑/选择/视图/转到/帮助六个下拉菜单 + 居中文件名标题 + 最小化/最大化/关闭。`data-tauri-drag-region="deep"` 负责拖拽，按钮不参与拖拽
+  - Windows/Linux 用 `src-tauri/tauri.windows.conf.json` / `tauri.linux.conf.json` 关掉原生装饰（数组整体替换，须重复完整 window 配置），标题栏由 `TitleBar.vue` + `MenuPopup.vue` 自绘 VSCode 风格：文件/编辑/选择/视图/转到/帮助六个下拉菜单 + 居中文件名标题 + 最小化/最大化/关闭。`data-tauri-drag-region="deep"` 负责拖拽，按钮不参与拖拽
   - macOS 保留原生标题栏；`main.rs` 用 `#[cfg(target_os = "macos")]` 构建系统菜单栏，自定义项以 `menu-action` 事件 emit 给前端，和自绘菜单共用 `app.js` 的 `runAction`。原生项不设 accelerator，避免和 `keydown` 重复触发（撤销这类非幂等动作尤其危险）
   - capability 补 `core:window:allow-{minimize,toggle-maximize,is-maximized,close,start-dragging,set-title}`；`use_custom_titlebar` 命令让前端以 Rust 配置为唯一判据（UA 只用于首帧抢跑）
   - 验证：`cargo test -p mdview-desktop` 17 项通过，端到端自检 47/47，真实窗口截图确认菜单/标题/窗口按钮与正文让位均正常
-  - **滚动条修正**：原生滚动条属于窗口视口，纵跨整窗会插进标题栏、压住状态栏。改为自绘：`html.custom-titlebar` 隐藏原生滚动条，`#vscroll` 的 top/bottom 按标题栏与状态栏实际高度定位，滑块跟随 `window.scrollY` 并支持拖拽/点轨道；滚动本身仍是 window 的，caret / 大纲 / 拖拽自动滚动的视口坐标逻辑一行未改。截图验证滑块严格落在两栏之间
+  - **滚动条修正**：原生滚动条属于窗口视口，纵跨整窗会插进标题栏、压住状态栏。改为自绘（现位于 `src/scrollbars.ts`）：`html.custom-titlebar` 隐藏原生滚动条，`#vscroll` 的 top/bottom 按标题栏与状态栏实际高度定位，滑块跟随 `window.scrollY` 并支持拖拽/点轨道；滚动本身仍是 window 的，caret / 大纲 / 拖拽自动滚动的视口坐标逻辑一行未改。截图验证滑块严格落在两栏之间
 
 ### M3 可编辑 🔶
 - ✅ 视觉位置索引（停靠点表）、`Caret { block, stop }`、`next/prev/home/end`
@@ -160,7 +165,7 @@ byte   0  2  5  8  10
 - ✅ **增量重绘帧**：`block_frames` 出每块 HTML + 全局停靠点区间，`diff_frames` 用前后缀比对只替换变化段；编辑只发 `Effect::Patch`，结构变化才发 `Effect::Render`
 - ✅ **桌面端输入接线**：`keydown` / `paste` / 鼠标 → `Wire` → `Message`；消费 `Patch` 做块节点替换，用 `MoveCursor { stop, block, visual }` 对齐像素
 - ✅ **空白处点击定位**：`elementFromPoint` 没命中字符时（行尾右侧、行间、块内留白），退到 `caretRangeFromPoint` 借浏览器的命中测试定位视觉行，再按 x 取行首/行尾。点在行外直接取端点而不走「最近」——词尾有两个同位置停靠点，取「最近」会落到与 `End` 不一致的那个
-- ✅ **输入法输入层**：透明 `textarea#ime` 贴住 caret 承接 IME（候选窗跟着走），`#preedit` 镜像层按光标所在块的字体画 preedit，`web/ime.js` 是纯状态机（不碰 DOM，Node 可直接测）
+- ✅ **输入法输入层**：透明 `textarea#ime` 贴住 caret 承接 IME（候选窗跟着走），`#preedit` 镜像层按光标所在块的字体画 preedit，`src/ime.js` 是纯状态机（不碰 DOM，Node 可直接测）
   - 组合期只发一条 `CompositionStart`，之后不重绘、不碰 `#doc`，避免冲掉浏览器正在渲染的 preedit
   - 提交走 `CompositionCommit`，整段一次事务 = 一步撤销；取消候选走 `CompositionCancel` 复位挂起态（漏了会让内核永久吞输入）
   - 补掉「确认候选那一下回车」在 `compositionend` 之后补发 `keydown` 导致的误分段
@@ -168,7 +173,7 @@ byte   0  2  5  8  10
   - `--self-test` 在真实 WebView2 里合成 composition 事件，跑通「事件 → 状态机 → IPC → 事务 → 补丁 → 光标 → 撤销 → 取消后恢复输入」，当前 11/11
 - ✅ **标记整删**：`Block.markers` 由容器事件推出成对标记，退格/Delete 落在标记里时整对抽掉并保留中间原文，一次事务、一次撤销
 - ✅ **块首不产生不可见停靠点**：`**`／`# `／`- `／`> ` 左侧没有可见文字时只留右端。否则「标记之前」与「文字之前」同列同位置，光标停进去之后 Delete 变成整对去格式（与退格一样），而 ← 还会先空转一步
-- ✅ **上下方向键按真实视觉行移动**（前端像素判据，`web/caretline.js`）
+- ✅ **上下方向键按真实视觉行移动**（前端像素判据，`src/caretline.js`）
   - 放前端的原因：软换行只有浏览器知道。内核只认「停靠点 + 视觉列」，它眼里的下一行只能是下一块，长段落里按一下会整段跳走
   - 判据：同一视觉行 = 矩形纵向重叠超过较矮者一半；目标是下一行里离当前 x 最近的停靠点
   - 期望 x 跨多次按键保持（经过短行不会缩水），任何非上下移动的操作都重置
@@ -186,7 +191,7 @@ byte   0  2  5  8  10
   - 后面只剩空行时：末尾空段落本来就接得住光标，删掉标记即可，不必再堆空行
   - 空段落里再按回车只往下走一行（`split_paragraph` 在零长块里只插一个换行）：否则一次多出两行空行，像在跳行
 - ✅ **标题必须「成形」才升格**：ATX 标题要求 `#` 后有空格。pulldown 把行尾裸 `#` 也当合法标题（内容为空），于是逐字输入会出现两次跳变：敲 `#` 整行先变成一级标题（`#` 被折叠、字号变大），再输入文字又掉回段落（`#` 重新可见）。现在 `heading_is_bare` 把「只有 `#`、后面没空格」的块降级成段落——标记始终可见，敲下空格那一刻才升格，之后不会再变回来
-- ✅ **选区拖动到窗口边缘时的自动滚动**（`web/dragscroll.js`）
+- ✅ **选区拖动到窗口边缘时的自动滚动**（`src/dragscroll.js`）
   - 纯几何不碰 DOM，Node 直接测（`dragscroll.test.js` 16 项）；帧循环、滚动、落点回写全部由 hooks 注入
   - **必须自走帧循环**：拖选靠 `mousemove` 驱动，而指针停在边缘时浏览器不再发新事件，选区就冻结在那一屏。这里每帧「滚一点 + 重新求指针下的落点」，指针不动、页面在动，落点自然一路延伸
   - 速度与「陷进边缘多深」成正比（48px 边缘带，满速 24px/帧），拖出窗口后封顶；视口极矮时边缘带压到高度的一半，免得上下两条带互相吃掉、滚动永远停不下来
@@ -199,7 +204,7 @@ byte   0  2  5  8  10
   - 复制出去的是**源码**而不是可见文本（视图里 `**`、`# ` 是折叠的，照 DOM 拼出来再粘贴回去格式就没了）
   - 整篇选中（首尾贴住文档两端，拖选到头也算）时直接取文件全文：块首折叠标记左边没有停靠点（硬约束 13），按停靠点取会漏掉第一行的 `# `
   - 剪切 = 复制 + 删选区；删除仍走 `expand_deletion`（掏空 `**粗**` 时连标记一起收），剪贴板里只放选中的那段，一次事务可整体撤销
-  - 内核不碰剪贴板：`Effect::Clipboard { text }` 只产出文本，写入由前端 `clipboard.js` 完成（`navigator.clipboard` → `execCommand` 兜底）
+  - 内核不碰剪贴板：`Effect::Clipboard { text }` 只产出文本，写入由前端 `src/clipboard.js` 完成（`navigator.clipboard` → `execCommand` 兜底）
 - 🔶 输入格式化：回车拆分与列表/引用延续已做；Tab 缩进、`**` 自动配对、Delete 合并块未做
 
 ### M4 细节 🔶
@@ -211,14 +216,27 @@ byte   0  2  5  8  10
 - ⬜ 脚注、数学公式
 - ⬜ 大文档虚拟化（5 万字以下不做；DOM 节点数与跨块选区天然冲突）
 
+### M5 前端工程化（Vite + Vue 外壳）✅
+- ✅ **标准 Tauri 结构**：Rust crate 上提为 `src-tauri/`，前端工程根回到仓库根；`index.html` + `src/` + `dist/`（产物不入库，`cargo` 直跑前先 `pnpm build`）
+- ✅ **Vite + Vue 3 + TypeScript**：端口 1450、`outDir=dist`、`emptyOutDir`；`pnpm build` 同时跑 `vue-tsc --noEmit`
+- ✅ **`bridge.ts` 状态桥**：只读快照 + `set/notify/dispatch`；主题经 `MutationObserver` 跟随 `<html data-theme>`，不侵入 `theme.js`；`setTitle` / `nextTick` / `close-window` 收进桥
+- ✅ **外壳逐组件迁移**（每步单独提交，自检断言零改动）：
+  - `StatusBar.vue` 用 `<Teleport to="#bar">` 接管状态栏内容，`app.js` 不再拼 `innerHTML`
+  - `Toast.vue` 接管 `#toast`，显隐与计时统一由 `bridge.notify` 管
+  - `TitleBar.vue` + `MenuPopup.vue` + `menu.ts` 接管标题、菜单、窗口按钮、拖拽区与最大化图标；滚动条抽到 `scrollbars.ts`；删除 `titlebar.js`
+- ✅ **单入口**：`index.html` 只留 `<script type="module" src="/src/main.ts">`，九个旧脚本按序在 `main.ts` 里 `import`；首帧 UA 判定挪到 `platform.ts`，满足 CSP（不再需要内联脚本）
+- ✅ **红线保持**：`app.js` 的投影/光标/坐标内核与七个纯逻辑模块零逻辑改动；大纲与正文仍是覆盖层上的洞
+- 验证：`pnpm build` 通过、`cargo test --workspace` **204 项全绿**、端到端自检 **OK 61/61**
+
 ---
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-20（M1 + M2 + 表格子工程收尾）
-- 测试：**Rust 194 项全过**（app 76 / markdown 89 / desktop bin 10 + 前端守门 7 / core 5 / support 7），无编译告警；前端守门 7 项是 `node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`、`outline.js`、`theme.js`）+ 六套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项、`outline` 10 项、`theme` 7 项，共 71 项
-- 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`cargo run -p mdview-desktop -- crates/mdview-desktop/tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 47/47」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 5 项**、**表格 8 项**：真实网格 / 默认边框 1px / 圆角 4px / 首格停靠点 / 行列工具条 / Tab 跨格 / 插行事务经 IPC 到内核 / 插行可撤销）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+- 日期：2026-11-20（M1 + M2 + 表格子工程 + 前端工程化收尾）
+- 测试：**Rust 204 项全过**（app 76 / markdown 96 / desktop bin 13 + 前端守门 7 / core 5 / support 7），无编译告警；前端守门 7 项是 `node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`、`outline.js`、`theme.js`）+ 六套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项、`outline` 10 项、`theme` 7 项，共 71 项
+- 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
+- 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
+- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 61/61」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 13 项**、**表格 8 项**、**打开文件 4 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
 - 最近提交（Angular 规范）：
@@ -245,7 +263,13 @@ byte   0  2  5  8  10
   - `feat(desktop): 加入主题系统与大纲侧栏，完成 M2 收尾`
   - `test(desktop): 新增标准 Markdown 语法全覆盖测试样张`
   - `feat: 表格子工程落地真实网格渲染与行列编辑`
-- 分支：全部特性/修复分支已按线性顺序快进并入 `main`（`3110c20`），`origin/main` 只差在 `feat: 初始化内核…`，普通 `git push origin main` 即可，不需要 force
+  - `refactor(desktop): 改用标准 Tauri 结构并接入 Vite 骨架`
+  - `feat(desktop): 接入外壳状态桥与只读 Vue 组件`
+  - `feat(desktop): 状态栏改由 Vue 渲染`
+  - `feat(desktop): Toast 改由 Vue 渲染`
+  - `feat(desktop): 标题栏与菜单改由 Vue 渲染`
+  - `refactor(desktop): 前端合并为单一入口`
+- 分支：`main` 已快进到表格子工程（`3110c20`）；前端工程化在 `ui-vue` 分支（基于 `defbbf7`），完成后快进并入 `main`
 
 ---
 
@@ -280,7 +304,7 @@ byte   0  2  5  8  10
 ## 9. 下一步（按推荐顺序）
 
 1. ~~**`selectAll`**~~ **已完成**：全选 / 复制 / 剪切三条消息 + `Ctrl+A` / `Ctrl+C` / `Ctrl+X`。剩下的相关缺口是 **粘贴**——`paste` 事件直接把 `clipboardData` 的纯文本发给 `InsertText`，还没有 HTML→Markdown 的规范化（见 M4）
-2. ~~**选区拖动到窗口边缘的自动滚动**~~ **已完成**：`web/dragscroll.js` + `--self-test` 三项。剩下的相邻缺口只有「拖到窗口左右两侧时横向自动滚动」——正文不横向滚动，当前不需要。
+2. ~~**选区拖动到窗口边缘的自动滚动**~~ **已完成**：`src/dragscroll.js` + `--self-test` 三项。剩下的相邻缺口只有「拖到窗口左右两侧时横向自动滚动」——正文不横向滚动，当前不需要。
 3. ~~**`Watcher` 落地**（`notify`）~~ **已完成（M1，2026-11-20）**：`NotifyWatcher` + 父目录监听 + 指纹二次确认 + `external-change` 事件 + 前端 toast。
 4. ~~**M2 收尾**~~ **已完成（2026-11-20）**：主题系统、大纲侧栏、同步滚动（锚点插值）——见第 6 节 M2。
 5. **词尾重合停靠点的退格语义**：词首已经收敛为一处（不可见的那端不再产生停靠点），词尾仍保留两个（见第 8 节第 9 条），需要按实际手感定方向。
@@ -294,7 +318,9 @@ byte   0  2  5  8  10
 ## 10. 命令速查
 
 ```bash
-cargo test --workspace                      # 全量测试
+pnpm install                                # 首次
+pnpm build                                  # 构建前端（含 vue-tsc --noEmit）；dist/ 不入库
+cargo test --workspace                      # 全量测试（依赖上面的 dist）
 cargo run -p mdview-cli -- demo             # 端到端演示（edit/click/undo/save）
 cargo run -p mdview-cli -- demo edit        # 键盘脚本回放：输入 → 光标 → 增量帧
 cargo run -p mdview-cli -- <file> outline   # 大纲
@@ -304,13 +330,13 @@ cargo run -p mdview-cli -- <file> spans     # 逐块投影，⟦⟧ 内为折叠
 cargo run -p mdview-cli -- <file> layout    # 停靠点表：列 / byte / 字符（← 同列）
 cargo run -p mdview-cli -- <file> preview   # 生成 <file>.preview.html
 cargo run -p mdview-cli -- <file> html      # 阅读态 HTML
-cargo run -p mdview-desktop -- <file>       # 起窗（Tauri 2）
-cargo run -p mdview-desktop -- crates/mdview-desktop/tests/fixtures/selftest.md --self-test
-                                            # 端到端自检（含拖选自动滚动），跑完自动退出
-node crates/mdview-desktop/web/ime.test.js  # 输入法状态机单测（cargo test 已含）
-node crates/mdview-desktop/web/caretline.test.js  # 上下移动几何单测（cargo test 已含）
-node crates/mdview-desktop/web/selection.test.js # 原生选区判据单测（cargo test 已含）
-node crates/mdview-desktop/web/dragscroll.test.js # 边缘自动滚动几何单测（cargo test 已含）
+pnpm tauri dev -- -- <file>                 # 起窗（Tauri 2 + Vite devUrl）
+pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test
+                                            # 端到端自检（CWD=src-tauri/），跑完自动退出
+node src/ime.test.js  # 输入法状态机单测（cargo test 已含）
+node src/caretline.test.js  # 上下移动几何单测（cargo test 已含）
+node src/selection.test.js # 原生选区判据单测（cargo test 已含）
+node src/dragscroll.test.js # 边缘自动滚动几何单测（cargo test 已含）
 ```
 
 `--self-test` 会在真实 WebView2 里合成 composition 事件与方向键，把结果写进日志并以 0/1 退出，是唯一不需要人打字的端到端验证。它同时是唯一能验证「像素对齐」的地方——纯 Node 用例只能喂合成矩形。
@@ -334,23 +360,29 @@ node crates/mdview-desktop/web/dragscroll.test.js # 边缘自动滚动几何单�
 | **分块帧与增量 patch**（`block_frames` / `diff_frames`）+ 验证页 + **表格网格渲染** | `crates/mdview-markdown/src/preview.rs` |
 | **编辑闭环**（输入 → 事务 → 光标回填 → patch）+ **表格跨格 / 行列增删** | `crates/mdview-app/src/state.rs` |
 | 端口（FileStore 原子写 / RenderSink / **NotifyWatcher**） | `crates/mdview-app/src/ports.rs` |
-| 外部修改监听线程 + `external-change` emit | `crates/mdview-desktop/src/main.rs`（setup 钩子） |
-| 外部修改提示（前端 listen + toast） | `crates/mdview-desktop/web/app.js`（boot） |
+| 外部修改监听线程 + `external-change` emit | `src-tauri/src/main.rs`（setup 钩子） |
+| 外部修改提示（前端 listen + toast） | `src/app.js`（boot） |
 | 日志滚动 | `crates/mdview-support/src/logging.rs` |
 | 命令行入口（含 `demo edit` 回放） | `crates/mdview-cli/src/main.rs` |
-| **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包、大纲下发、**表格操作**） | `crates/mdview-desktop/src/session.rs` |
-| **表格交互**（Tab 跨格、状态栏行列工具条、自检 6 项） | `crates/mdview-desktop/web/app.js`、`app.css` |
-| **大纲侧栏**（锚点判定 + 跳转，不碰 DOM，Node 可测） | `crates/mdview-desktop/web/outline.js`、`outline.test.js`、`app.js`（侧栏渲染/联动） |
-| **主题系统**（跟随系统 + 手动切换 + localStorage，不碰 DOM，Node 可测） | `crates/mdview-desktop/web/theme.js`、`theme.test.js`、`app.css`（CSS 变量） |
-| **编辑页**（停靠点 → 像素、按键 → 消息、增量应用、自检入口） | `crates/mdview-desktop/web/app.js` |
-| **输入法状态机**（不碰 DOM，Node 可测） | `crates/mdview-desktop/web/ime.js`、`ime.test.js` |
-| **上下移动几何**（视觉行判定 + 期望列，不碰 DOM，Node 可测） | `crates/mdview-desktop/web/caretline.js`、`caretline.test.js` |
-| **视口与原生选区**（滚多少才露头、哪些原生选区该清，不碰 DOM） | `crates/mdview-desktop/web/caretline.js`（`scrollDelta`）、`selection.js`、`selection.test.js` |
-| **拖选时的边缘自动滚动**（速度曲线、探针点压缩、自走帧循环，不碰 DOM） | `crates/mdview-desktop/web/dragscroll.js`、`dragscroll.test.js` |
-| 自检样张（必须是「一块一行」的文档） | `crates/mdview-desktop/tests/fixtures/selftest.md` |
-| **剪贴板写入**（内核给文本、前端写系统剪贴板，`execCommand` 兜底） | `crates/mdview-desktop/web/clipboard.js` |
-| **键位契约**（`Ctrl+A/C/X` → `selectAll`/`copy`/`cut`，见 `app.js` 的 keydown） | `crates/mdview-desktop/web/app.js`、`crates/mdview-desktop/src/session.rs` |
-| 前端守门测试（语法检查 + 跑六套 Node 用例） | `crates/mdview-desktop/tests/web_ime.rs` |
+| **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包、大纲下发、**表格操作**） | `src-tauri/src/session.rs` |
+| **表格交互**（Tab 跨格、状态栏行列工具条、自检 6 项） | `src/app.js`、`app.css` |
+| **大纲侧栏**（锚点判定 + 跳转，不碰 DOM，Node 可测） | `src/outline.js`、`outline.test.js`、`app.js`（侧栏渲染/联动） |
+| **主题系统**（跟随系统 + 手动切换 + localStorage，不碰 DOM，Node 可测） | `src/theme.js`、`theme.test.js`、`app.css`（CSS 变量） |
+| **编辑页**（停靠点 → 像素、按键 → 消息、增量应用、自检入口） | `src/app.js` |
+| **输入法状态机**（不碰 DOM，Node 可测） | `src/ime.js`、`ime.test.js` |
+| **上下移动几何**（视觉行判定 + 期望列，不碰 DOM，Node 可测） | `src/caretline.js`、`caretline.test.js` |
+| **视口与原生选区**（滚多少才露头、哪些原生选区该清，不碰 DOM） | `src/caretline.js`（`scrollDelta`）、`selection.js`、`selection.test.js` |
+| **拖选时的边缘自动滚动**（速度曲线、探针点压缩、自走帧循环，不碰 DOM） | `src/dragscroll.js`、`dragscroll.test.js` |
+| 自检样张（必须是「一块一行」的文档） | `src-tauri/tests/fixtures/selftest.md` |
+| **剪贴板写入**（内核给文本、前端写系统剪贴板，`execCommand` 兜底） | `src/clipboard.js` |
+| **键位契约**（`Ctrl+A/C/X` → `selectAll`/`copy`/`cut`，见 `app.js` 的 keydown） | `src/app.js`、`src-tauri/src/session.rs` |
+| 前端守门测试（语法检查 + 跑六套 Node 用例） | `src-tauri/tests/web_ime.rs` |
+| **Vue 外壳入口**（挂载、单入口 import、UA 首帧判定、平台复核） | `src/main.ts`、`src/platform.ts` |
+| **状态桥**（只读快照 / `set` / `notify` / `dispatch` / `setTitle` / `nextTick`） | `src/bridge.ts` |
+| **标题栏 / 菜单 / 状态栏 / Toast**（模板复刻原 `id`/`class`） | `src/components/TitleBar.vue`、`MenuPopup.vue`、`StatusBar.vue`、`Toast.vue` |
+| **菜单数据与展开状态**（六档菜单树、勾选态、键盘切换） | `src/menu.ts` |
+| **自绘滚动条**（正文 + 大纲，支持拖拽 / 点轨道） | `src/scrollbars.ts` |
+| **覆盖层样式**（整层穿透，外壳显式 `pointer-events:auto`） | `src/vue-overlay.css`、`src/app.css` |
 
 ---
 

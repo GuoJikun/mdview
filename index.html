@@ -5,14 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mdview</title>
 <link rel="stylesheet" href="/src/app.css">
-<script>
-  // 平台外观要在首帧前定下来：macOS 用系统标题栏，Windows/Linux 用自绘标题栏。
-  // 真正的判据在 Rust（与窗口 decorations 一致），这里先用 UA 抢一个初值避免闪一下。
-  (function () {
-    var mac = /Macintosh|Mac OS X/i.test(navigator.userAgent) || /^Mac/i.test(navigator.platform);
-    document.documentElement.classList.add(mac ? 'native-titlebar' : 'custom-titlebar');
-  })();
-</script>
 </head>
 <body>
 <!-- 自绘标题栏与菜单弹层由 Vue 渲染（TitleBar.vue / MenuPopup.vue） -->
@@ -36,14 +28,6 @@
 <!-- Vue 覆盖层挂载点：标题栏/菜单/状态栏/toast 都在这里，大纲与正文区刻意
      不放任何 Vue 节点（留洞），鼠标穿透到下面的现有 DOM。 -->
 <div id="vue-app"></div>
-<script type="module" src="/src/ime.js"></script>
-<script type="module" src="/src/caretline.js"></script>
-<script type="module" src="/src/dragscroll.js"></script>
-<script type="module" src="/src/selection.js"></script>
-<script type="module" src="/src/clipboard.js"></script>
-<script type="module" src="/src/outline.js"></script>
-<script type="module" src="/src/theme.js"></script>
-<script type="module" src="/src/app.js"></script>
 <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

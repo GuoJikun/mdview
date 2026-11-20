@@ -1,6 +1,6 @@
 // 前端外壳与编辑内核之间唯一的窄桥。
 //
-// 只传「状态快照」和「动作名」：状态由现有逻辑推上来（app.js / titlebar.js），
+// 只传「状态快照」和「动作名」：状态由现有逻辑推上来（app.js / bridge.setTitle），
 // 动作由 Vue 组件发回去（复用 window.__mdviewRunAction），两侧都不碰对方的 DOM。
 // 文档内容、DOM 节点、编辑器坐标一概不过桥。
 import { nextTick, reactive, readonly } from 'vue';
@@ -18,7 +18,7 @@ export type ViewMode = 'wysiwyg' | 'reading' | 'source';
 export interface BridgeState {
   /** 当前文件路径；未命名文档为 null。 */
   path: string | null;
-  /** 标题栏文案（由 titlebar.js 的 setTitle 产出，含脏标记）。 */
+  /** 标题栏文案（文件名 + 脏标记 + 应用名）。 */
   title: string;
   dirty: boolean;
   /** 正文块数。 */

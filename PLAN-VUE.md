@@ -1,8 +1,8 @@
 # PLAN-VUE.md — `ui-vue` 分支：Vue 3 + Vite 重构前端外壳
 
-> 最后更新：2026-11-20 17:20（前端工程根提到仓库根，Rust crate 在根目录 `src-tauri/`）
-> 分支：`ui-vue`（基于 `main` @ `defbbf7`）
-> 性质：`ui-vue` 是**独立专项分支**，本文只管前端外壳的框架化，不改动主 `PLAN.md` 的编辑内核计划。
+> 最后更新：2026-11-20 19:35（P0–P3 全部完成，待合并回 `ui-vue`）
+> 分支：`ui-vue`（基于 `main` @ `defbbf7`）；实施分支 `ui-vue-p1`
+> 性质：`ui-vue` 是**独立专项分支**，本文只管前端外壳的框架化；P3 已把最终结构与验证结果同步回主 `PLAN.md`。
 > 本文自包含：接手人读完即可继续，不需要翻历史对话。硬约束见主 `PLAN.md` 第 2 节，本文不重复。
 
 ---
@@ -20,7 +20,7 @@
 
 下面这些是项目最难、回归高发的核心逻辑，**一行都不迁、一行都不改**：
 
-- `app.js` → `editor.ts` 的 `#doc` 投影、`reindex`、`applyPatch`、光标定位、点击/拖选落点、`revealCaret`、视口坐标
+- `app.js` → `editor.ts` 的 `#doc` 投影、`reindex`、`applyPatch`、光标定位、点击/拖选落点、`revealCaret`、视口坐标（**本次未改名，仍为 `app.js`，逻辑零改动**）
 - `ime.js` / `caretline.js` / `selection.js` / `dragscroll.js` / `clipboard.js` / `outline.js` / `theme.js` 七个纯逻辑模块及其六套 Node 用例（只挪目录、改名文件路径）
 - Rust 侧 `session.rs` 的 IPC 契约、`main.rs` 的窗口与菜单逻辑（只挪目录、改注释）
 
@@ -112,16 +112,19 @@ Vue 画的标题栏/状态栏/toast 与现有同名 DOM 会**短暂共存**（�
 ├─ vite.config.ts                       build.outDir = 'dist'，emptyOutDir = true
 ├─ tsconfig.json
 ├─ src/                                 ← 前端源码（原 web/ 改名；不再与 Rust 混淆）
-│  ├─ main.ts                           createApp → mount('#vue-app') → editor.init()
-│  ├─ App.vue                           组合 TitleBar / StatusBar / Toast（大纲与正文是洞）
+│  ├─ main.ts                           单入口：按序 import 全部脚本 + mount('#vue-app')
+│  ├─ platform.ts                       首帧 UA 判定（替代 index.html 内联脚本，满足 CSP）
+│  ├─ App.vue                           组合 TitleBar / MenuPopup / StatusBar / Toast（大纲与正文是洞）
 │  ├─ components/
-│  │  ├─ TitleBar.vue
-│  │  ├─ MenuPopup.vue                  菜单树数据 + 子菜单 + 勾选态
-│  │  ├─ StatusBar.vue
-│  │  └─ Toast.vue
-│  ├─ bridge.ts                         reactive 状态总线 + 动作分发
-│  ├─ editor.ts                         由原 app.js 移入：#doc 投影、光标、IME、选区、滚动、自检
-│  ├─ styles/                           外壳组件样式（从 app.css 拆出对应规则）
+│  │  ├─ TitleBar.vue                   标题、菜单按钮、窗口控制、拖拽区、最大化图标
+│  │  ├─ MenuPopup.vue                  菜单弹层 + 子菜单 + 勾选态 + 键盘导航
+│  │  ├─ StatusBar.vue                  Teleport 到 #bar
+│  │  └─ Toast.vue                      #toast
+│  ├─ bridge.ts                         reactive 状态总线 + 动作分发 + setTitle / nextTick
+│  ├─ menu.ts                           六档菜单树 + 展开状态
+│  ├─ scrollbars.ts                     正文/大纲自绘滚动条（原 titlebar.js 抽出）
+│  ├─ vue-overlay.css                   覆盖层穿透与外壳 pointer-events
+│  ├─ app.js                            编辑内核投影层（红线；本次不改名 editor.ts）
 │  └─ ime.js / caretline.js / selection.js / dragscroll.js / clipboard.js
 │     outline.js / theme.js + 六套 *.test.js   ← 七个纯逻辑模块原样保留
 ├─ dist/                                ← Vite 产物（gitignore）；frontendDist 指向它
@@ -223,30 +226,28 @@ reactive store 字段：`meta.title / stats.blocks / stats.lines / dirty / theme
 
 | 现有写入点 | 加一句 |
 |---|---|
-| `titlebar.js` 的 `setTitle` | `bridge.set({ title })` |
-| `editor.ts`（原 app.js）的 `renderStatus` | `bridge.set({ blocks, lines, dirty })` |
-| `editor.ts` 的 `runAction` / 主题切换 / 大纲联动 | `bridge.set(...)` |
+| `setTitle`（原 `titlebar.js`，P2-3 已收进 `bridge.ts`） | `bridge.set({ path, dirty, title })` |
+| `app.js` 的 `renderStatus` | `bridge.set({ blocks, stop, column, revision, inTable })` |
+| `app.js` 的 `runAction` / 主题切换 / 大纲联动 | `bridge.set(...)` |
 
 Vue 组件只读 store，反向不写。
 
 > P1 落地说明（2026-11-20）：写入点仍在 `app.js`（尚未改名 `editor.ts`），统一由
-> `pushShellState()` 推一份快照；标题由 `titlebar.js` 的 `setTitle` 单独推。store 的
+> `pushShellState()` 推一份快照；标题由 `bridge.setTitle` 推（P2-3 从 `titlebar.js` 收进）。store 的
 > 字段按现有状态栏实际需要建模：`path / title / dirty / blocks / stop / column /
 > revision / inTable / themeMode / theme / mode / outline / activeOutlineIdx / toast`
 > （计划草图里的 `stats.lines` 与现有状态栏不对应，未采用）。主题不往 `theme.js`
 > 里塞桥接代码，改由 `bridge.ts` 观察 `<html data-theme>` 的变化跟随。
-> 三个外壳组件 P1 已挂载并只读订阅，但整层默认隐藏；调试时给 `<html>` 加
-> `vue-shell-preview` 即可显形，P2 逐组件接管后再正式打开。
 
 ### 5.2 动作出 Vue（单向）
 
 Vue 侧的菜单项、状态栏按钮点击后：`emit('action', name)` → `bridge.dispatch(name)` → 复用现有 `window.__mdviewRunAction(name)`。**动作逻辑一行不重写**。
 
-> P2 注意：`close-window` 目前由 `titlebar.js` 的 `run()` 在调用 `runAction` 之前拦截，窗口最小化/最大化则直接走 Tauri 窗口 API。迁 `TitleBar.vue` 时要把这三条窗口动作补进 bridge（或 app.js），否则 Vue 侧 `dispatch('close-window')` 会落空。
+> P2 已解决：`close-window` 已补进 `bridge.dispatch`；最小化/最大化/关闭由 `TitleBar.vue` 直接调 Tauri 窗口 API；菜单动作仍统一走 `bridge.dispatch` → `window.__mdviewRunAction`。
 
 ### 5.3 全局钩子保留
 
-`window.__mdviewSelfTest` / `__mdviewRunAction` / `__mdviewSetTitle` / `__mdviewRefreshScrollbar` 继续由 `editor.ts` 挂在 `window` 上，Rust 侧 `window.eval` 和自检断言不用动。
+`window.__mdviewSelfTest` / `__mdviewRunAction` / `__mdviewSetTitle` / `__mdviewRefreshScrollbar` 继续挂在 `window` 上（`app.js` / `bridge.ts` / `scrollbars.ts`），Rust 侧 `window.eval` 和自检断言不用动。菜单迁移后自检需要 `await window.__mdviewNextTick()`（由 bridge 暴露 Vue 的 `nextTick`）。
 
 ### 5.4 几何对齐
 
@@ -256,15 +257,15 @@ Vue 侧的菜单项、状态栏按钮点击后：`emit('action', name)` → `bri
 
 ## 6. 分阶段计划与过关线
 
-基线（迁移前，已实测）：**端到端自检 57/57** · **Rust 194 项全过** · **六套 Node 用例 71 项全过**。P0 后实测为 **自检 61/61**、**Rust 全量测试绿**。每阶段结束都必须回到这条线。
+基线（迁移前，已实测）：**端到端自检 57/57** · **Rust 194 项全过** · **六套 Node 用例 71 项全过**。P0 后实测为 **自检 61/61**、**Rust 204 项全绿**。每阶段结束都必须回到这条线。
 
-| 阶段 | 内容 | 过关线 |
-|---|---|---|
-| **P0-a** | Rust crate 整体挪进 `src-tauri/`；按 4.4 的 P0-a 列改路径（临时指向 `../web`）；不碰任何前端代码 | **纯目录搬家**：`cargo test --workspace` 全绿 + 自检 57/57（用新 fixtures 路径） |
-| **P0-b** | 搭 Vite；`web/` 改名 `src/`；产物 `dist/`、端口 1450；把 4.4 的路径切成最终值；`#vue-app` 覆盖层留洞；`bridge.ts` / `editor.ts` 拆出 | 行为不变；自检 57/57 + 全量测试绿 |
-| **P1** | Vue 组件挂载但仍是空壳/只读展示；把 5.1 的状态写入点与 5.2 的动作桥接铺好 | 自检全绿；鼠标穿透、拖拽区、滚动条均无回归 |
-| **P2** | 逐组件迁移，每组件单独提交：`StatusBar` → `Toast` → `TitleBar`/`MenuPopup` | 每步自检全绿；模板复刻现有 `id`/`class`，让断言零改动 |
-| **P3** | 删旧脚本引用；`web_ime.rs` 守门清单改造（Vue 侧交 `vue-tsc --noEmit`）；CSP 复核；更新主 `PLAN.md` 与本文件 | 全量测试 + 自检 + 真机截图三对齐 |
+| 阶段 | 状态 | 内容 | 过关线 |
+|---|---|---|---|
+| **P0-a** | ✅ | Rust crate 整体挪进 `src-tauri/`；按 4.4 的 P0-a 列改路径（临时指向 `../web`）；不碰任何前端代码 | **纯目录搬家**：`cargo test --workspace` 全绿 + 自检 57/57（用新 fixtures 路径） |
+| **P0-b** | ✅ | 搭 Vite；`web/` 改名 `src/`；产物 `dist/`、端口 1450；把 4.4 的路径切成最终值；`#vue-app` 覆盖层留洞 | 行为不变；自检 57/57 + 全量测试绿 |
+| **P1** | ✅ | Vue 组件挂载但仍是空壳/只读展示；把 5.1 的状态写入点与 5.2 的动作桥接铺好 | 自检全绿；鼠标穿透、拖拽区、滚动条均无回归 |
+| **P2** | ✅ | 逐组件迁移，每组件单独提交：`StatusBar` → `Toast` → `TitleBar`/`MenuPopup` | 每步自检全绿；模板复刻现有 `id`/`class`，让断言零改动 |
+| **P3** | ✅ | 删旧脚本引用；`web_ime.rs` 守门清单改造（Vue 侧交 `vue-tsc --noEmit`）；CSP 复核；更新主 `PLAN.md` 与本文件 | 全量测试 + 自检 + 真机截图三对齐 |
 
 P0-a 独立成段是因为它和 Vue 无关、纯路径调整，先做能单独验证，避免把目录问题和前端问题混在一起排查。P0-b 再一次性完成 Vite 就位与路径切换。`MenuPopup` 在 P2 放最后：它有键盘导航、子菜单 `pointerenter`、打开瞬间求值勾选态三个易碎交互，且自检覆盖最多。
 
@@ -334,3 +335,4 @@ pnpm tauri dev -- -- tests/fixtures/selftest.md
 | 2026-11-20 | **P2-1 完成（StatusBar）**：`StatusBar.vue` 用 `<Teleport to="#bar">` 渲染到现有宿主，`app.js` 的 `renderStatus` 不再写 `innerHTML`，只保留标题 IPC 与状态快照；表格工具条的点击委托仍在 `#bar` 上。验证：`pnpm build` 通过、端到端自检 **OK 61/61** |
 | 2026-11-20 | **P2-2 完成（Toast）**：`Toast.vue` 直接渲染 `#toast`，显隐与 1400ms 计时统一由 `bridge.notify` 管；`app.js` 的 `toast()` 退化为投递文案，`index.html` 删除静态 `#toast`。验证：`pnpm build` 通过、端到端自检 **OK 61/61** |
 | 2026-11-20 | **P2-3 完成（TitleBar + MenuPopup）**：新增 `menu.ts`（菜单树 + 展开状态）与 `MenuPopup.vue`（子菜单 / 勾选态 / 键盘导航 / 定位）；`TitleBar.vue` 接管标题、窗口按钮、拖拽区与最大化图标；`titlebar.js` 的滚动条抽成 `scrollbars.ts`，`setTitle` 与 `close-window` 收进 bridge；删除 `src/titlebar.js` 并同步守门清单。自检里点菜单后补 `await nextTick()`。验证：`pnpm build` 通过、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |
+| 2026-11-20 | **P3 完成（单入口 + 文档收尾）**：`index.html` 只留 `<script type="module" src="/src/main.ts">`，九个旧脚本按序在 `main.ts` 里 `import`；首帧 UA 判定挪到 `platform.ts`，删除 `<head>` 内联脚本以符合 CSP；守门清单与注释早已随 P2-3 更新；主 `PLAN.md` 的结构、路径、测试数、命令与文件地图同步到 Vue 工程；真实窗口截图复核标题栏/菜单/状态栏/滚动条与正文让位。验证：`pnpm build` 通过、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |
