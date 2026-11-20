@@ -438,7 +438,7 @@ function outlineScrollSpec() {
     max: () => Math.max(0, nav.scrollHeight - nav.clientHeight),
     pos: () => nav.scrollTop,
     setPos: (v) => { nav.scrollTop = v; },
-    // 大纲轨道上下边缘由 CSS 固定（top:30px / bottom:36px），无需动态设
+    // 大纲轨道上下边缘由 CSS 固定（top:30px / bottom:29px），无需动态设
   };
 }
 

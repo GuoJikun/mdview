@@ -217,7 +217,7 @@ html.custom-titlebar body::-webkit-scrollbar { width: 0; height: 0; display: non
 .tb-vscroll { display: none; }
 html.custom-titlebar .tb-vscroll {
   display: block; position: fixed; z-index: 25; width: 12px;
-  top: 30px; bottom: 36px;
+  top: 30px; bottom: 29px;
 }
 #vscroll { right: 0; }
 #outline-scroll { left: 220px; }
@@ -380,7 +380,7 @@ html.custom-titlebar #outline::-webkit-scrollbar { width: 0; height: 0; display:
 #bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
   display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
-  padding: 8px 18px; font: 12px/1.6 ui-monospace, Consolas, monospace;
+  padding: 8px 18px; font: 12px/1 ui-monospace, Consolas, monospace;
   color: var(--muted); background: var(--bar-bg);
   border-top: 1px solid var(--border); backdrop-filter: blur(6px);
 }

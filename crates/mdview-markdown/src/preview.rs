@@ -584,7 +584,7 @@ body {
 #bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
   display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
-  padding: 8px 18px; font: 12px/1.6 ui-monospace, Consolas, monospace;
+  padding: 8px 18px; font: 12px/1 ui-monospace, Consolas, monospace;
   color: #57606a; background: rgba(255, 255, 255, .94);
   border-top: 1px solid #eaecef; backdrop-filter: blur(6px);
 }
