@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "mdview",
+        "width": 960,
+        "height": 760,
+        "minWidth": 520,
+        "minHeight": 360,
+        "decorations": false
+      }
+    ]
+  }
+}

@@ -42,7 +42,11 @@ fn dispatch(session: tauri::State<'_, Session>, message: Wire) -> Reply {
 /// 自检模式下，这里也是唯一可靠的启动时机：能走到 `ready` 就说明状态机
 /// 已经构造、DOM 已经挂好，合成事件才有意义。
 #[tauri::command]
-fn ready(app: tauri::AppHandle, session: tauri::State<'_, Session>, mode: tauri::State<'_, RunMode>) -> usize {
+fn ready(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, Session>,
+    mode: tauri::State<'_, RunMode>,
+) -> usize {
     let snap = session.snapshot();
     log::info!(
         "前端就绪：{} 块 / {} 停靠点 / 路径={:?}",
@@ -69,6 +73,111 @@ fn selftest(app: tauri::AppHandle, report: String) {
         log::error!("自检失败：{report}");
         app.exit(1);
     }
+}
+
+/// 前端据此决定显示自绘标题栏还是让位给系统标题栏。
+/// 必须和 tauri.{windows,linux}.conf.json 的 `decorations` 保持一致。
+#[tauri::command]
+fn use_custom_titlebar() -> bool {
+    !cfg!(target_os = "macos")
+}
+
+/// 原生菜单里需要转给前端执行的动作 ID。
+/// 只列自绘编辑器真正支持的动作；about / hide / quit / minimize 等由系统自己处理。
+#[cfg(target_os = "macos")]
+fn menu_action(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "save" => "save",
+        "undo" => "undo",
+        "redo" => "redo",
+        "cut" => "cut",
+        "copy" => "copy",
+        "paste" => "paste",
+        "select-all" => "select-all",
+        "theme" => "theme",
+        "mode-wysiwyg" => "mode-wysiwyg",
+        "mode-reading" => "mode-reading",
+        "mode-source" => "mode-source",
+        "outline-prev" => "outline-prev",
+        "outline-next" => "outline-next",
+        "doc-start" => "doc-start",
+        "doc-end" => "doc-end",
+        "about" => "about",
+        _ => return None,
+    })
+}
+
+/// macOS 的系统菜单栏。故意不给自定义项设 accelerator：快捷键由 app.js 的
+/// keydown 统一处理，两边都设会让「撤销」这类非幂等动作执行两次。
+#[cfg(target_os = "macos")]
+fn build_native_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{AboutMetadata, MenuBuilder, MenuItem, SubmenuBuilder};
+
+    let item =
+        |id: &'static str, text: &'static str| MenuItem::with_id(app, id, text, true, None::<&str>);
+
+    let app_menu = SubmenuBuilder::new(app, "mdview")
+        .about(Some(AboutMetadata::default()))
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    let file_menu = SubmenuBuilder::new(app, "文件")
+        .item(&item("save", "保存")?)
+        .separator()
+        .close_window_with_text("关闭窗口")
+        .build()?;
+
+    let edit_menu = SubmenuBuilder::new(app, "编辑")
+        .item(&item("undo", "撤销")?)
+        .item(&item("redo", "重做")?)
+        .separator()
+        .item(&item("cut", "剪切")?)
+        .item(&item("copy", "复制")?)
+        .item(&item("paste", "粘贴")?)
+        .item(&item("select-all", "全选")?)
+        .build()?;
+
+    let view_menu = SubmenuBuilder::new(app, "视图")
+        .item(&item("theme", "切换浅色 / 深色")?)
+        .separator()
+        .item(&item("mode-wysiwyg", "所见即所得")?)
+        .item(&item("mode-reading", "阅读视图")?)
+        .item(&item("mode-source", "源码视图")?)
+        .build()?;
+
+    let go_menu = SubmenuBuilder::new(app, "转到")
+        .item(&item("outline-prev", "上一个标题")?)
+        .item(&item("outline-next", "下一个标题")?)
+        .separator()
+        .item(&item("doc-start", "文档开头")?)
+        .item(&item("doc-end", "文档结尾")?)
+        .build()?;
+
+    let window_menu = SubmenuBuilder::new(app, "窗口")
+        .minimize()
+        .maximize()
+        .separator()
+        .bring_all_to_front()
+        .build()?;
+
+    let help_menu = SubmenuBuilder::new(app, "帮助")
+        .item(&item("about", "关于 mdview")?)
+        .build()?;
+
+    MenuBuilder::new(app)
+        .item(&app_menu)
+        .item(&file_menu)
+        .item(&edit_menu)
+        .item(&view_menu)
+        .item(&go_menu)
+        .item(&window_menu)
+        .item(&help_menu)
+        .build()
 }
 
 struct RunMode {
@@ -116,8 +225,26 @@ fn main() {
     tauri::Builder::default()
         .manage(session)
         .manage(RunMode { self_test })
-        .invoke_handler(tauri::generate_handler![snapshot, dispatch, ready, selftest])
+        .invoke_handler(tauri::generate_handler![
+            snapshot,
+            dispatch,
+            ready,
+            selftest,
+            use_custom_titlebar
+        ])
         .setup(move |app| {
+            // macOS：标题栏用系统装饰，菜单也用原生菜单栏；点击项转发给前端执行。
+            #[cfg(target_os = "macos")]
+            {
+                let menu = build_native_menu(app.handle())?;
+                app.set_menu(menu)?;
+                app.on_menu_event(|app, event| {
+                    if let Some(action) = menu_action(event.id().as_ref()) {
+                        let _ = app.emit("menu-action", action);
+                    }
+                });
+            }
+
             let Some(path) = watch_path else {
                 return Ok(());
             };

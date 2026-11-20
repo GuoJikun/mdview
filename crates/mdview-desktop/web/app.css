@@ -27,6 +27,18 @@
   --outline-active-bg: #ddf4ff;
   --outline-active-fg: #0969da;
   --outline-border: #d0d7de;
+  /* 自绘标题栏（VSCode 风格）。macOS 用系统标题栏，这几项不会被用到 */
+  --tb-bar-bg: #f3f3f3;
+  --tb-bar-fg: #333;
+  --tb-bar-border: #e5e5e5;
+  --tb-hover: #e4e6f1;
+  --tb-active: #c8d0e8;
+  --tb-popup-bg: #fff;
+  --tb-popup-border: #c8c8c8;
+  --tb-popup-hover: #e4e6f1;
+  --tb-close-hover: #c42b1c;
+  --tb-scroll-thumb: rgba(0, 0, 0, .28);
+  --tb-scroll-thumb-hover: rgba(0, 0, 0, .5);
 }
 :root[data-theme="dark"] {
   --bg: #0d1117;
@@ -53,14 +65,103 @@
   --outline-active-bg: #1f6feb33;
   --outline-active-fg: #58a6ff;
   --outline-border: #30363d;
+  --tb-bar-bg: #181818;
+  --tb-bar-fg: #cccccc;
+  --tb-bar-border: #2b2b2b;
+  --tb-hover: #2a2d2e;
+  --tb-active: #094771;
+  --tb-popup-bg: #252526;
+  --tb-popup-border: #454545;
+  --tb-popup-hover: #094771;
+  --tb-close-hover: #c42b1c;
+  --tb-scroll-thumb: rgba(255, 255, 255, .28);
+  --tb-scroll-thumb-hover: rgba(255, 255, 255, .55);
 }
 
 html, body { margin: 0; padding: 0; }
 body {
-  font: 16px/1.85 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font: 14px/1.85 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   color: var(--fg); background: var(--bg);
   -webkit-font-smoothing: antialiased;
 }
+
+/* ---- 自绘标题栏（Windows / Linux）------------------------------------
+   默认隐藏：macOS 用系统标题栏 + 系统菜单栏，由 <head> 里的平台判定决定
+   是否给 <html> 加 custom-titlebar。窗口 decorations 也按平台配置。 */
+#titlebar, #tb-menu-popup { display: none; }
+html.custom-titlebar #titlebar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 30;
+  display: flex; align-items: center; height: 35px;
+  background: var(--tb-bar-bg); color: var(--tb-bar-fg);
+  border-bottom: 1px solid var(--tb-bar-border);
+  user-select: none; -webkit-user-select: none;
+  font: 13px/1 "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+.tb-left, .tb-center, .tb-right { display: flex; align-items: center; height: 100%; }
+.tb-left { min-width: 0; }
+.tb-logo { display: inline-flex; align-items: center; padding: 0 8px 0 12px; opacity: .85; }
+.tb-menus { display: flex; align-items: center; height: 100%; }
+.tb-menu {
+  font: inherit; color: inherit; background: transparent; border: 0;
+  height: 100%; padding: 0 9px; cursor: default;
+}
+.tb-menu:hover { background: var(--tb-hover); }
+.tb-menu.open { background: var(--tb-active); }
+.tb-center { flex: 1; justify-content: center; min-width: 0; }
+.tb-title {
+  max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--tb-bar-fg); opacity: .7; font-size: 12px;
+}
+.tb-right { height: 100%; }
+.tb-ctl {
+  width: 46px; height: 100%; display: inline-flex; align-items: center; justify-content: center;
+  font: inherit; color: inherit; background: transparent; border: 0; cursor: default;
+}
+.tb-ctl:hover { background: var(--tb-hover); }
+.tb-ctl.tb-close:hover { background: var(--tb-close-hover); color: #fff; }
+
+/* 下拉菜单：绝对定位在标题栏下方，逐项渲染自 titlebar.js */
+html.custom-titlebar #tb-menu-popup {
+  display: block; position: fixed; z-index: 31; min-width: 220px;
+  padding: 4px 0; background: var(--tb-popup-bg);
+  border: 1px solid var(--tb-popup-border);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .22);
+  font: 13px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: var(--tb-bar-fg);
+}
+#tb-menu-popup[hidden] { display: none !important; }
+#tb-menu-popup button {
+  display: flex; align-items: center; justify-content: space-between; gap: 24px;
+  width: 100%; padding: 5px 14px 5px 26px; text-align: left;
+  font: inherit; color: inherit; background: transparent; border: 0; cursor: default;
+}
+#tb-menu-popup button:hover, #tb-menu-popup button:focus-visible,
+#tb-menu-popup button.focused {
+  background: var(--tb-popup-hover); outline: none;
+}
+#tb-menu-popup button .acc { color: var(--faint); font-size: 12px; }
+#tb-menu-popup .sep { height: 1px; margin: 4px 0; background: var(--tb-bar-border); }
+
+/* 有自绘标题栏时，正文与侧栏都从它下面开始 */
+html.custom-titlebar #outline { top: 35px; }
+html.custom-titlebar #doc { padding-top: 91px; }
+
+/* 自绘纵向滚动条：原生滚动条属于窗口视口，会纵跨标题栏和状态栏。
+   top/bottom 由 JS 按标题栏、状态栏的实际高度算出来，只占中间那段。 */
+html.custom-titlebar { scrollbar-width: none; }
+html.custom-titlebar::-webkit-scrollbar,
+html.custom-titlebar body::-webkit-scrollbar { width: 0; height: 0; display: none; }
+#vscroll { display: none; }
+html.custom-titlebar #vscroll {
+  display: block; position: fixed; right: 0; z-index: 25; width: 12px;
+  top: 35px; bottom: 36px;
+}
+#vscroll-thumb {
+  position: absolute; right: 3px; width: 6px; min-height: 28px;
+  border-radius: 3px; background: var(--tb-scroll-thumb);
+}
+html.custom-titlebar #vscroll:hover #vscroll-thumb,
+html.custom-titlebar #vscroll.dragging #vscroll-thumb { background: var(--tb-scroll-thumb-hover); }
 
 /* 大纲侧栏：固定在左侧，正文靠右边距让出位置 */
 #outline {

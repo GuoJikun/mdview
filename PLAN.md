@@ -1,6 +1,6 @@
 # PLAN.md — mdview 开发计划与执行进度
 
-> 最后更新：2026-11-20 12:15（表格子工程收尾）
+> 最后更新：2026-11-20 13:40（跨平台标题栏与菜单）
 > 适用对象：接手本项目的 AI 或开发者。**本文自包含**，读完即可继续，不需要任何历史对话。
 > 每次有实质进展请同步更新第 6 节的状态和第 7 节的快照。
 
@@ -144,6 +144,12 @@ byte   0  2  5  8  10
 - ✅ **主题系统**（2026-11-20）：`app.css` 颜色全部改为 CSS 变量，`[data-theme="dark"]` 覆盖为深色。`theme.js` 默认跟随系统 `prefers-color-scheme`，手动切换存 localStorage、可恢复跟随系统。状态栏按钮一键切换。7 项单测 + 自检验证
 - ✅ **大纲侧栏**（2026-11-20）：`Snapshot` / `Reply` 经 `OutlineDto` 下发标题表（`level`/`title`/`block`）；`web/outline.js` 按锚点实际坐标判定当前节（硬约束 10：不用滚动百分比），侧栏点击按锚点位置跳转。10 项单测 + 自检验证
 - ✅ **同步滚动（锚点插值）**（2026-11-20）：滚动正文时按 `activeIndex(锚点, 阅读基准线)` 高亮当前节，侧栏自动把高亮项滚进视野；resize / 编辑后重测锚点。纯函数 `outline.js` 可在 Node 下测，判定依据是标题块真实纵坐标而非序号均分
+- ✅ **跨平台标题栏与菜单**（2026-11-20）：
+  - Windows/Linux 用 `tauri.windows.conf.json` / `tauri.linux.conf.json` 关掉原生装饰（数组整体替换，须重复完整 window 配置），`web/titlebar.js` 自绘 VSCode 风格标题栏：文件/编辑/选择/视图/转到/帮助六个下拉菜单 + 居中文件名标题 + 最小化/最大化/关闭。`data-tauri-drag-region="deep"` 负责拖拽，按钮不参与拖拽
+  - macOS 保留原生标题栏；`main.rs` 用 `#[cfg(target_os = "macos")]` 构建系统菜单栏，自定义项以 `menu-action` 事件 emit 给前端，和自绘菜单共用 `app.js` 的 `runAction`。原生项不设 accelerator，避免和 `keydown` 重复触发（撤销这类非幂等动作尤其危险）
+  - capability 补 `core:window:allow-{minimize,toggle-maximize,is-maximized,close,start-dragging,set-title}`；`use_custom_titlebar` 命令让前端以 Rust 配置为唯一判据（UA 只用于首帧抢跑）
+  - 验证：`cargo test -p mdview-desktop` 17 项通过，端到端自检 47/47，真实窗口截图确认菜单/标题/窗口按钮与正文让位均正常
+  - **滚动条修正**：原生滚动条属于窗口视口，纵跨整窗会插进标题栏、压住状态栏。改为自绘：`html.custom-titlebar` 隐藏原生滚动条，`#vscroll` 的 top/bottom 按标题栏与状态栏实际高度定位，滑块跟随 `window.scrollY` 并支持拖拽/点轨道；滚动本身仍是 window 的，caret / 大纲 / 拖拽自动滚动的视口坐标逻辑一行未改。截图验证滑块严格落在两栏之间
 
 ### M3 可编辑 🔶
 - ✅ 视觉位置索引（停靠点表）、`Caret { block, stop }`、`next/prev/home/end`
@@ -267,6 +273,7 @@ byte   0  2  5  8  10
 15. **滚动与光标跟随的边界**：页面滚动时只重画光标像素、不再「保证可见」；落点没变也不追视口（不然任何一次重绘回包都会抵消用户的滚动）。这条无法用 `--self-test` 回归：合成出来的滚动是程序化滚动，Chromium 会抑制滚动期间的脚本滚动，有没有这层修复都测不出差别；能测的只有 `scrollDelta` 的几何（`caretline.test.js`）与「按键后光标重新可见」。
 16. **剪贴板写入可能在无焦点窗口里挂起**：`navigator.clipboard.writeText` 在窗口没拿到焦点时，Chromium 会把请求挂住等一个不会来的授权，Promise 永远不 settle。生产里只影响「复制好像没反应」，但**自检会整条卡死**——所以自检里对它的等待必须自带 `Promise.race` 超时。另外 `execCommand('copy')` 兜底会短暂抢走 `#ime` 的焦点，调用方要还回去，否则输入法组合被中断。
 17. **其它块级标记的同类抖动未处理**：`>`（引用）与 `***`／`---`（分隔线）也会在敲完最后一个字符的瞬间改变块类型。它们不涉及字号跳变，先不动；若将来统一处理，应复用同一套「成形」判定。
+18. **菜单没有「新建 / 打开」**：VSCode 的 File 菜单以这两个开头，但项目还没接 `tauri-plugin-dialog`，放进去只能是空壳，所以当前文件菜单只有「保存 / 关闭窗口」。要补齐得引入 dialog 插件，并让 `Session` 支持换文档。
 
 ---
 

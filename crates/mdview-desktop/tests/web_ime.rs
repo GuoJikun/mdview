@@ -57,6 +57,7 @@ fn frontend_scripts_are_syntactically_valid() {
         "outline.test.js",
         "theme.js",
         "theme.test.js",
+        "titlebar.js",
     ] {
         let (ok, output) = run_node(&["--check", script]);
         assert!(ok, "{script} 语法错误：\n{output}");

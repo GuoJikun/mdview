@@ -28,6 +28,7 @@ let revealedStop = null;    // 上一次把光标滚进视口时的停靠点
 let outline = [];           // 大纲项 [{ level, title, block }]
 let outlineAnchors = [];    // 与 outline 同序的锚点 [{ top }]，文档坐标系
 let activeOutlineIdx = -1;  // 当前高亮的大纲项
+let lastTitleKey = null;    // 标题栏去重：path + 脏标记
 
 /** 光标进出视口时上下各留的余量，避免贴着边缘打字。 */
 const REVEAL_MARGIN = 32;
@@ -300,6 +301,12 @@ function renderStatus() {
   const blocks = docEl.children.length;
   const block = caret && caret.block !== null && caret.block !== undefined ? caret.block + 1 : '-';
   const name = meta.path ? meta.path.split(/[\\/]/).pop() : '未命名';
+  // 标题栏只在文件名或脏标记变化时才走一次 IPC，别在每次输入后都设
+  const titleKey = (meta.path || '') + '|' + !!meta.dirty;
+  if (titleKey !== lastTitleKey && window.__mdviewSetTitle) {
+    lastTitleKey = titleKey;
+    window.__mdviewSetTitle(meta.path, meta.dirty);
+  }
   const theme = document.documentElement.getAttribute('data-theme');
   const themeLabel = theme === 'dark' ? '☾ 深色' : '☀ 浅色';
   barEl.innerHTML =
@@ -327,6 +334,58 @@ function toast(text) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1400);
 }
+
+/** 菜单动作统一入口：Windows/Linux 的自绘菜单、macOS 的原生菜单栏共用。 */
+function runAction(action) {
+  switch (action) {
+    case 'undo': send({ kind: 'undo' }); break;
+    case 'redo': send({ kind: 'redo' }); break;
+    case 'save': send({ kind: 'save' }); break;
+    case 'copy': send({ kind: 'copy' }); break;
+    case 'cut': send({ kind: 'cut' }); break;
+    case 'select-all': send({ kind: 'selectAll' }); break;
+    case 'paste':
+      // 菜单点击是用户手势，可以读系统剪贴板；失败就退回快捷键提示
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then((text) => {
+          if (text) send({ kind: 'insertText', text });
+        }).catch(() => toast('请按 Ctrl+V 粘贴'));
+      } else {
+        toast('请按 Ctrl+V 粘贴');
+      }
+      break;
+    case 'theme': {
+      const next = mdviewTheme.toggle();
+      const btn = barEl.querySelector('#theme-btn');
+      if (btn) btn.textContent = next === 'dark' ? '☾ 深色' : '☀ 浅色';
+      break;
+    }
+    case 'mode-wysiwyg': send({ kind: 'setMode', mode: 'wysiwyg' }); break;
+    case 'mode-reading': send({ kind: 'setMode', mode: 'reading' }); break;
+    case 'mode-source': send({ kind: 'setMode', mode: 'source' }); break;
+    case 'line-home':
+    case 'line-end':
+      // 复用键盘路径：行首/行尾的视觉行判定已经在那里实现
+      window.dispatchEvent(new KeyboardEvent('keydown', {
+        key: action === 'line-home' ? 'Home' : 'End', bubbles: true, cancelable: true,
+      }));
+      break;
+    case 'doc-start': send({ kind: 'setCaret', stop: 0, extend: false }); break;
+    case 'doc-end': send({ kind: 'setCaret', stop: maxStop, extend: false }); break;
+    case 'outline-prev':
+    case 'outline-next': {
+      if (!outline.length) { toast('文档没有标题'); break; }
+      const step = action === 'outline-next' ? 1 : -1;
+      const from = activeOutlineIdx < 0 ? (step > 0 ? -1 : outline.length) : activeOutlineIdx;
+      jumpToOutline(Math.max(0, Math.min(outline.length - 1, from + step)));
+      break;
+    }
+    case 'about': toast('mdview v0.1.0 · Rust 内核 + Tauri'); break;
+    default: break;
+  }
+  if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+}
+window.__mdviewRunAction = runAction;
 
 // ---- IPC -------------------------------------------------------------
 
@@ -389,6 +448,7 @@ function applyReply(reply) {
   if (reply.conflict) toast('文件已被外部修改，保存被拒');
   if (reply.saved) toast('已保存');
   renderStatus();
+  if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
 }
 
 /**
@@ -420,6 +480,7 @@ async function boot() {
   rebuildOutline(snap.outline || []);
   applyCaret(snap.caret);
   paintSelection(snap.selection);
+  if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
   // 焦点必须落在透明输入框上：输入法只认真正的可编辑元素
   imeEl.focus({ preventScroll: true });
   // 给内核一个「页面已接管」的信号，日志里能对上游标是否真的画出来了
@@ -429,6 +490,11 @@ async function boot() {
   if (listen) {
     listen('external-change', () => {
       toast('文件已被外部修改，请重新打开以载入最新内容');
+    }).catch(() => {});
+    // macOS 原生菜单栏点选后，Rust 侧把动作名 emit 过来，和自绘菜单走同一条路
+    listen('menu-action', (event) => {
+      const action = typeof event.payload === 'string' ? event.payload : event.payload?.action;
+      if (action) runAction(action);
     }).catch(() => {});
   }
 }
@@ -492,6 +558,11 @@ window.addEventListener('keydown', (event) => {
   const cmd = event.ctrlKey || event.metaKey;
   if (cmd) {
     const key = event.key.toLowerCase();
+    if (key === 'home' || key === 'end') {
+      event.preventDefault();
+      send({ kind: 'setCaret', stop: key === 'home' ? 0 : maxStop, extend: event.shiftKey });
+      return;
+    }
     if (key === 's') { event.preventDefault(); send({ kind: 'save' }); return; }
     if (key === 'z') { event.preventDefault(); send({ kind: event.shiftKey ? 'redo' : 'undo' }); return; }
     if (key === 'y') { event.preventDefault(); send({ kind: 'redo' }); return; }
