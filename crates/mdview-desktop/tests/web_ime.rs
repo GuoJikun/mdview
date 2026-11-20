@@ -53,6 +53,10 @@ fn frontend_scripts_are_syntactically_valid() {
         "dragscroll.js",
         "dragscroll.test.js",
         "clipboard.js",
+        "outline.js",
+        "outline.test.js",
+        "theme.js",
+        "theme.test.js",
     ] {
         let (ok, output) = run_node(&["--check", script]);
         assert!(ok, "{script} 语法错误：\n{output}");
@@ -101,5 +105,27 @@ fn drag_autoscroll_geometry_passes_its_suite() {
     }
     let (ok, output) = run_node(&["dragscroll.test.js"]);
     assert!(ok, "边缘自动滚动测试失败：\n{output}");
+    assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
+}
+
+#[test]
+fn outline_sync_geometry_passes_its_suite() {
+    if !node_ready() {
+        eprintln!("跳过：本机没有 node");
+        return;
+    }
+    let (ok, output) = run_node(&["outline.test.js"]);
+    assert!(ok, "大纲联动几何测试失败：\n{output}");
+    assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
+}
+
+#[test]
+fn theme_resolution_passes_its_suite() {
+    if !node_ready() {
+        eprintln!("跳过：本机没有 node");
+        return;
+    }
+    let (ok, output) = run_node(&["theme.test.js"]);
+    assert!(ok, "主题解析测试失败：\n{output}");
     assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
 }

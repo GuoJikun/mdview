@@ -7,6 +7,8 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
+<!-- 大纲侧栏：标题清单，点击跳正文，滚动时高亮当前节 -->
+<nav id="outline" aria-label="文档大纲"></nav>
 <!-- 内核持有文本真值，这里只有投影：每块一个 <section>，每个停靠点一个元素 -->
 <div id="doc" tabindex="-1" spellcheck="false"></div>
 <div id="caret"></div>
@@ -23,6 +25,8 @@
 <script src="dragscroll.js"></script>
 <script src="selection.js"></script>
 <script src="clipboard.js"></script>
+<script src="outline.js"></script>
+<script src="theme.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -117,6 +117,8 @@ pub struct Snapshot {
     pub caret: Option<CaretDto>,
     /// 选区停靠点区间（已归一），`null` 表示没有选区
     pub selection: Option<[usize; 2]>,
+    /// 大纲（标题项），供侧栏渲染与滚动定位
+    pub outline: Vec<OutlineDto>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -134,6 +136,8 @@ pub struct Reply {
     pub clipboard: Option<String>,
     pub conflict: bool,
     pub saved: bool,
+    /// 大纲随每次编辑回包，前端据此增量更新侧栏
+    pub outline: Option<Vec<OutlineDto>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -143,6 +147,14 @@ pub struct PatchDto {
     pub old_len: usize,
     pub new_len: usize,
     pub html: String,
+}
+
+/// 大纲项。`block` 是块索引，前端据此找到对应 DOM 元素定位滚动。
+#[derive(Debug, Serialize, Clone)]
+pub struct OutlineDto {
+    pub level: u8,
+    pub title: String,
+    pub block: usize,
 }
 
 #[derive(Clone)]
@@ -179,6 +191,7 @@ impl Session {
             blocks: blocks_of(app.frames()),
             caret: caret_of(&app),
             selection: selection_of(&app),
+            outline: outline_of(&app),
         }
     }
 
@@ -190,6 +203,7 @@ impl Session {
             dirty: app.dirty,
             caret: Some(caret_of(&app).unwrap_or_default()),
             selection: selection_of(&app),
+            outline: Some(outline_of(&app)),
             ..Reply::default()
         };
         for effect in effects {
@@ -261,6 +275,18 @@ fn blocks_of(frames: &[BlockFrame]) -> Vec<BlockDto> {
             base: frame.base,
             end: frame.end,
             html: frame.html.clone(),
+        })
+        .collect()
+}
+
+fn outline_of(app: &AppState) -> Vec<OutlineDto> {
+    app.parsed
+        .outline
+        .iter()
+        .map(|item| OutlineDto {
+            level: item.level,
+            title: item.title.clone(),
+            block: item.block_id.0,
         })
         .collect()
 }

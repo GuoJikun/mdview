@@ -129,7 +129,7 @@ byte   0  2  5  8  10
 - ✅ 外部冲突检测：mtime + size 指纹比对（`Fingerprint`）
 - ✅ **Watcher 实现**（2026-11-20）：`NotifyWatcher`（notify 8）监听父目录而非单文件——编辑器保存常走「写临时文件 → rename 覆盖」，watch 单文件会在 rename 瞬间丢监听目标。回调过滤 Modify/Create/Remove（忽略 Access），`poll()` 取走并去重。后台线程 400ms 轮询，命中后用 `AppState::externally_modified` 指纹比对**挡掉自己保存产生的事件**，再 emit `external-change`；前端 `app.js` 监听后 toast 提示（不自动重载，避免冲掉未保存编辑）。自检模式不开监听。端到端测试 + 去重单测各 1 项
 
-### M2 只读渲染 🔶
+### M2 只读渲染 ✅
 - ✅ 投影模型：`Block` / `Span` / `hidden`，HTML 合成（`to_html()`）
 - ✅ 安全：raw HTML 降级为文本（`ENABLE_RAW_HTML` 不启用 + 事件流显式转义），已测 `<script>` 不会泄漏
 - ✅ 样式：标题 / 加粗 / 斜体 / 删除线 / 行内代码 / 链接 / 引用 / 代码块 / 分隔线
@@ -141,8 +141,9 @@ byte   0  2  5  8  10
   - 阅读态 `to_html` 顺带修好：以前列表输出 `<ol>甲<br>乙</ol>`，没有 `<li>`，浏览器只给一个序号；现在按项切 `<li>`，有序列表带 `<ol start="N">`。为此 `to_html` 需要 `src` 参数（`<li>` 边界与起始号只能从源码读）
 - ✅ **Tauri 2 外壳**（`crates/mdview-desktop`）：`frontendDist` 指向内嵌的 `web/`，`session.rs` 隔离 IPC 契约（前端 `kind` 字符串 → `Message`），窗口创建与 IPC 已用启动探针在日志中验证
 - ✅ 前端渲染：按块落地、增量应用 `Patch`、用停靠点 `data-b`/`data-a` 的左右边缘量出 caret 像素、点击/拖动报停靠点
-- ⬜ 主题系统、大纲侧栏
-- ⬜ 同步滚动（锚点插值）
+- ✅ **主题系统**（2026-11-20）：`app.css` 颜色全部改为 CSS 变量，`[data-theme="dark"]` 覆盖为深色。`theme.js` 默认跟随系统 `prefers-color-scheme`，手动切换存 localStorage、可恢复跟随系统。状态栏按钮一键切换。7 项单测 + 自检验证
+- ✅ **大纲侧栏**（2026-11-20）：`Snapshot` / `Reply` 经 `OutlineDto` 下发标题表（`level`/`title`/`block`）；`web/outline.js` 按锚点实际坐标判定当前节（硬约束 10：不用滚动百分比），侧栏点击按锚点位置跳转。10 项单测 + 自检验证
+- ✅ **同步滚动（锚点插值）**（2026-11-20）：滚动正文时按 `activeIndex(锚点, 阅读基准线)` 高亮当前节，侧栏自动把高亮项滚进视野；resize / 编辑后重测锚点。纯函数 `outline.js` 可在 Node 下测，判定依据是标题块真实纵坐标而非序号均分
 
 ### M3 可编辑 🔶
 - ✅ 视觉位置索引（停靠点表）、`Caret { block, stop }`、`next/prev/home/end`
@@ -208,10 +209,10 @@ byte   0  2  5  8  10
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-20（M1 收尾）
-- 测试：**Rust 169 项全过**（markdown 79 / app 64 / desktop 14 / support 7 / core 5），无编译告警；desktop 那一组里 5 项是前端守门（`node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`）+ 四套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项，共 54 项）
+- 日期：2026-11-20（M1 + M2 收尾）
+- 测试：**Rust 173 项全过**（markdown 79 / app 64 / desktop 16 / support 7 / core 5），无编译告警；desktop 那一组里 7 项是前端守门（`node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`、`outline.js`、`theme.js`）+ 六套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项、`outline` 10 项、`theme` 7 项，共 71 项）
 - 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`cargo run -p mdview-desktop -- crates/mdview-desktop/tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 34/34」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+- 自检：`cargo run -p mdview-desktop -- crates/mdview-desktop/tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 39/39」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 5 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
 - 最近提交（Angular 规范）：
@@ -235,6 +236,7 @@ byte   0  2  5  8  10
   - `feat(desktop): 拖动选区到窗口边缘时自动滚动`
   - `fix(markdown): 有序列表显示序号，松散列表不再退化成段落`
   - `feat(app): 保存改为内核级原子替换并接入文件监听，补齐 M1`
+  - `feat(desktop): 加入主题系统与大纲侧栏，完成 M2 收尾`
 - 分支：全部特性/修复分支已按线性顺序快进并入 `main`（`3110c20`），`origin/main` 只差在 `feat: 初始化内核…`，普通 `git push origin main` 即可，不需要 force
 
 ---
@@ -271,7 +273,7 @@ byte   0  2  5  8  10
 1. ~~**`selectAll`**~~ **已完成**：全选 / 复制 / 剪切三条消息 + `Ctrl+A` / `Ctrl+C` / `Ctrl+X`。剩下的相关缺口是 **粘贴**——`paste` 事件直接把 `clipboardData` 的纯文本发给 `InsertText`，还没有 HTML→Markdown 的规范化（见 M4）
 2. ~~**选区拖动到窗口边缘的自动滚动**~~ **已完成**：`web/dragscroll.js` + `--self-test` 三项。剩下的相邻缺口只有「拖到窗口左右两侧时横向自动滚动」——正文不横向滚动，当前不需要。
 3. ~~**`Watcher` 落地**（`notify`）~~ **已完成（M1，2026-11-20）**：`NotifyWatcher` + 父目录监听 + 指纹二次确认 + `external-change` 事件 + 前端 toast。
-4. **M2 收尾**：主题系统、大纲侧栏、同步滚动（锚点插值）——见第 6 节 M2。
+4. ~~**M2 收尾**~~ **已完成（2026-11-20）**：主题系统、大纲侧栏、同步滚动（锚点插值）——见第 6 节 M2。
 5. **词尾重合停靠点的退格语义**：词首已经收敛为一处（不可见的那端不再产生停靠点），词尾仍保留两个（见第 8 节第 9 条），需要按实际手感定方向。
 6. **表格子工程**：`<table>` 渲染 + 单元格内停靠点，替代当前的文本流占位。这是剩余最大的一块。
 7. **引用 / 分隔线的成形判定**：见第 8 节第 17 条，与标题同源，可复用判定函数。
@@ -326,7 +328,9 @@ node crates/mdview-desktop/web/dragscroll.test.js # 边缘自动滚动几何单�
 | 外部修改提示（前端 listen + toast） | `crates/mdview-desktop/web/app.js`（boot） |
 | 日志滚动 | `crates/mdview-support/src/logging.rs` |
 | 命令行入口（含 `demo edit` 回放） | `crates/mdview-cli/src/main.rs` |
-| **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包） | `crates/mdview-desktop/src/session.rs` |
+| **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包、大纲下发） | `crates/mdview-desktop/src/session.rs` |
+| **大纲侧栏**（锚点判定 + 跳转，不碰 DOM，Node 可测） | `crates/mdview-desktop/web/outline.js`、`outline.test.js`、`app.js`（侧栏渲染/联动） |
+| **主题系统**（跟随系统 + 手动切换 + localStorage，不碰 DOM，Node 可测） | `crates/mdview-desktop/web/theme.js`、`theme.test.js`、`app.css`（CSS 变量） |
 | **编辑页**（停靠点 → 像素、按键 → 消息、增量应用、自检入口） | `crates/mdview-desktop/web/app.js` |
 | **输入法状态机**（不碰 DOM，Node 可测） | `crates/mdview-desktop/web/ime.js`、`ime.test.js` |
 | **上下移动几何**（视觉行判定 + 期望列，不碰 DOM，Node 可测） | `crates/mdview-desktop/web/caretline.js`、`caretline.test.js` |
@@ -335,7 +339,7 @@ node crates/mdview-desktop/web/dragscroll.test.js # 边缘自动滚动几何单�
 | 自检样张（必须是「一块一行」的文档） | `crates/mdview-desktop/tests/fixtures/selftest.md` |
 | **剪贴板写入**（内核给文本、前端写系统剪贴板，`execCommand` 兜底） | `crates/mdview-desktop/web/clipboard.js` |
 | **键位契约**（`Ctrl+A/C/X` → `selectAll`/`copy`/`cut`，见 `app.js` 的 keydown） | `crates/mdview-desktop/web/app.js`、`crates/mdview-desktop/src/session.rs` |
-| 前端守门测试（语法检查 + 跑两套 Node 用例） | `crates/mdview-desktop/tests/web_ime.rs` |
+| 前端守门测试（语法检查 + 跑六套 Node 用例） | `crates/mdview-desktop/tests/web_ime.rs` |
 
 ---
 

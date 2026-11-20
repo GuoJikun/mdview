@@ -11,6 +11,7 @@ const preeditEl = document.getElementById('preedit');
 const imeEl = document.getElementById('ime');
 const barEl = document.getElementById('bar');
 const toastEl = document.getElementById('toast');
+const outlineEl = document.getElementById('outline');
 
 let byBefore = new Map();   // 停靠点 → 从它开始的元素
 let byAfter = new Map();    // 停靠点 → 在它结束的元素
@@ -24,6 +25,9 @@ let dragPoint = null;       // 拖动期间指针的视口坐标（自动滚动�
 let dragStop = null;        // 拖动中已发出的落点，避免同一落点每帧都过一趟 IPC
 let imeAnchorEl = null;     // preedit 复制字号用的参照元素（光标所在的字）
 let revealedStop = null;    // 上一次把光标滚进视口时的停靠点
+let outline = [];           // 大纲项 [{ level, title, block }]
+let outlineAnchors = [];    // 与 outline 同序的锚点 [{ top }]，文档坐标系
+let activeOutlineIdx = -1;  // 当前高亮的大纲项
 
 /** 光标进出视口时上下各留的余量，避免贴着边缘打字。 */
 const REVEAL_MARGIN = 32;
@@ -81,6 +85,79 @@ function applyPatch(patch) {
     for (const node of nodes) docEl.appendChild(node);
   }
   reindex();
+}
+
+// ---- 大纲侧栏 --------------------------------------------------------
+
+/** 阅读基准线距视口顶部的距离：标题滚到这里就算「当前节」。 */
+const OUTLINE_LINE = 80;
+
+/**
+ * 重新渲染侧栏并测量锚点。
+ *
+ * 锚点 = 每个标题块在文档坐标系里的纵坐标（rect.top + scrollY），与大纲项
+ * 同序。判定当前节时用「最后一个越过基准线的锚点」，按真实位置而非滚动
+ * 百分比（PLAN 硬约束 10）——标题疏密不均时才对得上。
+ */
+function rebuildOutline(items) {
+  outline = items || [];
+  if (!outline.length) {
+    outlineEl.innerHTML = '<div class="oc-title">大纲</div><div class="oc-empty">（无标题）</div>';
+    outlineAnchors = [];
+    activeOutlineIdx = -1;
+    return;
+  }
+  outlineEl.replaceChildren(...[
+    Object.assign(document.createElement('div'), { className: 'oc-title', textContent: '大纲' }),
+    ...outline.map((item, i) => {
+      const a = document.createElement('a');
+      a.className = 'level-' + Math.min(Math.max(item.level, 1), 6);
+      a.textContent = item.title || '（无标题）';
+      a.dataset.idx = String(i);
+      a.title = item.title;
+      return a;
+    }),
+  ]);
+  refreshOutlineAnchors();
+}
+
+/** 重新测量锚点（DOM 变化或窗口缩放后调用）。 */
+function refreshOutlineAnchors() {
+  const scrollY = window.scrollY || window.pageYOffset || 0;
+  outlineAnchors = outline.map((item) => {
+    const el = docEl.children[item.block];
+    const top = el ? el.getBoundingClientRect().top + scrollY : Number.POSITIVE_INFINITY;
+    return { top };
+  });
+  updateActiveOutline();
+}
+
+/** 按滚动位置高亮当前节。 */
+function updateActiveOutline() {
+  if (!outline.length) return;
+  const scrollY = window.scrollY || window.pageYOffset || 0;
+  const line = scrollY + OUTLINE_LINE;
+  const idx = outlineActiveIndex(outlineAnchors, line);
+  if (idx === activeOutlineIdx) return;
+  activeOutlineIdx = idx;
+  const links = outlineEl.querySelectorAll('a[data-idx]');
+  links.forEach((a) => a.classList.toggle('active', Number(a.dataset.idx) === idx));
+  // 让高亮项在侧栏里保持可见（侧栏自己滚动）
+  const active = links[idx];
+  if (active) {
+    const ar = active.getBoundingClientRect();
+    const nr = outlineEl.getBoundingClientRect();
+    if (ar.top < nr.top + 8) outlineEl.scrollTop -= (nr.top + 8 - ar.top);
+    else if (ar.bottom > nr.bottom - 8) outlineEl.scrollTop += (ar.bottom - nr.bottom + 8);
+  }
+}
+
+/** 点击大纲项：按锚点实际位置把该标题滚到阅读基准线处。 */
+function jumpToOutline(idx) {
+  const anchor = outlineAnchors[idx];
+  if (!anchor || !isFinite(anchor.top)) return;
+  const target = outlineScrollToAnchor(anchor.top, OUTLINE_LINE);
+  window.scrollTo({ top: target, behavior: 'smooth' });
 }
 
 // ---- 光标 ------------------------------------------------------------
@@ -216,12 +293,15 @@ function renderStatus() {
   const blocks = docEl.children.length;
   const block = caret && caret.block !== null && caret.block !== undefined ? caret.block + 1 : '-';
   const name = meta.path ? meta.path.split(/[\\/]/).pop() : '未命名';
+  const theme = document.documentElement.getAttribute('data-theme');
+  const themeLabel = theme === 'dark' ? '☾ 深色' : '☀ 浅色';
   barEl.innerHTML =
     '<span>' + name + (meta.dirty ? ' <b class="dirty">●</b>' : '') + '</span>' +
     '<span>块 <b>' + block + '/' + blocks + '</b></span>' +
     '<span>停靠点 <b>' + (caret ? caret.stop : '-') + '</b></span>' +
     '<span>列 <b>' + (caret && caret.visual !== null ? caret.visual : '-') + '</b></span>' +
     '<span>r<b>' + meta.revision + '</b></span>' +
+    '<button id="theme-btn" title="切换浅色/深色主题">' + themeLabel + '</button>' +
     '<span class="hint">← → 移动 · Shift 扩选 · Enter 分段 · Ctrl+S 保存 · Ctrl+Z 撤销</span>';
 }
 
@@ -284,6 +364,8 @@ function applyReply(reply) {
   } else if (reply.patch) {
     applyPatch(reply.patch);
   }
+  if (reply.outline) rebuildOutline(reply.outline);
+  else refreshOutlineAnchors();
   if (reply.caret) applyCaret(reply.caret);
   paintSelection(reply.selection);
   meta.revision = reply.revision;
@@ -315,9 +397,12 @@ function writeClipboard(text) {
 }
 
 async function boot() {
+  // 主题必须在渲染前定下来，避免浅色闪一下再切深色
+  mdviewTheme.init();
   const snap = await invoke('snapshot');
   meta = { revision: snap.revision, dirty: snap.dirty, path: snap.path, stops: snap.stops };
   renderAll(snap.blocks);
+  rebuildOutline(snap.outline || []);
   applyCaret(snap.caret);
   paintSelection(snap.selection);
   // 焦点必须落在透明输入框上：输入法只认真正的可编辑元素
@@ -628,8 +713,12 @@ window.addEventListener('mouseup', endDrag);
 window.addEventListener('blur', endDrag);
 
 // 滚动时**不能**把光标拉回视口：光标是文档坐标，自己会跟着走。
-// 这里只刷新像素（元素可能被 patch 换掉），滚动意图完全交给用户。
-window.addEventListener('scroll', () => { if (caret) applyCaret(caret, false); }, { passive: true });
+// 这里只刷新像素（元素可能被 patch 换掉），滚动意图完全交给用户；
+// 同时按锚点更新大纲高亮（当前节）。
+window.addEventListener('scroll', () => {
+  if (caret) applyCaret(caret, false);
+  updateActiveOutline();
+}, { passive: true });
 // 窗口宽度变了，行会重新折行，旧的期望 x 已经没意义；光标可能因此落到视口外，
 // 这里的落点没变却必须重新露出来，所以带 force
 window.addEventListener('resize', () => {
@@ -637,6 +726,25 @@ window.addEventListener('resize', () => {
   if (caret) applyCaret(caret, true, true);
   // 拖动中途缩放：边缘带的像素位置变了，重新判一次
   if (dragging && dragPoint) dragScroll.update(dragPoint.y);
+  // 折行会改变标题的纵坐标，锚点要重测
+  refreshOutlineAnchors();
+});
+
+// 大纲点击（事件委托：侧栏会被整块重建）
+outlineEl.addEventListener('click', (event) => {
+  const link = event.target.closest('a[data-idx]');
+  if (!link) return;
+  event.preventDefault();
+  jumpToOutline(Number(link.dataset.idx));
+});
+
+// 主题按钮（事件委托：状态栏每次 renderStatus 都会重建 innerHTML）
+barEl.addEventListener('click', (event) => {
+  const btn = event.target.closest('#theme-btn');
+  if (!btn) return;
+  const theme = mdviewTheme.toggle();
+  btn.textContent = theme === 'dark' ? '☾ 深色' : '☀ 浅色';
+  if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
 });
 
 // ---- 自检 ------------------------------------------------------------
@@ -918,6 +1026,42 @@ window.__mdviewSelfTest = async function () {
     // 原生选区的清理**不在这里测**：自检窗口拿不到键盘焦点，`addRange` 之后
     // 浏览器立刻就把选区收走了，关不关清理逻辑读到的都是 rangeCount=0——
     // 那种断言只会给假绿。判据由 `selection.test.js` 覆盖。
+
+    // ---- M2：大纲侧栏 / 同步滚动 / 主题 ----
+    const fresh = await invoke('snapshot');
+    check('大纲渲染出标题项',
+      (fresh.outline || []).length > 0 && outlineEl.querySelectorAll('a[data-idx]').length === fresh.outline.length,
+      'outline=' + (fresh.outline || []).length + ' links=' + outlineEl.querySelectorAll('a[data-idx]').length);
+    check('大纲锚点按文档坐标递增',
+      outlineAnchors.length === outline.length &&
+        outlineAnchors.every((a, i) => i === 0 || a.top >= outlineAnchors[i - 1].top),
+      JSON.stringify(outlineAnchors.map((a) => Math.round(a.top))));
+    // 点大纲最后一项应把对应标题滚进视口（anchor 是有限值，target ≥ 0）
+    if (outlineAnchors.length > 1) {
+      const last = outlineAnchors.length - 1;
+      const target = outlineScrollToAnchor(outlineAnchors[last].top, OUTLINE_LINE);
+      check('大纲跳转目标在文档内', target >= 0 && isFinite(target),
+        'target=' + Math.round(target));
+    } else {
+      check('大纲跳转目标在文档内', true, '只有一个标题，跳过');
+    }
+    // 主题：data-theme 已被 init 定下，切换按钮能翻到另一档
+    const themeBefore = document.documentElement.getAttribute('data-theme');
+    check('主题属性已初始化', themeBefore === 'light' || themeBefore === 'dark',
+      String(themeBefore));
+    // 记下原始偏好，测完原样恢复，不把「跟随系统」改成固定值
+    let savedPref = null;
+    try { savedPref = localStorage.getItem('mdview-theme'); } catch (_) {}
+    const themeAfter = mdviewTheme.toggle();
+    check('主题切换生效',
+      themeAfter !== themeBefore &&
+        document.documentElement.getAttribute('data-theme') === themeAfter,
+      themeBefore + ' → ' + themeAfter);
+    try {
+      if (savedPref === null) localStorage.removeItem('mdview-theme');
+      else localStorage.setItem('mdview-theme', savedPref);
+    } catch (_) {}
+    mdviewTheme.init(); // 按恢复后的偏好重新应用
   } catch (err) {
     check('自检未抛异常', false, String(err));
   }

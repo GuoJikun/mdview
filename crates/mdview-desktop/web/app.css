@@ -1,12 +1,97 @@
 * { box-sizing: border-box; }
+
+/* 主题变量。默认浅色（GitHub 风格），深色由 [data-theme="dark"] 覆盖。
+   手动切换的优先级高于系统：data-theme 一旦被 theme.js 写入就固定下来。 */
+:root {
+  --bg: #fff;
+  --fg: #1f2328;
+  --muted: #57606a;
+  --faint: #8b949e;
+  --border: #eaecef;
+  --code-bg: #f6f8fa;
+  --inline-code-bg: #eff1f3;
+  --quote-border: #dfe2e5;
+  --link: #0969da;
+  --rule: #d0d7de;
+  --img-border: #b6bcc4;
+  --img-bg: #fafbfc;
+  --dirty: #bf8700;
+  --caret: #0969da;
+  --sel: rgba(37, 99, 235, .18);
+  --preedit-bg: #fff;
+  --bar-bg: rgba(255, 255, 255, .94);
+  --toast-bg: rgba(31, 35, 40, .9);
+  --toast-fg: #fff;
+  --outline-bg: #f6f8fa;
+  --outline-hover: #eaeef2;
+  --outline-active-bg: #ddf4ff;
+  --outline-active-fg: #0969da;
+  --outline-border: #d0d7de;
+}
+:root[data-theme="dark"] {
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #8b949e;
+  --faint: #6e7681;
+  --border: #30363d;
+  --code-bg: #161b22;
+  --inline-code-bg: #21262d;
+  --quote-border: #3d444d;
+  --link: #58a6ff;
+  --rule: #484f58;
+  --img-border: #484f58;
+  --img-bg: #161b22;
+  --dirty: #d29922;
+  --caret: #58a6ff;
+  --sel: rgba(88, 166, 255, .25);
+  --preedit-bg: #1c2128;
+  --bar-bg: rgba(13, 17, 23, .94);
+  --toast-bg: rgba(48, 54, 61, .95);
+  --toast-fg: #e6edf3;
+  --outline-bg: #161b22;
+  --outline-hover: #21262d;
+  --outline-active-bg: #1f6feb33;
+  --outline-active-fg: #58a6ff;
+  --outline-border: #30363d;
+}
+
 html, body { margin: 0; padding: 0; }
 body {
   font: 16px/1.85 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
-  color: #1f2328; background: #fff;
+  color: var(--fg); background: var(--bg);
   -webkit-font-smoothing: antialiased;
 }
+
+/* 大纲侧栏：固定在左侧，正文靠右边距让出位置 */
+#outline {
+  position: fixed; left: 0; top: 0; bottom: 0; z-index: 8;
+  width: 232px; overflow-y: auto; padding: 20px 12px 80px;
+  background: var(--outline-bg); border-right: 1px solid var(--outline-border);
+  font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  scrollbar-width: thin;
+}
+#outline .oc-title {
+  font-weight: 600; color: var(--muted); padding: 0 8px 10px;
+  letter-spacing: .02em;
+}
+#outline .oc-empty { padding: 0 8px; color: var(--faint); }
+#outline a {
+  display: block; text-decoration: none; color: var(--muted);
+  padding: 4px 8px; border-radius: 4px; margin: 1px 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer;
+}
+#outline a:hover { background: var(--outline-hover); color: var(--fg); }
+#outline a.level-1 { font-weight: 600; }
+#outline a.level-2 { padding-left: 18px; }
+#outline a.level-3 { padding-left: 30px; }
+#outline a.level-4 { padding-left: 42px; }
+#outline a.level-5, #outline a.level-6 { padding-left: 54px; }
+#outline a.active { background: var(--outline-active-bg); color: var(--outline-active-fg); }
+
 #doc {
   max-width: 780px; margin: 0 auto; padding: 56px 32px 45vh;
+  margin-left: max(calc(50% - 390px + 116px), 232px + 32px);
   outline: none; cursor: text;
 }
 .blk { position: relative; margin: 0 0 1.1em; white-space: pre-wrap; }
@@ -17,45 +102,45 @@ h4 { font-size: 1.12em; } h5, h6 { font-size: 1em; }
 .code {
   font-family: "Cascadia Code", Consolas, "Courier New", monospace;
   font-size: .92em; line-height: 1.6; white-space: pre;
-  background: #f6f8fa; border: 1px solid #eaecef; border-radius: 6px;
+  background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px;
   padding: .9em 1em; overflow-x: auto;
 }
 blockquote {
-  margin: 0; padding-left: 1em; border-left: 3px solid #dfe2e5; color: #57606a;
+  margin: 0; padding-left: 1em; border-left: 3px solid var(--quote-border); color: var(--muted);
 }
 .kind-list { padding-left: 1.5em; }
 .li { position: relative; }
-.li::before { content: "•"; position: absolute; left: -1.05em; color: #8b949e; }
+.li::before { content: "•"; position: absolute; left: -1.05em; color: var(--faint); }
 /* 有序项：序号右对齐、向左生长。`data-m` 是源码里那一项自己的标记
    （`1.` / `2)`），多位数不会把正文顶开，也不会被 counter 改号。 */
 .li[data-m]::before { content: attr(data-m); left: auto; right: calc(100% + .35em); }
 .li:has(.atom.task)::before { content: none; }
 .li:has(.atom.task) { padding-left: .1em; }
 .sep { display: inline-block; width: .55em; }
-.atom.rule { display: block; color: #d0d7de; letter-spacing: .1em; }
+.atom.rule { display: block; color: var(--rule); letter-spacing: .1em; }
 .b { font-weight: 650; }
 .i { font-style: italic; }
-.d { text-decoration: line-through; color: #6e7781; }
+.d { text-decoration: line-through; color: var(--muted); }
 .c {
   font-family: "Cascadia Code", Consolas, monospace; font-size: .9em;
-  background: #eff1f3; border-radius: 3px;
+  background: var(--inline-code-bg); border-radius: 3px;
 }
-.a { color: #0969da; text-decoration: underline; text-underline-offset: 2px; }
+.a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
 /* 折叠的标记仍然占位，只是不可见：它是停靠点之间的「跨栏」 */
 .mk { color: transparent; }
 .eob, .mk { user-select: none; }
 .atom { display: inline-block; vertical-align: baseline; }
 .atom.img {
-  min-width: 1.6em; padding: 0 .35em; border: 1px dashed #b6bcc4; border-radius: 4px;
-  color: #57606a; font-size: .82em; text-align: center; background: #fafbfc;
+  min-width: 1.6em; padding: 0 .35em; border: 1px dashed var(--img-border); border-radius: 4px;
+  color: var(--muted); font-size: .82em; text-align: center; background: var(--img-bg);
 }
-.atom.task { color: #57606a; }
-.sel { background: rgba(37, 99, 235, .18); border-radius: 2px; }
+.atom.task { color: var(--muted); }
+.sel { background: var(--sel); border-radius: 2px; }
 /* 原生选区不上色：选区只由自绘 .sel 表达（见 app.js 的 selectionchange）。
    留着这条兜底，是怕清理晚一帧时用户看到两套高亮叠在一起。 */
 #doc ::selection { background: transparent; }
 #caret {
-  position: absolute; width: 2px; background: #0969da; border-radius: 1px;
+  position: absolute; width: 2px; background: var(--caret); border-radius: 1px;
   pointer-events: none; display: none;
 }
 #caret.blink { animation: caret-blink 1.05s steps(1) infinite; }
@@ -77,24 +162,30 @@ blockquote {
 #preedit {
   position: absolute; z-index: 6; display: none; pointer-events: none;
   padding: 0 1px; border-radius: 2px; white-space: pre;
-  background: #fff; color: #1f2328;
+  background: var(--preedit-bg); color: var(--fg);
   text-decoration: underline; text-underline-offset: 3px;
-  box-shadow: 0 1px 4px rgba(31, 35, 40, .12);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .12);
 }
 #bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
   display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
   padding: 8px 18px; font: 12px/1.6 ui-monospace, Consolas, monospace;
-  color: #57606a; background: rgba(255, 255, 255, .94);
-  border-top: 1px solid #eaecef; backdrop-filter: blur(6px);
+  color: var(--muted); background: var(--bar-bg);
+  border-top: 1px solid var(--border); backdrop-filter: blur(6px);
 }
-#bar b { color: #1f2328; font-weight: 600; }
-#bar .hint { margin-left: auto; color: #8b949e; }
-#bar .dirty { color: #bf8700; }
+#bar b { color: var(--fg); font-weight: 600; }
+#bar .hint { margin-left: auto; color: var(--faint); }
+#bar .dirty { color: var(--dirty); }
+#theme-btn {
+  font: inherit; color: var(--muted); background: transparent;
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 8px; cursor: pointer;
+}
+#theme-btn:hover { color: var(--fg); background: var(--outline-hover); }
 #toast {
   position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%);
   padding: 6px 14px; border-radius: 6px; font-size: 13px;
-  background: rgba(31, 35, 40, .9); color: #fff; opacity: 0;
+  background: var(--toast-bg); color: var(--toast-fg); opacity: 0;
   transition: opacity .2s ease; pointer-events: none; z-index: 20;
 }
 #toast.show { opacity: 1; }
