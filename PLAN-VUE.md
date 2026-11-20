@@ -193,7 +193,7 @@ CSP 保持 `default-src 'self'`，**不要**为 Vue 开 `unsafe-eval`：走 runt
 
 `icons/` 与 `capabilities/` 随 crate 一起挪即可：Tauri 相对 conf 目录自动查找，配置里无需改路径。
 
-**`dist/` 是否提交（P3 待决）**：参考项目 `image-view` 把 `dist` 写进 `.gitignore`，但它有完整的 `tauri build` 流程兜底。本项目 `generate_context!()` 在 `cargo build` 时就要读产物——若 `dist/` 不存在会直接编译失败，而不少人习惯只跑 `cargo build`。所以 P0 阶段先把 `dist/` 提交进仓库，保证任何 clone 都能直接构建。P3 若要改成忽略产物，须同时保证 CI/文档里 `cargo build` 前一定先跑 `pnpm build`，否则会踩空。
+**`dist/` 不提交（已定）**：与参考项目 `image-view` 一致，`dist` 写进 `.gitignore`，构建产物不入仓库。代价是 `generate_context!()` 在 `cargo build` 时就要读产物——**自 clone 起、或清空 `dist/` 后，必须先 `pnpm build` 再 `cargo build`**，直接 `cargo build` 会因找不到前端资源而编译失败。`tauri dev/build` 走 `beforeDevCommand` / `beforeBuildCommand` 会自动先构建前端，不受此限；只有直接跑 `cargo` 命令时才需要手动先 build。
 
 ---
 
@@ -258,18 +258,19 @@ P0-a 独立成段是因为它和 Vue 无关、纯路径调整，先做能单独�
 9. **相对路径基准变了**：conf、`build.rs`、守门测试的 CWD/基准目录都从 crate 根变成 `src-tauri/`，所有 `web` 相关路径都要重新核对；`generate_context!()` 和 capabilities 因随 conf 同目录而免疫。
 10. **UMD 脚本必须带 `type="module"` 才会被 Vite 打包**：`index.html` 里那 9 个 `<script src="/src/xxx.js">` 若不写 `type="module"`，Vite 会警告「can't be bundled」并原样输出 `/src/` 路径，而 dist 里没有 `src/` 目录 → 运行时全部 404。加上后 Vite 把它们打进 bundle，ES module 按文档顺序执行，恰好保住 UMD 脚本间的依赖顺序，且模块作用域避免了顶层 `const` 撞名。**P2 迁移某脚本时要同步把它从 index.html 移除**，否则会重复执行。
 11. **`"type": "module"` 与 CommonJS 测试的冲突**：前端根 `package.json` 必须是 `type: module`（Vite 要求），但六套 `*.test.js` 用 `require('assert')`。解法是在 `src/` 下放一个局部 `package.json` 写 `{"type":"commonjs"}`，让 Node 按 CommonJS 跑测试，Vite 不受影响（P0-b 实测：加了之后 `pnpm build` 与守门测试同时通过）。**不要**把测试改成 `.cjs`——那会牵动守门测试里的文件名清单。
+12. **`dist/` 不入库，直接 `cargo build` 会失败**：`generate_context!()` 编译期读 `dist/index.html`，新 clone 或清理后它是空的。任何 `cargo` 直跑前先 `pnpm build`；`tauri dev/build` 有 before 命令兜底。`cargo test --workspace` 也会编译 desktop bin，所以首次跑测试前同样要先 build 前端。
 
 ---
 
 ## 8. 验证命令
 
 ```bash
-# 构建（前端工程根）
+# 构建前端（dist 不入库；自 clone 起或清空 dist 后必须先跑这一步）
 pnpm --dir crates/mdview-desktop install
 pnpm --dir crates/mdview-desktop build
 pnpm --dir crates/mdview-desktop exec vue-tsc --noEmit
 
-# 全量测试（含守门测试，注意 fixtures 新路径）
+# 全量测试（含守门测试，注意 fixtures 新路径；cargo 直接跑依赖上面的 dist）
 cargo test --workspace
 
 # 端到端自检（日志出现 OK 57/57 才算过关；须先 pnpm build 更新 dist/）
@@ -294,3 +295,4 @@ cargo run -p mdview-desktop -- crates/mdview-desktop/src-tauri/tests/fixtures/se
 | 2026-11-20 | **P0-a 完成**：`git mv` 搬迁 9 项 Rust 文件 + gen；根 Cargo.toml 改显式 members；build.rs/conf/web_ime.rs/.gitignore 路径改 `../web`（中间态）；补改跨 crate 的 `mdview-app/state.rs` fixtures 路径（原清单漏项，已补进 4.4）。验证：`cargo test --workspace` 204 项 + 守门 7 项全绿，端到端自检 **OK 61/61** |
 | 2026-11-20 | **P0-b 完成**：`web/` → `src/`；`index.html` 移到 crate 根；建 package.json / vite.config.ts（outDir=dist, port=1450）/ tsconfig.json；Vue 空壳挂载 `#vue-app`（覆盖层留洞、整层穿透）；路径切最终值（frontendDist `../dist`、build.rs `../dist`、web_ime.rs `../src`）；两处 Rust 注释更新。踩坑两则见 7.10/7.11。验证：`pnpm build` 通过、`cargo test --workspace` 全绿、端到端自检 **OK 61/61**（17:11:39 本次实跑）、`pnpm dev` 在 1450 起服正常 |
 | 2026-11-20 | P0 合并提交 `65ab110 refactor(desktop): 改用标准 Tauri 结构并接入 Vite 骨架`（P0-a/P0-b 中间态无法独立编译，故合一）|
+| 2026-11-20 | 按用户要求改为不提交 `dist/`：加入 `.gitignore` 并从索引移除，本地产物保留；文档明确「cargo 直跑前先 pnpm build」|

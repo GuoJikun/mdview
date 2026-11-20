@@ -4,4 +4,5 @@
 .workbuddy
 /logs
 crates/mdview-desktop/src-tauri/gen
+crates/mdview-desktop/dist
 node_modules
