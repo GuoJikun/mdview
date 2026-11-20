@@ -10,7 +10,6 @@ const caretEl = document.getElementById('caret');
 const preeditEl = document.getElementById('preedit');
 const imeEl = document.getElementById('ime');
 const barEl = document.getElementById('bar');
-const toastEl = document.getElementById('toast');
 const outlineEl = document.getElementById('outline');
 
 let byBefore = new Map();   // 停靠点 → 从它开始的元素
@@ -382,12 +381,8 @@ function pushShellState() {
 }
 window.__mdviewPushShellState = pushShellState;
 
-let toastTimer = 0;
+/** toast 的 DOM 与计时都归 Vue（Toast.vue / bridge.notify），这里只投递文案。 */
 function toast(text) {
-  toastEl.textContent = text;
-  toastEl.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1400);
   if (window.__mdviewBridge) window.__mdviewBridge.notify(text);
 }
 

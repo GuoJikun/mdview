@@ -1,10 +1,10 @@
 <template>
-  <!-- P2 进行中：StatusBar 已接管（Teleport 到 #bar），TitleBar / Toast 仍是只读空壳。 -->
+  <!-- P2 进行中：StatusBar / Toast 已接管，TitleBar 仍是只读空壳。 -->
   <div class="vue-app-root">
     <TitleBar />
-    <Toast />
   </div>
   <StatusBar />
+  <Toast />
 </template>
 
 <script setup lang="ts">
