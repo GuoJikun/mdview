@@ -1099,6 +1099,16 @@ window.__mdviewSelfTest = async function () {
     const table = docEl.querySelector('.md-table');
     check('表格渲染成真实网格', !!table && !!table.querySelector('[data-cell="0,0"]'));
     if (table) {
+      // 边框/圆角是纯 CSS，只有真实 WebView2 的计算样式能证明样式表确实嵌进来了
+      const cs = getComputedStyle(table);
+      check('表格默认边框为 1px',
+        cs.borderTopWidth === '1px' && cs.borderRightWidth === '1px' &&
+          cs.borderBottomWidth === '1px' && cs.borderLeftWidth === '1px',
+        [cs.borderTopWidth, cs.borderRightWidth, cs.borderBottomWidth, cs.borderLeftWidth].join('/'));
+      check('表格圆角为 4px',
+        cs.borderTopLeftRadius === '4px' && cs.borderTopRightRadius === '4px' &&
+          cs.borderBottomLeftRadius === '4px' && cs.borderBottomRightRadius === '4px',
+        cs.borderTopLeftRadius);
       const head = table.querySelector('[data-cell="0,0"] [data-b]');
       const firstStop = head ? Number(head.dataset.b) : -1;
       check('表格首格有停靠点', firstStop >= 0, String(firstStop));

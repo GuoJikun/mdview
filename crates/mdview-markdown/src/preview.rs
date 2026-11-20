@@ -527,12 +527,20 @@ blockquote {
 .li:has(.atom.task)::before { content: none; }
 .li:has(.atom.task) { padding-left: .1em; }
 .sep { display: inline-block; width: .55em; }
-/* 表格已经有单元格边框，竖线折叠后补的装饰间隙不要再占位 */
-.md-table { border-collapse: collapse; margin: .2em 0; }
+/* 表格边框与 4px 圆角由最外层 table 承担；内部线只画右/下两边，
+   separate + spacing 0 + overflow 才能让圆角裁住内格，又不会叠成 2px。 */
+.md-table {
+  border-collapse: separate; border-spacing: 0;
+  border: 1px solid #d0d7de; border-radius: 4px; overflow: hidden;
+  margin: .2em 0;
+}
 .md-table th, .md-table td {
-  border: 1px solid #d0d7de; padding: .35em .7em; vertical-align: top;
+  border-right: 1px solid #d0d7de; border-bottom: 1px solid #d0d7de;
+  padding: .35em .7em; vertical-align: top;
   min-width: 3em; white-space: pre-wrap;
 }
+.md-table th:last-child, .md-table td:last-child { border-right: 0; }
+.md-table tr:last-child th, .md-table tr:last-child td { border-bottom: 0; }
 .md-table th { background: #f6f8fa; font-weight: 650; }
 .md-table .al { text-align: left; }
 .md-table .ac { text-align: center; }

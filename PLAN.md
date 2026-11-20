@@ -197,7 +197,7 @@ byte   0  2  5  8  10
 - 🔶 输入格式化：回车拆分与列表/引用延续已做；Tab 缩进、`**` 自动配对、Delete 合并块未做
 
 ### M4 细节 🔶
-- ✅ **表格子工程**（2026-11-20）：仍是源码块，但解析层从 pulldown 事件抽出 `TableGrid / TableRow / TableCell / ColumnAlign`（行列、单元格 byte 区间、对齐），只服务于投影和导航、不替代源码真值。`preview.rs` 把同一组线性停靠点铺进真正的 `<table class="md-table">` 网格，保留全部 `data-b`/`data-a`，行尾换行改零宽标记。应用层新增 `TableMoveCell` / `TableInsertRow` / `TableDeleteRow` / `TableInsertColumn` / `TableDeleteColumn`，所有操作最终转成源码替换事务；表头行插行强制落在分隔行之后，删行禁止删表头/分隔行，删列至少保留一列。前端 Tab 跨格 + 状态栏行列工具条；阅读态 `to_html` 补 `<tr>/<th>/<td>` 与对齐 style（并修掉嵌套 `<table>`）。Rust 单测 + 会话测试 + 端到端自检（新增 6 项）全过
+- ✅ **表格子工程**（2026-11-20）：仍是源码块，但解析层从 pulldown 事件抽出 `TableGrid / TableRow / TableCell / ColumnAlign`（行列、单元格 byte 区间、对齐），只服务于投影和导航、不替代源码真值。`preview.rs` 把同一组线性停靠点铺进真正的 `<table class="md-table">` 网格，保留全部 `data-b`/`data-a`，行尾换行改零宽标记。应用层新增 `TableMoveCell` / `TableInsertRow` / `TableDeleteRow` / `TableInsertColumn` / `TableDeleteColumn`，所有操作最终转成源码替换事务；表头行插行强制落在分隔行之后，删行禁止删表头/分隔行，删列至少保留一列。前端 Tab 跨格 + 状态栏行列工具条；阅读态 `to_html` 补 `<tr>/<th>/<td>` 与对齐 style（并修掉嵌套 `<table>`）。**表格默认带 1px 边框与 4px 圆角**：根因是桌面端 `app.css` 完全没有表格样式（网格 CSS 只写在 CLI 验证页的 `preview.rs`），已补齐并用主题变量 `--rule`/`--code-bg` 适配深浅色；CLI 验证页与阅读态内联样式同步统一。Rust 单测 + 会话测试 + 端到端自检（新增 8 项）全过
 - ✅ 大纲数据层（`ParseResult::outline`）
 - ⬜ 代码高亮（建议 `syntect` 或 `tree-sitter-highlight`，仅在阅读态启用）
 - ⬜ 链接/图片行内编辑
@@ -212,7 +212,7 @@ byte   0  2  5  8  10
 - 日期：2026-11-20（M1 + M2 + 表格子工程收尾）
 - 测试：**Rust 194 项全过**（app 76 / markdown 89 / desktop bin 10 + 前端守门 7 / core 5 / support 7），无编译告警；前端守门 7 项是 `node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`、`outline.js`、`theme.js`）+ 六套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项、`outline` 10 项、`theme` 7 项，共 71 项
 - 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`cargo run -p mdview-desktop -- crates/mdview-desktop/tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 45/45」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 5 项**、**表格 6 项**：真实网格 / 首格停靠点 / 行列工具条 / Tab 跨格 / 插行事务经 IPC 到内核 / 插行可撤销）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+- 自检：`cargo run -p mdview-desktop -- crates/mdview-desktop/tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 47/47」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 5 项**、**表格 8 项**：真实网格 / 默认边框 1px / 圆角 4px / 首格停靠点 / 行列工具条 / Tab 跨格 / 插行事务经 IPC 到内核 / 插行可撤销）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
 - 最近提交（Angular 规范）：

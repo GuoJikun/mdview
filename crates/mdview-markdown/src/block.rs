@@ -309,6 +309,11 @@ impl Block {
         };
         let open = match start {
             Some(n) => format!("<{tag} start=\"{n}\">"),
+            // 阅读态是片段、没有样式外壳，边框与圆角只能内联。separate + spacing 0
+            // + overflow 让 4px 圆角裁住内格，又不会让相邻单元格各画一边叠成 2px。
+            None if matches!(self.kind, BlockKind::Table) => {
+                "<table style=\"border-collapse:separate;border-spacing:0;border:1px solid #d0d7de;border-radius:4px;overflow:hidden\">".to_owned()
+            }
             None => format!("<{tag}>"),
         };
         let is_list = matches!(self.kind, BlockKind::List { .. });
@@ -324,7 +329,7 @@ impl Block {
         // 注意 `<table>` 外壳已由上方 `open` 按 BlockKind::Table 输出，这里只铺行与格，
         // 不能再 push 一层 `<table>`，否则得到嵌套表且只有一个闭合标签。
         if let Some(grid) = &self.table {
-            for row in &grid.rows {
+            for (r, row) in grid.rows.iter().enumerate() {
                 out.push_str("<tr>");
                 let tag = if row.head { "th" } else { "td" };
                 for (col, cell) in row.cells.iter().enumerate() {
@@ -334,12 +339,22 @@ impl Block {
                         ColumnAlign::Right => "right",
                         ColumnAlign::None => "",
                     };
-                    let style = if align.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" style=\"text-align:{align}\"")
-                    };
-                    out.push_str(&format!("<{tag}{style}>"));
+                    let mut styles = Vec::new();
+                    if !align.is_empty() {
+                        styles.push(format!("text-align:{align}"));
+                    }
+                    styles.push("padding:.35em .7em".to_owned());
+                    // 内部线只画右/下，外框由 <table> 的 border 提供
+                    if col + 1 < row.cells.len() {
+                        styles.push("border-right:1px solid #d0d7de".to_owned());
+                    }
+                    if r + 1 < grid.rows.len() {
+                        styles.push("border-bottom:1px solid #d0d7de".to_owned());
+                    }
+                    if row.head {
+                        styles.push("background:#f6f8fa;font-weight:650".to_owned());
+                    }
+                    out.push_str(&format!("<{tag} style=\"{}\">", styles.join(";")));
                     for span in self
                         .spans
                         .iter()
@@ -621,8 +636,12 @@ mod tests {
         let src = "| 左 | 中 | 右 |\n| :--- | :---: | ---: |\n| a | b | c |\n";
         let parsed = crate::parse(src, crate::MarkdownParser::gfm().options());
         let html = parsed.to_html(src);
-        assert_eq!(html.matches("<table>").count(), 1, "表格外壳只应有一层: {html}");
+        assert_eq!(html.matches("<table").count(), 1, "表格外壳只应有一层: {html}");
         assert_eq!(html.matches("</table>").count(), 1);
+        assert!(html.contains("border-radius:4px"), "缺 4px 圆角: {html}");
+        assert!(html.contains("border:1px solid #d0d7de"), "缺外框: {html}");
+        assert!(html.contains("border-right:1px solid #d0d7de"), "缺内部竖线: {html}");
+        assert!(html.contains("border-bottom:1px solid #d0d7de"), "缺内部横线: {html}");
         assert_eq!(html.matches("<tr>").count(), 2, "表头 + 一行正文: {html}");
         assert_eq!(html.matches("<th").count(), 3);
         assert_eq!(html.matches("<td").count(), 3);

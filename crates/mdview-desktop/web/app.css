@@ -127,6 +127,33 @@ blockquote {
 }
 .a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
 /* 折叠的标记仍然占位，只是不可见：它是停靠点之间的「跨栏」 */
+/* 表格网格。边框与 4px 圆角由最外层 table 承担；内部线只画右边和下边，
+   否则 separate 模型下相邻两格各画一条，看起来是 2px。overflow 负责把
+   内格的方角裁进外框圆角里。 */
+.md-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: .2em 0;
+}
+.md-table th, .md-table td {
+  padding: .35em .7em;
+  vertical-align: top;
+  min-width: 3em;
+  white-space: pre-wrap;
+  border-right: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+.md-table th:last-child, .md-table td:last-child { border-right: 0; }
+.md-table tr:last-child th, .md-table tr:last-child td { border-bottom: 0; }
+.md-table th { background: var(--code-bg); font-weight: 650; }
+.md-table .al { text-align: left; }
+.md-table .ac { text-align: center; }
+.md-table .ar { text-align: right; }
+.md-table .sep { display: none; }
+
 .mk { color: transparent; }
 .eob, .mk { user-select: none; }
 .atom { display: inline-block; vertical-align: baseline; }
