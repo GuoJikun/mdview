@@ -348,28 +348,13 @@ function inTable() {
 }
 
 function renderStatus() {
-  const blocks = docEl.children.length;
-  const block = caret && caret.block !== null && caret.block !== undefined ? caret.block + 1 : '-';
+  // 状态栏内容由 Vue 渲染（见 StatusBar.vue），这里只负责标题栏 IPC 去重与状态快照。
   // 标题栏只在文件名或脏标记变化时才走一次 IPC，别在每次输入后都设
   const titleKey = (meta.path || '') + '|' + !!meta.dirty;
   if (titleKey !== lastTitleKey && window.__mdviewSetTitle) {
     lastTitleKey = titleKey;
     window.__mdviewSetTitle(meta.path, meta.dirty);
   }
-  barEl.innerHTML =
-    '<span>块 <b>' + block + '/' + blocks + '</b></span>' +
-    '<span>停靠点 <b>' + (caret ? caret.stop : '-') + '</b></span>' +
-    '<span>列 <b>' + (caret && caret.visual !== null ? caret.visual : '-') + '</b></span>' +
-    '<span>r<b>' + meta.revision + '</b></span>' +
-    (inTable()
-      ? '<span class="table-tools">' +
-        '<button data-table="row+" title="在下方插入行">行+</button>' +
-        '<button data-table="row-" title="删除当前行">行−</button>' +
-        '<button data-table="col+" title="在右侧插入列">列+</button>' +
-        '<button data-table="col-" title="删除当前列">列−</button>' +
-        '</span>'
-      : '') +
-    '<span class="hint">← → 移动 · Shift 扩选 · Enter 分段 · Tab 跨格 · Ctrl+S 保存</span>';
   pushShellState();
 }
 

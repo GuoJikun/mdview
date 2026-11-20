@@ -1,11 +1,10 @@
 <template>
-  <!-- P1：三个外壳组件都已挂载并只读订阅 bridge，但整层默认不显示。
-       P2 逐组件接管时，只把对应组件移出隐藏状态并补上 pointer-events/动作。 -->
+  <!-- P2 进行中：StatusBar 已接管（Teleport 到 #bar），TitleBar / Toast 仍是只读空壳。 -->
   <div class="vue-app-root">
     <TitleBar />
-    <StatusBar />
     <Toast />
   </div>
+  <StatusBar />
 </template>
 
 <script setup lang="ts">
