@@ -1252,7 +1252,7 @@ mod tests {
 
     #[test]
     fn table_ops_on_selftest_fixture() {
-        let src = std::fs::read_to_string("../mdview-desktop/src-tauri/tests/fixtures/selftest.md").unwrap();
+        let src = std::fs::read_to_string("../../src-tauri/tests/fixtures/selftest.md").unwrap();
         let mut files = InMemoryFileStore::default();
         let mut app = open(&mut files, &src);
         // 模拟自检前序：编辑 → 全选剪切 → 撤销，之后再做表格操作

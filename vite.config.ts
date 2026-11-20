@@ -6,6 +6,9 @@ export default defineConfig({
   server: {
     port: 1450,
     strictPort: true,
+    watch: {
+      ignored: ['**/node_modules/**', '**/target/**', '**/crates/**', '**/dist/**']
+    }
   },
   build: {
     outDir: 'dist',

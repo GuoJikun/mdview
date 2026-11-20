@@ -3,6 +3,6 @@
 .DS_Store
 .workbuddy
 /logs
-crates/mdview-desktop/src-tauri/gen
-crates/mdview-desktop/dist
+/src-tauri/gen
+/dist
 node_modules

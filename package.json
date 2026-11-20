@@ -1,5 +1,5 @@
 {
-  "name": "mdview-desktop-ui",
+  "name": "mdview",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -14,6 +14,7 @@
     "vue": "^3.5.45"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.6",
     "@vitejs/plugin-vue": "^6.0.11",
     "typescript": "~5.9.3",
     "vite": "^8.3.8",

@@ -1,6 +1,6 @@
 # PLAN-VUE.md — `ui-vue` 分支：Vue 3 + Vite 重构前端外壳
 
-> 最后更新：2026-11-20 17:02（改为标准 Tauri 结构：前端在 crate 根、Rust 挪进 `src-tauri/`）
+> 最后更新：2026-11-20 17:20（前端工程根提到仓库根，Rust crate 在根目录 `src-tauri/`）
 > 分支：`ui-vue`（基于 `main` @ `defbbf7`）
 > 性质：`ui-vue` 是**独立专项分支**，本文只管前端外壳的框架化，不改动主 `PLAN.md` 的编辑内核计划。
 > 本文自包含：接手人读完即可继续，不需要翻历史对话。硬约束见主 `PLAN.md` 第 2 节，本文不重复。
@@ -14,7 +14,7 @@
 用 **Vue 3 + Vite（TS）** 接管前端的**外壳 UI**：标题栏、菜单弹层、状态栏、toast。
 动机是这部分代码（`titlebar.js` 464 行的菜单树 + 递归渲染 + 子菜单 + 勾选态，以及散落在 `app.js` 里的状态栏/toast 写入）难维护，用组件化改写能显著收敛。
 
-同时把目录整理成**标准 Tauri 结构**：前端工程根在 `crates/mdview-desktop/`，Rust crate 整体挪进 `crates/mdview-desktop/src-tauri/`。
+同时把目录整理成**标准 Tauri 结构**：前端工程根在仓库根，Rust crate 整体挪进根目录 `src-tauri/`（其余库 crate 仍在 `crates/`）。
 
 ### 1.2 明确不做的（红线）
 
@@ -102,12 +102,13 @@ Vue 画的标题栏/状态栏/toast 与现有同名 DOM 会**短暂共存**（�
 
 ## 3. 目标目录结构（标准 Tauri 布局）
 
-前端工程根 = `crates/mdview-desktop/`（与 `index.html` 同级），Rust crate 整体挪进 `src-tauri/`。这是 `create-tauri-app` 的标准形态，唯一差异是外层多套了一层 `crates/`（workspace 布局所致）。
+前端工程根 = **仓库根**（与根 `Cargo.toml` 同级），Rust crate 整体挪进根目录 `src-tauri/`。这就是 `create-tauri-app` 的标准形态：前端在根、Rust 在 `src-tauri/`；其余库 crate 因 workspace 布局仍留在 `crates/`。
 
 ```text
-crates/mdview-desktop/                  ← 前端工程根
+<repo-root>/                            ← 前端工程根（与根 Cargo.toml 同级）
+├─ Cargo.toml / Cargo.lock              workspace 清单（members 含 "src-tauri"）
 ├─ index.html                           Vite 入口；#vue-app 覆盖层 + 洞
-├─ package.json                         Vue 3 + Vite + @vitejs/plugin-vue + TS
+├─ package.json / pnpm-lock.yaml        Vue 3 + Vite + @vitejs/plugin-vue + TS
 ├─ vite.config.ts                       build.outDir = 'dist'，emptyOutDir = true
 ├─ tsconfig.json
 ├─ src/                                 ← 前端源码（原 web/ 改名；不再与 Rust 混淆）
@@ -123,18 +124,20 @@ crates/mdview-desktop/                  ← 前端工程根
 │  ├─ styles/                           外壳组件样式（从 app.css 拆出对应规则）
 │  └─ ime.js / caretline.js / selection.js / dragscroll.js / clipboard.js
 │     outline.js / theme.js + 六套 *.test.js   ← 七个纯逻辑模块原样保留
-├─ dist/                                ← Vite 产物；frontendDist 指向它，emptyOutDir 清空
-└─ src-tauri/                           ← Rust crate（原 crate 根内容整体挪入）
-   ├─ Cargo.toml / build.rs
-   ├─ tauri.conf.json + tauri.{windows,linux}.conf.json
-   ├─ capabilities/default.json
-   ├─ icons/
-   ├─ src/{main.rs, session.rs}
-   ├─ tests/{web_ime.rs, fixtures/}
-   └─ gen/                              （gitignore，Tauri 自动生成）
+├─ dist/                                ← Vite 产物（gitignore）；frontendDist 指向它
+├─ src-tauri/                           ← Rust crate（原 crates/mdview-desktop 内容整体挪入）
+│  ├─ Cargo.toml / build.rs
+│  ├─ tauri.conf.json + tauri.{windows,linux}.conf.json
+│  ├─ capabilities/default.json
+│  ├─ icons/
+│  ├─ src/{main.rs, session.rs}
+│  ├─ tests/{web_ime.rs, fixtures/}
+│  └─ gen/                              （gitignore，Tauri 自动生成）
+└─ crates/                              ← 其余五个库/CLI crate
+   └─ mdview-{core,support,markdown,app,cli}/
 ```
 
-**代价**：这一步不是纯改名，Rust 侧的若干路径要跟着改（详见 4.4）。收益是结构彻底标准，前端 `src/` 与 Rust `src-tauri/src/` 各归其位，不再有「Rust 占了 src/ 所以前端只能叫 web/」的妥协。
+**代价**：这一步不是纯改名，Rust 侧与跨 crate 的若干路径要跟着改（详见 4.4）。收益是结构彻底标准，前端 `src/` 与 Rust `src-tauri/src/` 各归其位，不再有「Rust 占了 src/ 所以前端只能叫 web/」的妥协。
 
 ---
 
@@ -191,6 +194,17 @@ CSP 保持 `default-src 'self'`，**不要**为 Vue 开 `unsafe-eval`：走 runt
 | **`crates/mdview-app/src/state.rs`** | `table_ops_on_selftest_fixture` 里的 `read_to_string("../mdview-desktop/tests/fixtures/selftest.md")` → 插入 `src-tauri/` | 不变 | **易漏**：跨 crate 读样张的测试，不在 desktop crate 内，grep `tests/fixtures` 才会发现 |
 | 自检命令 | 参数路径 → `.../src-tauri/tests/fixtures/selftest.md` | 不变 | 见第 8 节；主 `PLAN.md` 里的旧路径本次不改 |
 
+**P0-c（本次）：桌面 crate 从 `crates/mdview-desktop/` 整体上提到仓库根。** 上表中带 `crates/mdview-desktop/` 前缀的都是历史中间态，**当前最终值**是：
+
+| 文件 | 当前值 |
+|---|---|
+| 根 `Cargo.toml` | `members` 中 desktop 写 `"src-tauri"`（不再是 `crates/mdview-desktop/src-tauri`） |
+| `.gitignore` | `/src-tauri/gen`、`/dist` |
+| `crates/mdview-app/src/state.rs` | `read_to_string("../../src-tauri/tests/fixtures/selftest.md")` |
+| `src/*.test.js`（4 个） | 注释里的守门测试路径改为 `src-tauri/tests/web_ime.rs` |
+
+**不受影响**（相对 `src-tauri/` 的关系没变）：`tauri.conf.json` 的 `frontendDist: "../dist"`、`build.rs` 的 `../dist`、`web_ime.rs` 的 `../src`、`vite.config.ts` 的 `outDir: 'dist'`、`package.json` 的 scripts、`index.html` 的 `/src/xxx.js` 引用。
+
 `icons/` 与 `capabilities/` 随 crate 一起挪即可：Tauri 相对 conf 目录自动查找，配置里无需改路径。
 
 **`dist/` 不提交（已定）**：与参考项目 `image-view` 一致，`dist` 写进 `.gitignore`，构建产物不入仓库。代价是 `generate_context!()` 在 `cargo build` 时就要读产物——**自 clone 起、或清空 `dist/` 后，必须先 `pnpm build` 再 `cargo build`**，直接 `cargo build` 会因找不到前端资源而编译失败。`tauri dev/build` 走 `beforeDevCommand` / `beforeBuildCommand` 会自动先构建前端，不受此限；只有直接跑 `cargo` 命令时才需要手动先 build。
@@ -231,7 +245,7 @@ Vue 侧的菜单项、状态栏按钮点击后：`emit('action', name)` → `bri
 
 ## 6. 分阶段计划与过关线
 
-基线（迁移前，已实测）：**端到端自检 57/57** · **Rust 194 项全过** · **六套 Node 用例 71 项全过**。每阶段结束都必须回到这条线。
+基线（迁移前，已实测）：**端到端自检 57/57** · **Rust 194 项全过** · **六套 Node 用例 71 项全过**。P0 后实测为 **自检 61/61**、**Rust 全量测试绿**。每阶段结束都必须回到这条线。
 
 | 阶段 | 内容 | 过关线 |
 |---|---|---|
@@ -265,20 +279,26 @@ P0-a 独立成段是因为它和 Vue 无关、纯路径调整，先做能单独�
 ## 8. 验证命令
 
 ```bash
-# 构建前端（dist 不入库；自 clone 起或清空 dist 后必须先跑这一步）
-pnpm --dir crates/mdview-desktop install
-pnpm --dir crates/mdview-desktop build
-pnpm --dir crates/mdview-desktop exec vue-tsc --noEmit
+# 构建前端（工程根 = 仓库根；dist 不入库，自 clone 起或清空 dist 后必须先跑）
+pnpm install
+pnpm build
+pnpm exec vue-tsc --noEmit
 
-# 全量测试（含守门测试，注意 fixtures 新路径；cargo 直接跑依赖上面的 dist）
+# 全量测试（含守门测试；cargo 直接跑依赖上面的 dist）
 cargo test --workspace
 
-# 端到端自检（日志出现 OK 57/57 才算过关；须先 pnpm build 更新 dist/）
-cargo run -p mdview-desktop -- crates/mdview-desktop/src-tauri/tests/fixtures/selftest.md --self-test
+# 端到端自检 —— 推荐用 tauri dev（走 Vite devUrl 链路，窗口能拿到焦点）
+# 注意 CWD：tauri dev 把应用参数转给 cargo run 时，cwd 是 src-tauri/，
+# 所以样张路径写 tests/fixtures/selftest.md，不是 src-tauri/tests/...
+pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test
 
-# 起窗人工验收
-pnpm --dir crates/mdview-desktop dev        # 任一终端
-cargo run -p mdview-desktop -- crates/mdview-desktop/src-tauri/tests/fixtures/selftest.md
+# 备选：cargo run 从仓库根跑，路径要带 src-tauri/ 前缀。
+# 但这条链路窗口拿不到焦点时「系统剪贴板可写」会偶发 false（60/61），
+# 不是回归——判定过关以 tauri dev 的 61/61 为准。
+cargo run -p mdview-desktop -- src-tauri/tests/fixtures/selftest.md --self-test
+
+# 起窗人工验收（不含 --self-test）
+pnpm tauri dev -- -- tests/fixtures/selftest.md
 ```
 
 失败报告写在可执行文件同级 `logs/error.log`，排查别只看 `mdview.log`。
@@ -296,3 +316,4 @@ cargo run -p mdview-desktop -- crates/mdview-desktop/src-tauri/tests/fixtures/se
 | 2026-11-20 | **P0-b 完成**：`web/` → `src/`；`index.html` 移到 crate 根；建 package.json / vite.config.ts（outDir=dist, port=1450）/ tsconfig.json；Vue 空壳挂载 `#vue-app`（覆盖层留洞、整层穿透）；路径切最终值（frontendDist `../dist`、build.rs `../dist`、web_ime.rs `../src`）；两处 Rust 注释更新。踩坑两则见 7.10/7.11。验证：`pnpm build` 通过、`cargo test --workspace` 全绿、端到端自检 **OK 61/61**（17:11:39 本次实跑）、`pnpm dev` 在 1450 起服正常 |
 | 2026-11-20 | P0 合并提交 `65ab110 refactor(desktop): 改用标准 Tauri 结构并接入 Vite 骨架`（P0-a/P0-b 中间态无法独立编译，故合一）|
 | 2026-11-20 | 按用户要求改为不提交 `dist/`：加入 `.gitignore` 并从索引移除，本地产物保留；文档明确「cargo 直跑前先 pnpm build」|
+| 2026-11-20 | **P0-c 完成**：`crates/mdview-desktop/` 整体上提到仓库根（前端工程根 = 仓库根）；改根 Cargo.toml members、.gitignore、跨 crate 的 state.rs fixtures 路径、4 个测试文件注释；`src-tauri/` 内部相对路径与 Vite/Tauri 配置因基准未变而免疫。验证：`pnpm build` + `cargo test --workspace` 全绿；`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test` 端到端自检 **OK 61/61**。注意 `cargo run` 链路同参数得到 60/61（仅「系统剪贴板可写」因窗口焦点为 false），已确认是链路差异非回归，判定以 tauri dev 为准 |

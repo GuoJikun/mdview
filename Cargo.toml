@@ -6,7 +6,7 @@ members = [
   "crates/mdview-markdown",
   "crates/mdview-app",
   "crates/mdview-cli",
-  "crates/mdview-desktop/src-tauri",
+  "src-tauri",
 ]
 
 [workspace.package]

@@ -1,5 +1,5 @@
 // 输入法状态机的无头测试。运行：node ime.test.js
-// 由 crates/mdview-desktop/tests/web_ime.rs 调起，保证不会随代码漂移。
+// 由 src-tauri/tests/web_ime.rs 调起，保证不会随代码漂移。
 'use strict';
 
 const assert = require('assert');

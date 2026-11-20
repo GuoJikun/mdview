@@ -1,5 +1,5 @@
 // 上下移动几何的无头测试。运行：node caretline.test.js
-// 由 crates/mdview-desktop/tests/web_ime.rs 调起，避免逻辑随代码漂移。
+// 由 src-tauri/tests/web_ime.rs 调起，避免逻辑随代码漂移。
 'use strict';
 
 const assert = require('assert');
