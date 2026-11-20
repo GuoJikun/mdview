@@ -1,125 +1,98 @@
 <template>
-  <!-- 只读外壳：P1 只从桥上读标题，不接管任何点击。
-       真正的按钮、拖拽区、菜单弹层在 P2 迁入；模板届时复刻现有 id/class。 -->
-  <header class="vue-titlebar" aria-hidden="true">
-    <div class="tb-left">
-      <span class="tb-logo">
+  <!-- 自绘标题栏（Windows / Linux）。macOS 下由 CSS 隐藏，系统标题栏接管。 -->
+  <header id="titlebar" data-tauri-drag-region="deep" @dblclick="onDblclick">
+    <div class="tb-left" data-tauri-drag-region>
+      <span class="tb-logo" data-tauri-drag-region aria-hidden="true">
         <img alt="" :src="LOGO" />
       </span>
-      <nav class="tb-menus">
-        <span v-for="name in MENUS" :key="name" class="tb-menu">{{ name }}</span>
+      <nav id="tb-menus" class="tb-menus" aria-label="应用菜单">
+        <button
+          v-for="key in MENU_ORDER"
+          :key="key"
+          type="button"
+          class="tb-menu"
+          :class="{ open: menuState.open === key }"
+          :data-menu="key"
+          @click="onMenuClick(key, $event)"
+          @mouseover="onMenuHover(key, $event)"
+        >{{ MENU_LABELS[key] }}</button>
       </nav>
     </div>
-    <div class="tb-center">
-      <span class="tb-title">{{ state.title }}</span>
+    <div class="tb-center" data-tauri-drag-region>
+      <span id="tb-title" class="tb-title">{{ state.title }}</span>
     </div>
-    <div class="tb-right">
-      <span class="tb-ctl" title="最小化">
-        <svg viewBox="0 0 12 12" width="12" height="12"><path d="M2 6h8" stroke="currentColor" stroke-width="1" /></svg>
-      </span>
-      <span class="tb-ctl" title="最大化 / 还原">
-        <svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1">
-          <rect x="2.5" y="2.5" width="7" height="7" />
+    <div class="tb-right" data-tauri-drag-region>
+      <button type="button" class="tb-ctl" id="tb-min" title="最小化" aria-label="最小化" @click="minimize">
+        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2 6h8" stroke="currentColor" stroke-width="1" /></svg>
+      </button>
+      <button type="button" class="tb-ctl" id="tb-max" title="最大化 / 还原" aria-label="最大化" @click="toggleMaximize">
+        <svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true">
+          <rect class="tb-max-rect" x="2.5" y="2.5" width="7" height="7" :style="{ display: maximized ? 'none' : '' }" />
+          <g class="tb-restore-icon" :style="{ display: maximized ? '' : 'none' }">
+            <rect x="1.5" y="3.5" width="6" height="6" />
+            <path d="M4 3.5V2h6v6H8.5" />
+          </g>
         </svg>
-      </span>
-      <span class="tb-ctl tb-close" title="关闭">
-        <svg viewBox="0 0 12 12" width="12" height="12"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1" /></svg>
-      </span>
+      </button>
+      <button type="button" class="tb-ctl tb-close" id="tb-close" title="关闭" aria-label="关闭" @click="closeWindow">
+        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1" /></svg>
+      </button>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
+import { onMounted, ref } from 'vue';
 import { state } from '../bridge';
+import { MENU_LABELS, MENU_ORDER, menuState, showMenu, toggleMenu, type MenuKey } from '../menu';
 
-const MENUS = ['文件', '编辑', '选择', '视图', '转到', '帮助'];
-
-// 与 index.html 里的图标同一张图，避免预览时视觉不一致。
+// 与 index.html 里的图标同一张图，避免视觉不一致。
 const LOGO =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAASUlEQVR42mNgGAVQIK+s8Z+eeNQBow4YdQDRDui8+I0iPPQdMJoGRh1w4uwlsvDwccBoGhh1ALUS3dB1wGgaGHXAqAPo5oARCwCme+39B8DaVAAAAABJRU5ErkJggg==';
-</script>
 
-<style scoped>
-.vue-titlebar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  height: 30px;
-  background: var(--chrome);
-  color: var(--text);
-  border-bottom: 1px solid var(--hairline);
-  user-select: none;
-  font-family: var(--font-ui);
-  pointer-events: none;
+const appWindow = window.__TAURI__?.window?.getCurrentWindow?.();
+const maximized = ref(false);
+
+function onMenuClick(key: MenuKey, event: MouseEvent): void {
+  toggleMenu(key, event.currentTarget as HTMLElement);
 }
-/* macOS 用系统标题栏时，Vue 也同步隐藏，别画出多余的假标题栏 */
-:global(html.native-titlebar) .vue-titlebar {
-  display: none;
+
+function onMenuHover(key: MenuKey, event: MouseEvent): void {
+  if (menuState.open && menuState.open !== key) {
+    showMenu(key, event.currentTarget as HTMLElement);
+  }
 }
-.tb-left,
-.tb-center,
-.tb-right {
-  display: flex;
-  align-items: center;
-  height: 100%;
+
+function onDblclick(event: MouseEvent): void {
+  const target = event.target as HTMLElement;
+  if (target === event.currentTarget || target.hasAttribute('data-tauri-drag-region')) {
+    toggleMaximize();
+  }
 }
-.tb-left {
-  min-width: 0;
+
+function minimize(): void {
+  appWindow?.minimize();
 }
-.tb-logo {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  margin: 0 4px 0 10px;
-  flex: none;
+
+function toggleMaximize(): void {
+  appWindow?.toggleMaximize();
 }
-.tb-logo img {
-  display: block;
-  width: 16px;
-  height: 16px;
+
+function closeWindow(): void {
+  appWindow?.close();
 }
-.tb-menus {
-  display: flex;
-  align-items: center;
-  height: 100%;
-  gap: 2px;
+
+async function syncMaximizeIcon(): Promise<void> {
+  if (!appWindow) return;
+  try {
+    maximized.value = await appWindow.isMaximized();
+  } catch {
+    maximized.value = false;
+  }
 }
-.tb-menu {
-  display: inline-flex;
-  align-items: center;
-  height: 100%;
-  padding: 0 8px;
-  font-size: 12px;
-  border-radius: 4px;
-}
-.tb-center {
-  flex: 1;
-  justify-content: center;
-  min-width: 0;
-}
-.tb-title {
-  max-width: 50%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 600;
-}
-.tb-right {
-  height: 100%;
-}
-.tb-ctl {
-  width: 46px;
-  height: 100%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-</style>
+
+onMounted(() => {
+  syncMaximizeIcon();
+  window.__TAURI__?.event?.listen?.('tauri://resize', syncMaximizeIcon)?.catch?.(() => {});
+});
+</script>

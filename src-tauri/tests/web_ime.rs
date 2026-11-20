@@ -1,6 +1,6 @@
 //! 前端脚本的守门测试。
 //!
-//! 这一层没有 Rust 代码可测，但 `web/` 里的纯逻辑不该靠肉眼验证：
+//! 这一层没有 Rust 代码可测，但 `src/` 里的纯逻辑不该靠肉眼验证：
 //! `ime.js`（输入法状态机）、`caretline.js`（上下移动与滚动的几何）、
 //! `selection.js`（原生选区判据）与 `dragscroll.js`（拖动时的边缘自动滚动）
 //! 都刻意不碰 DOM，因此可以直接用 Node 跑。
@@ -59,7 +59,6 @@ fn frontend_scripts_are_syntactically_valid() {
         "outline.test.js",
         "theme.js",
         "theme.test.js",
-        "titlebar.js",
     ] {
         let (ok, output) = run_node(&["--check", script]);
         assert!(ok, "{script} 语法错误：\n{output}");

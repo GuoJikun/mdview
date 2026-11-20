@@ -3,7 +3,7 @@
 // 只传「状态快照」和「动作名」：状态由现有逻辑推上来（app.js / titlebar.js），
 // 动作由 Vue 组件发回去（复用 window.__mdviewRunAction），两侧都不碰对方的 DOM。
 // 文档内容、DOM 节点、编辑器坐标一概不过桥。
-import { reactive, readonly } from 'vue';
+import { nextTick, reactive, readonly } from 'vue';
 
 export interface OutlineItem {
   level: number;
@@ -53,8 +53,23 @@ declare global {
     __mdviewBridge?: BridgeApi;
     __mdviewPushShellState?: () => void;
     __mdviewRunAction?: (action: string) => void;
+    __mdviewSetTitle?: (path: string | null, dirty: boolean) => void;
+    __mdviewNextTick?: () => Promise<void>;
     __mdviewMode?: ViewMode;
     mdviewTheme?: { mode?: () => string };
+    __TAURI__?: {
+      core?: { invoke?: (cmd: string, args?: unknown) => Promise<unknown> };
+      event?: { listen?: (event: string, handler: (...args: unknown[]) => void) => Promise<() => void> };
+      window?: {
+        getCurrentWindow?: () => {
+          minimize: () => void;
+          toggleMaximize: () => void;
+          close: () => void;
+          isMaximized: () => Promise<boolean>;
+          setTitle: (title: string) => Promise<void>;
+        };
+      };
+    };
   }
 }
 
@@ -97,6 +112,11 @@ export function notify(text: string): void {
 
 /** 动作出口：一行都不重写，直接复用现有 runAction。 */
 export function dispatch(action: string): void {
+  // 关闭窗口原先由 titlebar.js 的 run() 拦截，现在收进桥里。
+  if (action === 'close-window') {
+    tauriWindow()?.close();
+    return;
+  }
   const run = window.__mdviewRunAction;
   if (typeof run === 'function') {
     run(action);
@@ -104,6 +124,24 @@ export function dispatch(action: string): void {
     console.warn('[bridge] 动作无人接管：' + action);
   }
 }
+
+function tauriWindow() {
+  return window.__TAURI__?.window?.getCurrentWindow?.();
+}
+
+/**
+ * 标题栏文案：文件名 + 脏标记 + 应用名，与 VSCode 的写法一致。
+ * app.js 仍通过 window.__mdviewSetTitle 调用，签名不变。
+ */
+export function setTitle(path: string | null, dirty: boolean): void {
+  const name = path ? String(path).split(/[\\/]/).pop() : '未命名';
+  const text = name + (dirty ? ' ●' : '') + ' — mdview';
+  set({ path: path || null, dirty: !!dirty, title: text });
+  document.title = text;
+  tauriWindow()?.setTitle(text)?.catch?.(() => {});
+}
+window.__mdviewSetTitle = setTitle;
+window.__mdviewNextTick = nextTick;
 
 const api: BridgeApi = { set, notify, dispatch };
 window.__mdviewBridge = api;

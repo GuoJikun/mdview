@@ -15,43 +15,7 @@
 </script>
 </head>
 <body>
-<!-- 自绘标题栏：模仿 VSCode。仅 Windows / Linux 显示，macOS 下由 CSS 隐藏 -->
-<header id="titlebar" data-tauri-drag-region="deep">
-  <div class="tb-left" data-tauri-drag-region>
-    <span class="tb-logo" data-tauri-drag-region aria-hidden="true">
-      <img alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAASUlEQVR42mNgGAVQIK+s8Z+eeNQBow4YdQDRDui8+I0iPPQdMJoGRh1w4uwlsvDwccBoGhh1ALUS3dB1wGgaGHXAqAPo5oARCwCme+39B8DaVAAAAABJRU5ErkJggg==">
-    </span>
-    <nav class="tb-menus" id="tb-menus" aria-label="应用菜单">
-      <button type="button" class="tb-menu" data-menu="file">文件</button>
-      <button type="button" class="tb-menu" data-menu="edit">编辑</button>
-      <button type="button" class="tb-menu" data-menu="selection">选择</button>
-      <button type="button" class="tb-menu" data-menu="view">视图</button>
-      <button type="button" class="tb-menu" data-menu="go">转到</button>
-      <button type="button" class="tb-menu" data-menu="help">帮助</button>
-    </nav>
-  </div>
-  <div class="tb-center" data-tauri-drag-region>
-    <span class="tb-title" id="tb-title">mdview</span>
-  </div>
-  <div class="tb-right" data-tauri-drag-region>
-    <button type="button" class="tb-ctl" id="tb-min" title="最小化" aria-label="最小化">
-      <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2 6h8" stroke="currentColor" stroke-width="1"/></svg>
-    </button>
-    <button type="button" class="tb-ctl" id="tb-max" title="最大化 / 还原" aria-label="最大化">
-      <svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true">
-        <rect class="tb-max-rect" x="2.5" y="2.5" width="7" height="7"/>
-        <g class="tb-restore-icon" style="display:none">
-          <rect x="1.5" y="3.5" width="6" height="6"/>
-          <path d="M4 3.5V2h6v6H8.5"/>
-        </g>
-      </svg>
-    </button>
-    <button type="button" class="tb-ctl tb-close" id="tb-close" title="关闭" aria-label="关闭">
-      <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1"/></svg>
-    </button>
-  </div>
-</header>
-<div id="tb-menu-popup" class="tb-menu-popup" role="menu" hidden></div>
+<!-- 自绘标题栏与菜单弹层由 Vue 渲染（TitleBar.vue / MenuPopup.vue） -->
 <!-- 自绘纵向滚动条：浏览器原生滚动条纵跨整窗，会压住标题栏和状态栏。
      正文与大纲各一套，共用 .tb-vscroll 的视觉与拖动逻辑 -->
 <div id="vscroll" class="tb-vscroll" aria-hidden="true"><div id="vscroll-thumb" class="tb-vscroll-thumb"></div></div>
@@ -69,8 +33,8 @@
 <textarea id="ime" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off"
           spellcheck="false" aria-label="编辑器输入"></textarea>
 <div id="bar"></div>
-<!-- Vue 覆盖层挂载点：P0-b 阶段为空壳，P2 迁入标题栏/状态栏/toast。
-     大纲与正文区刻意不放任何 Vue 节点（留洞），鼠标穿透到上面的现有 DOM。 -->
+<!-- Vue 覆盖层挂载点：标题栏/菜单/状态栏/toast 都在这里，大纲与正文区刻意
+     不放任何 Vue 节点（留洞），鼠标穿透到下面的现有 DOM。 -->
 <div id="vue-app"></div>
 <script type="module" src="/src/ime.js"></script>
 <script type="module" src="/src/caretline.js"></script>
@@ -79,7 +43,6 @@
 <script type="module" src="/src/clipboard.js"></script>
 <script type="module" src="/src/outline.js"></script>
 <script type="module" src="/src/theme.js"></script>
-<script type="module" src="/src/titlebar.js"></script>
 <script type="module" src="/src/app.js"></script>
 <script type="module" src="/src/main.ts"></script>
 </body>

@@ -942,6 +942,8 @@ window.__mdviewSelfTest = async function () {
   const check = (name, ok, detail) => checks.push({ name, ok: !!ok, detail: detail || '' });
   const fire = (type, data) =>
     imeEl.dispatchEvent(new CompositionEvent(type, { data: data || '', bubbles: true }));
+  // 外壳组件已 Vue 化，点菜单后 DOM 在下一个微任务才更新。
+  const nextTick = window.__mdviewNextTick || (() => Promise.resolve());
 
   try {
     check('焦点落在透明输入框', document.activeElement === imeEl,
@@ -1272,6 +1274,7 @@ window.__mdviewSelfTest = async function () {
     const viewBtn = document.querySelector('#tb-menus [data-menu="view"]');
     if (viewBtn) {
       viewBtn.click();
+      await nextTick();
       const popup = document.getElementById('tb-menu-popup');
       const trigger = popup && popup.querySelector('.submenu-trigger');
       check('视图菜单有主题子菜单', !!trigger &&
@@ -1279,6 +1282,7 @@ window.__mdviewSelfTest = async function () {
         trigger ? trigger.textContent : '无子菜单触发器');
       if (trigger) {
         trigger.dispatchEvent(new Event('pointerenter'));
+        await nextTick();
         const subBtns = Array.from(popup.querySelectorAll('.tb-submenu button[data-action]'));
         const actions = subBtns.map((b) => b.dataset.action).join(',');
         check('主题子菜单是三档',
@@ -1358,6 +1362,7 @@ window.__mdviewSelfTest = async function () {
     const fileMenu = document.querySelector('#tb-menus [data-menu="file"]');
     if (fileMenu) {
       fileMenu.click();
+      await nextTick();
       const openItem = document.querySelector('#tb-menu-popup button[data-action="open-file"]');
       check('文件菜单有打开文件项', !!openItem,
         openItem ? openItem.textContent : '无');
