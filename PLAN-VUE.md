@@ -1,6 +1,6 @@
 # PLAN-VUE.md — `ui-vue` 分支：Vue 3 + Vite 重构前端外壳
 
-> 最后更新：2026-11-20 19:35（P0–P3 全部完成，待合并回 `ui-vue`）
+> 最后更新：2026-11-20 19:40（P0–P3 全部完成，已合并回 `ui-vue`）
 > 分支：`ui-vue`（基于 `main` @ `defbbf7`）；实施分支 `ui-vue-p1`
 > 性质：`ui-vue` 是**独立专项分支**，本文只管前端外壳的框架化；P3 已把最终结构与验证结果同步回主 `PLAN.md`。
 > 本文自包含：接手人读完即可继续，不需要翻历史对话。硬约束见主 `PLAN.md` 第 2 节，本文不重复。
@@ -336,3 +336,4 @@ pnpm tauri dev -- -- tests/fixtures/selftest.md
 | 2026-11-20 | **P2-2 完成（Toast）**：`Toast.vue` 直接渲染 `#toast`，显隐与 1400ms 计时统一由 `bridge.notify` 管；`app.js` 的 `toast()` 退化为投递文案，`index.html` 删除静态 `#toast`。验证：`pnpm build` 通过、端到端自检 **OK 61/61** |
 | 2026-11-20 | **P2-3 完成（TitleBar + MenuPopup）**：新增 `menu.ts`（菜单树 + 展开状态）与 `MenuPopup.vue`（子菜单 / 勾选态 / 键盘导航 / 定位）；`TitleBar.vue` 接管标题、窗口按钮、拖拽区与最大化图标；`titlebar.js` 的滚动条抽成 `scrollbars.ts`，`setTitle` 与 `close-window` 收进 bridge；删除 `src/titlebar.js` 并同步守门清单。自检里点菜单后补 `await nextTick()`。验证：`pnpm build` 通过、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |
 | 2026-11-20 | **P3 完成（单入口 + 文档收尾）**：`index.html` 只留 `<script type="module" src="/src/main.ts">`，九个旧脚本按序在 `main.ts` 里 `import`；首帧 UA 判定挪到 `platform.ts`，删除 `<head>` 内联脚本以符合 CSP；守门清单与注释早已随 P2-3 更新；主 `PLAN.md` 的结构、路径、测试数、命令与文件地图同步到 Vue 工程；真实窗口截图复核标题栏/菜单/状态栏/滚动条与正文让位。验证：`pnpm build` 通过、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |
+| 2026-11-20 | **合并**：`ui-vue-p1` 快进并入 `ui-vue`（`2062d3c`），主仓库工作树同步更新 |
