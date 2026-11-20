@@ -8,6 +8,9 @@ members = [
   "crates/mdview-cli",
   "src-tauri",
 ]
+# 裸 `cargo run` / `cargo test` / `cargo build` 只作用于桌面端，不必每次写 -p。
+# 需要全 workspace 时仍显式传 --workspace。
+default-members = ["src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

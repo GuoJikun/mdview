@@ -198,7 +198,7 @@ CSP 保持 `default-src 'self'`，**不要**为 Vue 开 `unsafe-eval`：走 runt
 
 | 文件 | 当前值 |
 |---|---|
-| 根 `Cargo.toml` | `members` 中 desktop 写 `"src-tauri"`（不再是 `crates/mdview-desktop/src-tauri`） |
+| 根 `Cargo.toml` | `members` 中 desktop 写 `"src-tauri"`（不再是 `crates/mdview-desktop/src-tauri`）；另设 `default-members = ["src-tauri"]`，让裸 `cargo run` 默认跑桌面端（要 `--workspace` 才覆盖全部） |
 | `.gitignore` | `/src-tauri/gen`、`/dist` |
 | `crates/mdview-app/src/state.rs` | `read_to_string("../../src-tauri/tests/fixtures/selftest.md")` |
 | `src/*.test.js`（4 个） | 注释里的守门测试路径改为 `src-tauri/tests/web_ime.rs` |
@@ -293,9 +293,11 @@ cargo test --workspace
 pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test
 
 # 备选：cargo run 从仓库根跑，路径要带 src-tauri/ 前缀。
+# 根 Cargo.toml 设了 default-members = ["src-tauri"]，所以裸 cargo run 就是桌面端
+# （不需要 -p mdview-desktop；要跑 CLI 得显式 -p mdview-cli）。
 # 但这条链路窗口拿不到焦点时「系统剪贴板可写」会偶发 false（60/61），
 # 不是回归——判定过关以 tauri dev 的 61/61 为准。
-cargo run -p mdview-desktop -- src-tauri/tests/fixtures/selftest.md --self-test
+cargo run -- src-tauri/tests/fixtures/selftest.md --self-test
 
 # 起窗人工验收（不含 --self-test）
 pnpm tauri dev -- -- tests/fixtures/selftest.md
