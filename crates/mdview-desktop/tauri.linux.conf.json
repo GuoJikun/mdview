@@ -7,7 +7,7 @@
         "title": "mdview",
         "width": 960,
         "height": 760,
-        "minWidth": 520,
+        "minWidth": 680,
         "minHeight": 360,
         "decorations": false
       }
