@@ -22,14 +22,21 @@ const vscrollEl = document.getElementById('vscroll');
 const thumbEl = document.getElementById('vscroll-thumb');
 
 /**
- * 菜单项定义。`action` 是唯一动作名：前端菜单点击、macOS 原生菜单事件都用它。
- * 只列内核/前端真正实现了的动作，不摆好看但点了没反应的空项。
+ * 菜单项定义。结构对齐 image-view 的 MenuEntry：
+ *   sep      分隔线
+ *   action   动作名（与 macOS 原生菜单、app.js 的 runAction 共用）
+ *   acc      快捷键文案，右对齐
+ *   checked  勾选状态，布尔或函数（打开菜单时求值，跟随主题 / 视图模式）
+ *   mark     'check'（✓）或 'dot'（•），默认 check
+ *   danger   危险项，红色文字
+ *   sub      子菜单：{ label, items:[...] }
+ * 只列内核/前端真正实现了的动作，不摆点了没反应的空项。
  */
 const MENUS = {
   file: [
     { action: 'save', label: '保存', acc: 'Ctrl+S' },
     { sep: true },
-    { action: 'close-window', label: '关闭窗口', acc: 'Alt+F4' },
+    { action: 'close-window', label: '关闭窗口', acc: 'Alt+F4', danger: true },
   ],
   edit: [
     { action: 'undo', label: '撤销', acc: 'Ctrl+Z' },
@@ -48,11 +55,38 @@ const MENUS = {
     { action: 'line-end', label: '行尾', acc: 'End' },
   ],
   view: [
-    { action: 'theme', label: '切换浅色 / 深色' },
+    {
+      sub: {
+        label: '主题',
+        items: [
+          {
+            action: 'theme-system', label: '跟随系统', mark: 'dot',
+            checked: () => window.mdviewTheme.mode() === 'system',
+          },
+          {
+            action: 'theme-light', label: '亮色', mark: 'dot',
+            checked: () => window.mdviewTheme.mode() === 'light',
+          },
+          {
+            action: 'theme-dark', label: '暗色', mark: 'dot',
+            checked: () => window.mdviewTheme.mode() === 'dark',
+          },
+        ],
+      },
+    },
     { sep: true },
-    { action: 'mode-wysiwyg', label: '所见即所得' },
-    { action: 'mode-reading', label: '阅读视图' },
-    { action: 'mode-source', label: '源码视图' },
+    {
+      action: 'mode-wysiwyg', label: '所见即所得', mark: 'dot',
+      checked: () => window.__mdviewMode === 'wysiwyg',
+    },
+    {
+      action: 'mode-reading', label: '阅读视图', mark: 'dot',
+      checked: () => window.__mdviewMode === 'reading',
+    },
+    {
+      action: 'mode-source', label: '源码视图', mark: 'dot',
+      checked: () => window.__mdviewMode === 'source',
+    },
   ],
   go: [
     { action: 'outline-prev', label: '上一个标题' },
@@ -68,19 +102,35 @@ const MENUS = {
 
 let openMenu = null;          // 当前展开的 data-menu 值
 let activeItemIndex = -1;     // 键盘高亮的下标（只在可点击项里计数）
+let openSubHost = null;       // 当前展开的子菜单宿主元素
 
 function itemsOf(menu) {
   return MENUS[menu] || [];
 }
 
-/** 当前弹出菜单里所有可点击的 <button>。 */
+/** 当前弹出菜单里所有可点击的 <button>（含已展开的子菜单）。 */
 function popupButtons() {
   return Array.from(popupEl.querySelectorAll('button[data-action]'));
+}
+
+function checkedOf(item) {
+  return typeof item.checked === 'function' ? !!item.checked() : !!item.checked;
+}
+
+/** 销毁已展开的子菜单面板，回到只有顶级项的干净状态。 */
+function closeSubmenu() {
+  if (!openSubHost) return;
+  const panels = openSubHost.getElementsByClassName('tb-submenu');
+  while (panels.length) panels[0].remove();
+  const trigger = openSubHost.querySelector('.submenu-trigger');
+  if (trigger) trigger.classList.remove('open');
+  openSubHost = null;
 }
 
 function closePopup() {
   openMenu = null;
   activeItemIndex = -1;
+  closeSubmenu();
   popupEl.hidden = true;
   popupEl.replaceChildren();
   for (const btn of menusEl.querySelectorAll('.tb-menu')) btn.classList.remove('open');
@@ -102,31 +152,104 @@ function highlight(index) {
   buttons.forEach((b, i) => b.classList.toggle('focused', i === activeItemIndex));
 }
 
+/**
+ * 把一个菜单项渲染成 DOM：分隔线 / 动作按钮 / 子菜单宿主。
+ * checked 求值放在打开菜单的瞬间，所以勾选状态永远是最新的。
+ */
+function renderEntry(entry) {
+  if (entry.sep) {
+    const sep = document.createElement('div');
+    sep.className = 'tb-sep';
+    sep.setAttribute('role', 'separator');
+    return sep;
+  }
+
+  // 子菜单：一行带右箭头的触发器，悬停 / 点击时在右侧展开子面板。
+  if (entry.sub) {
+    const host = document.createElement('div');
+    host.className = 'submenu-host';
+
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'submenu-trigger';
+    trigger.setAttribute('role', 'menuitem');
+    trigger.setAttribute('aria-haspopup', 'true');
+    const gutter = document.createElement('span');
+    gutter.className = 'gutter';
+    const label = document.createElement('span');
+    label.className = 'label';
+    // 标签写在 sub.label 里（见 MENUS 注释），entry.label 作兼容兜底
+    label.textContent = entry.sub.label || entry.label || '';
+    const chev = document.createElement('span');
+    chev.className = 'chev';
+    chev.textContent = '›';
+    trigger.append(gutter, label, chev);
+    host.appendChild(trigger);
+
+    const openSub = () => {
+      if (openSubHost === host) return;
+      closeSubmenu();
+      const panel = document.createElement('div');
+      panel.className = 'tb-submenu';
+      panel.setAttribute('role', 'menu');
+      const children = (entry.sub.items || []).map(renderEntry);
+      // 给子菜单里的动作按钮补上 data-action（renderEntry 对 plain 项已经做了，
+      // 这里再兜一次，保证点击链路一致）。
+      panel.replaceChildren(...children);
+      host.appendChild(panel);
+      openSubHost = host;
+      trigger.classList.add('open');
+    };
+    trigger.addEventListener('pointerenter', openSub);
+    trigger.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (openSubHost === host) closeSubmenu();
+      else openSub();
+    });
+    return host;
+  }
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.setAttribute('role', entry.mark === 'dot' ? 'menuitemradio' : 'menuitem');
+  btn.dataset.action = entry.action;
+  const isChecked = checkedOf(entry);
+  if (entry.mark === 'dot') btn.setAttribute('aria-checked', String(isChecked));
+
+  const gutter = document.createElement('span');
+  gutter.className = 'gutter';
+  gutter.textContent = isChecked ? (entry.mark === 'dot' ? '•' : '✓') : '';
+  btn.appendChild(gutter);
+
+  const label = document.createElement('span');
+  label.className = 'label';
+  label.textContent = entry.label;
+  btn.appendChild(label);
+
+  if (entry.acc) {
+    const acc = document.createElement('span');
+    acc.className = 'acc';
+    acc.textContent = entry.acc;
+    btn.appendChild(acc);
+  }
+
+  if (entry.danger) btn.classList.add('danger');
+  // 主菜单项悬停时收起子菜单（VS Code / macOS 行为）。
+  // 但不能对子菜单内部的项生效：否则鼠标刚移到子菜单项上，面板就被自己
+  // 的 pointerenter 销毁了，永远点不到。用 closest 判断而非传参，多级嵌套
+  // 也自动成立。
+  btn.addEventListener('pointerenter', (event) => {
+    if (!event.currentTarget.closest('.tb-submenu')) closeSubmenu();
+  });
+  return btn;
+}
+
 /** 在按钮下方弹出菜单，右侧放不下时整体左移。 */
 function showPopup(menu, anchor) {
   const items = itemsOf(menu);
   if (!items.length) return;
-  popupEl.replaceChildren(...items.map((item) => {
-    if (item.sep) {
-      const sep = document.createElement('div');
-      sep.className = 'sep';
-      return sep;
-    }
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.setAttribute('role', 'menuitem');
-    btn.dataset.action = item.action;
-    const label = document.createElement('span');
-    label.textContent = item.label;
-    btn.appendChild(label);
-    if (item.acc) {
-      const acc = document.createElement('span');
-      acc.className = 'acc';
-      acc.textContent = item.acc;
-      btn.appendChild(acc);
-    }
-    return btn;
-  }));
+  closeSubmenu();
+  popupEl.replaceChildren(...items.map(renderEntry));
   popupEl.hidden = false;
   activeItemIndex = -1;
 
@@ -231,62 +354,104 @@ document.addEventListener('keydown', (event) => {
 
 // ---- 自绘纵向滚动条 --------------------------------------------------
 // 原生滚动条属于窗口视口，从 y=0 一直画到窗口底，必然压住自绘标题栏和状态栏。
-// 这里隐藏它，用一个只覆盖中间内容区的滚动条代替；滚动本身仍是 window 的，
-// 所以 caret / 大纲 / 拖拽自动滚动那套视口坐标逻辑完全不用改。
+// 这里隐藏它，用一个只覆盖中间内容区的滚动条代替；滚动本身仍是各容器自己的，
+// 所以 caret / 大纲锚点 / 拖拽自动滚动那套坐标逻辑完全不用改。
+//
+// 正文（window 滚动）和大纲（#outline 自身滚动）共用这一套视觉与拖动，
+// 差异只在「怎么读写滚动量」——由 spec 传进来。返回的 refresh 用来重算滑块。
+function attachScrollbar(spec) {
+  const track = spec.track;
+  const thumb = spec.thumb;
+  let drag = null;
 
-function scrollMax() {
-  const scroller = document.scrollingElement || document.documentElement;
-  return Math.max(0, scroller.scrollHeight - window.innerHeight);
+  function refresh() {
+    if (!rootEl.classList.contains('custom-titlebar')) return;
+    if (spec.edges) {
+      const e = spec.edges();
+      track.style.top = e.top + 'px';
+      track.style.bottom = e.bottom + 'px';
+    }
+    const max = spec.max();
+    if (max <= 0) { thumb.style.display = 'none'; return; }
+    thumb.style.display = '';
+    const trackPx = Math.max(1, track.getBoundingClientRect().height);
+    const height = Math.max(28, Math.min(trackPx,
+      trackPx * spec.viewport() / spec.content()));
+    thumb.style.height = height + 'px';
+    thumb.style.top = (spec.pos() / max) * (trackPx - height) + 'px';
+  }
+
+  thumb.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+    drag = { y: event.clientY, pos: spec.pos(), max: spec.max() };
+    track.classList.add('dragging');
+  });
+  track.addEventListener('mousedown', (event) => {
+    if (event.target === thumb) return;
+    const max = spec.max();
+    if (max <= 0) return;
+    const rect = track.getBoundingClientRect();
+    const ratio = (event.clientY - rect.top - thumb.offsetHeight / 2) /
+      Math.max(1, rect.height - thumb.offsetHeight);
+    spec.setPos(Math.max(0, Math.min(max, ratio * max)));
+  });
+  document.addEventListener('mousemove', (event) => {
+    if (!drag) return;
+    const rect = track.getBoundingClientRect();
+    const room = Math.max(1, rect.height - thumb.offsetHeight);
+    const delta = ((event.clientY - drag.y) / room) * drag.max;
+    spec.setPos(Math.max(0, Math.min(drag.max, drag.pos + delta)));
+  });
+  document.addEventListener('mouseup', () => {
+    if (!drag) return;
+    drag = null;
+    track.classList.remove('dragging');
+  });
+  return refresh;
 }
 
-function refreshScrollbar() {
-  if (!rootEl.classList.contains('custom-titlebar')) return;
+function docScrollSpec() {
   const scroller = document.scrollingElement || document.documentElement;
-  const max = scrollMax();
-  const top = barEl.getBoundingClientRect().height;
-  const bottom = statusEl ? statusEl.getBoundingClientRect().height : 0;
-  vscrollEl.style.top = top + 'px';
-  vscrollEl.style.bottom = bottom + 'px';
-  if (max <= 0) {
-    thumbEl.style.display = 'none';
-    return;
-  }
-  thumbEl.style.display = '';
-  const track = Math.max(1, window.innerHeight - top - bottom);
-  const height = Math.max(28, Math.min(track, track * window.innerHeight / scroller.scrollHeight));
-  thumbEl.style.height = height + 'px';
-  thumbEl.style.top = (window.scrollY / max) * (track - height) + 'px';
+  return {
+    track: vscrollEl, thumb: thumbEl,
+    viewport: () => window.innerHeight,
+    content: () => scroller.scrollHeight,
+    max: () => Math.max(0, scroller.scrollHeight - window.innerHeight),
+    pos: () => window.scrollY,
+    setPos: (v) => window.scrollTo(0, v),
+    // 正文轨道要避开标题栏和状态栏，高度随两者实测值变化
+    edges: () => ({
+      top: barEl.getBoundingClientRect().height,
+      bottom: statusEl ? statusEl.getBoundingClientRect().height : 0,
+    }),
+  };
+}
+
+function outlineScrollSpec() {
+  const nav = document.getElementById('outline');
+  return {
+    track: document.getElementById('outline-scroll'),
+    thumb: document.getElementById('outline-scroll-thumb'),
+    viewport: () => nav.clientHeight,
+    content: () => nav.scrollHeight,
+    max: () => Math.max(0, nav.scrollHeight - nav.clientHeight),
+    pos: () => nav.scrollTop,
+    setPos: (v) => { nav.scrollTop = v; },
+    // 大纲轨道上下边缘由 CSS 固定（top:30px / bottom:36px），无需动态设
+  };
+}
+
+const refreshDocScroll = attachScrollbar(docScrollSpec());
+const refreshOutlineScroll = attachScrollbar(outlineScrollSpec());
+
+function refreshScrollbar() {
+  refreshDocScroll();
+  refreshOutlineScroll();
 }
 window.__mdviewRefreshScrollbar = refreshScrollbar;
 
-let scrollDrag = null;
-thumbEl.addEventListener('mousedown', (event) => {
-  event.preventDefault();
-  scrollDrag = { y: event.clientY, top: window.scrollY, max: scrollMax() };
-  vscrollEl.classList.add('dragging');
-});
-vscrollEl.addEventListener('mousedown', (event) => {
-  if (event.target === thumbEl) return;
-  const max = scrollMax();
-  if (max <= 0) return;
-  const rect = vscrollEl.getBoundingClientRect();
-  const ratio = (event.clientY - rect.top - thumbEl.offsetHeight / 2) /
-    Math.max(1, rect.height - thumbEl.offsetHeight);
-  window.scrollTo(0, Math.max(0, Math.min(max, ratio * max)));
-});
-document.addEventListener('mousemove', (event) => {
-  if (!scrollDrag) return;
-  const rect = vscrollEl.getBoundingClientRect();
-  const room = Math.max(1, rect.height - thumbEl.offsetHeight);
-  const delta = ((event.clientY - scrollDrag.y) / room) * scrollDrag.max;
-  window.scrollTo(0, Math.max(0, Math.min(scrollDrag.max, scrollDrag.top + delta)));
-});
-document.addEventListener('mouseup', () => {
-  if (!scrollDrag) return;
-  scrollDrag = null;
-  vscrollEl.classList.remove('dragging');
-});
 window.addEventListener('scroll', refreshScrollbar, { passive: true });
+document.getElementById('outline').addEventListener('scroll', refreshScrollbar, { passive: true });
 window.addEventListener('resize', refreshScrollbar);
 
 // ---- 平台复核 --------------------------------------------------------

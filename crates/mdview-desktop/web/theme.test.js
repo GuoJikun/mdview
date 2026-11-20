@@ -1,7 +1,7 @@
 // 主题解析逻辑的 Node 单测。
 'use strict';
 
-const { resolve, toggleNext } = require('./theme.js');
+const { resolve, toggleNext, modeOf } = require('./theme.js');
 
 let passed = 0;
 let failed = 0;
@@ -26,6 +26,11 @@ check('非法存储值回落系统深色', resolve('purple', 'dark') === 'dark',
 // 切换取反
 check('深色切到浅色', toggleNext('dark') === 'light', 'got ' + toggleNext('dark'));
 check('浅色切到深色', toggleNext('light') === 'dark', 'got ' + toggleNext('light'));
+// 偏好模式（菜单三档的勾选依据）
+check('无偏好是跟随系统', modeOf(null) === 'system', 'got ' + modeOf(null));
+check('亮色偏好是亮色', modeOf('light') === 'light', 'got ' + modeOf('light'));
+check('暗色偏好是暗色', modeOf('dark') === 'dark', 'got ' + modeOf('dark'));
+check('非法偏好回落跟随系统', modeOf('purple') === 'system', 'got ' + modeOf('purple'));
 
 console.log('theme: ' + passed + ' 项全过 / ' + (passed + failed));
 if (failed > 0) process.exit(1);

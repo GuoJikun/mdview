@@ -94,7 +94,9 @@ fn menu_action(id: &str) -> Option<&'static str> {
         "copy" => "copy",
         "paste" => "paste",
         "select-all" => "select-all",
-        "theme" => "theme",
+        "theme-system" => "theme-system",
+        "theme-light" => "theme-light",
+        "theme-dark" => "theme-dark",
         "mode-wysiwyg" => "mode-wysiwyg",
         "mode-reading" => "mode-reading",
         "mode-source" => "mode-source",
@@ -142,8 +144,14 @@ fn build_native_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<
         .item(&item("select-all", "全选")?)
         .build()?;
 
+    let theme_menu = SubmenuBuilder::new(app, "主题")
+        .item(&item("theme-system", "跟随系统")?)
+        .item(&item("theme-light", "亮色")?)
+        .item(&item("theme-dark", "暗色")?)
+        .build()?;
+
     let view_menu = SubmenuBuilder::new(app, "视图")
-        .item(&item("theme", "切换浅色 / 深色")?)
+        .item(&theme_menu)
         .separator()
         .item(&item("mode-wysiwyg", "所见即所得")?)
         .item(&item("mode-reading", "阅读视图")?)

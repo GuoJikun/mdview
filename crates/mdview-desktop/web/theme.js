@@ -63,6 +63,15 @@
     return theme;
   }
 
+  /** 偏好模式：无覆盖是 'system'，否则是手动选中的 'light' / 'dark'。 */
+  function modeOf(stored) {
+    return stored === 'light' || stored === 'dark' ? stored : 'system';
+  }
+
+  function mode() {
+    return modeOf(readStore());
+  }
+
   /** 点击主题按钮：切到相反档 → 记住 → 应用，返回新主题。 */
   function toggle() {
     const current = resolve(readStore(), systemTheme());
@@ -80,8 +89,20 @@
     return theme;
   }
 
+  /** 菜单里的三档选择：system 清掉覆盖，light/dark 记住并应用。 */
+  function set(value) {
+    if (value === 'system') return followSystem();
+    if (value === 'light' || value === 'dark') {
+      writeStore(value);
+      apply(value);
+      return value;
+    }
+    return resolve(readStore(), systemTheme());
+  }
+
   const api = {
     systemTheme: systemTheme, resolve: resolve, toggleNext: toggleNext,
+    modeOf: modeOf, mode: mode, set: set,
     init: init, toggle: toggle, followSystem: followSystem,
   };
   if (typeof module !== 'undefined' && module.exports) {

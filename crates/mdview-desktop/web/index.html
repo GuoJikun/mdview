@@ -19,11 +19,7 @@
 <header id="titlebar" data-tauri-drag-region="deep">
   <div class="tb-left" data-tauri-drag-region>
     <span class="tb-logo" data-tauri-drag-region aria-hidden="true">
-      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2">
-        <path d="M3.5 1.5h6L12.5 4.5v10h-9z"/>
-        <path d="M9.5 1.5v3h3"/>
-        <path d="M5.5 8h5M5.5 10.5h5"/>
-      </svg>
+      <img alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAASUlEQVR42mNgGAVQIK+s8Z+eeNQBow4YdQDRDui8+I0iPPQdMJoGRh1w4uwlsvDwccBoGhh1ALUS3dB1wGgaGHXAqAPo5oARCwCme+39B8DaVAAAAABJRU5ErkJggg==">
     </span>
     <nav class="tb-menus" id="tb-menus" aria-label="应用菜单">
       <button type="button" class="tb-menu" data-menu="file">文件</button>
@@ -56,11 +52,13 @@
   </div>
 </header>
 <div id="tb-menu-popup" class="tb-menu-popup" role="menu" hidden></div>
-<!-- 自绘纵向滚动条：浏览器原生滚动条纵跨整窗，会压住标题栏和状态栏 -->
-<div id="vscroll" aria-hidden="true"><div id="vscroll-thumb"></div></div>
+<!-- 自绘纵向滚动条：浏览器原生滚动条纵跨整窗，会压住标题栏和状态栏。
+     正文与大纲各一套，共用 .tb-vscroll 的视觉与拖动逻辑 -->
+<div id="vscroll" class="tb-vscroll" aria-hidden="true"><div id="vscroll-thumb" class="tb-vscroll-thumb"></div></div>
 
 <!-- 大纲侧栏：标题清单，点击跳正文，滚动时高亮当前节 -->
 <nav id="outline" aria-label="文档大纲"></nav>
+<div id="outline-scroll" class="tb-vscroll" aria-hidden="true"><div id="outline-scroll-thumb" class="tb-vscroll-thumb"></div></div>
 <!-- 内核持有文本真值，这里只有投影：每块一个 <section>，每个停靠点一个元素 -->
 <div id="doc" tabindex="-1" spellcheck="false"></div>
 <div id="caret"></div>

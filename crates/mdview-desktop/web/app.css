@@ -15,7 +15,6 @@
   --rule: #d0d7de;
   --img-border: #b6bcc4;
   --img-bg: #fafbfc;
-  --dirty: #bf8700;
   --caret: #0969da;
   --sel: rgba(37, 99, 235, .18);
   --preedit-bg: #fff;
@@ -27,18 +26,27 @@
   --outline-active-bg: #ddf4ff;
   --outline-active-fg: #0969da;
   --outline-border: #d0d7de;
-  /* 自绘标题栏（VSCode 风格）。macOS 用系统标题栏，这几项不会被用到 */
-  --tb-bar-bg: #f3f3f3;
-  --tb-bar-fg: #333;
-  --tb-bar-border: #e5e5e5;
-  --tb-hover: #e4e6f1;
-  --tb-active: #c8d0e8;
-  --tb-popup-bg: #fff;
-  --tb-popup-border: #c8c8c8;
-  --tb-popup-hover: #e4e6f1;
+  /* 自绘标题栏与菜单（对齐 image-view 的设计令牌）。
+     macOS 用系统标题栏，这几项不会被用到。正文层仍用上面的 GitHub 系变量。 */
+  --chrome: #f6f6f7;
+  --hairline: #e4e4e7;
+  --control: #ffffff;
+  --text: #1d1d1f;
+  --text2: #6e6e73;
+  --text3: #98989d;
+  --icon: #48484c;
+  --accent: #0a7cff;
+  --accent-soft: rgba(10, 124, 255, .13);
+  --hover: rgba(0, 0, 0, .055);
+  --press: rgba(0, 0, 0, .1);
+  --danger: #e5484d;
+  --tile-border: rgba(0, 0, 0, .07);
+  --shadow-menu: 0 8px 24px rgba(0, 0, 0, .18);
   --tb-close-hover: #c42b1c;
   --tb-scroll-thumb: rgba(0, 0, 0, .28);
   --tb-scroll-thumb-hover: rgba(0, 0, 0, .5);
+  --font-ui: -apple-system, "SF Pro Text", "PingFang SC", "Segoe UI Variable Text",
+    "Segoe UI", "Microsoft YaHei UI", sans-serif;
 }
 :root[data-theme="dark"] {
   --bg: #0d1117;
@@ -53,7 +61,6 @@
   --rule: #484f58;
   --img-border: #484f58;
   --img-bg: #161b22;
-  --dirty: #d29922;
   --caret: #58a6ff;
   --sel: rgba(88, 166, 255, .25);
   --preedit-bg: #1c2128;
@@ -65,14 +72,20 @@
   --outline-active-bg: #1f6feb33;
   --outline-active-fg: #58a6ff;
   --outline-border: #30363d;
-  --tb-bar-bg: #181818;
-  --tb-bar-fg: #cccccc;
-  --tb-bar-border: #2b2b2b;
-  --tb-hover: #2a2d2e;
-  --tb-active: #094771;
-  --tb-popup-bg: #252526;
-  --tb-popup-border: #454545;
-  --tb-popup-hover: #094771;
+  --chrome: #2a2a2d;
+  --hairline: #3a3a3d;
+  --control: #3a3a3d;
+  --text: #f5f5f7;
+  --text2: #a1a1a6;
+  --text3: #7c7c82;
+  --icon: #d3d3d9;
+  --accent: #0a84ff;
+  --accent-soft: rgba(10, 132, 255, .2);
+  --hover: rgba(255, 255, 255, .07);
+  --press: rgba(255, 255, 255, .13);
+  --danger: #ff6961;
+  --tile-border: rgba(255, 255, 255, .07);
+  --shadow-menu: 0 8px 24px rgba(0, 0, 0, .45);
   --tb-close-hover: #c42b1c;
   --tb-scroll-thumb: rgba(255, 255, 255, .28);
   --tb-scroll-thumb-hover: rgba(255, 255, 255, .55);
@@ -85,83 +98,137 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ---- 自绘标题栏（Windows / Linux）------------------------------------
+/* ---- 自绘标题栏（Windows / Linux，参考 image-view）----------------
    默认隐藏：macOS 用系统标题栏 + 系统菜单栏，由 <head> 里的平台判定决定
    是否给 <html> 加 custom-titlebar。窗口 decorations 也按平台配置。 */
 #titlebar, #tb-menu-popup { display: none; }
 html.custom-titlebar #titlebar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 30;
-  display: flex; align-items: center; height: 35px;
-  background: var(--tb-bar-bg); color: var(--tb-bar-fg);
-  border-bottom: 1px solid var(--tb-bar-border);
-  user-select: none; -webkit-user-select: none;
-  font: 13px/1 "Segoe UI", "Microsoft YaHei", sans-serif;
+  display: flex; align-items: center; height: 30px;
+  background: var(--chrome); color: var(--text);
+  border-bottom: 1px solid var(--hairline);
+  -webkit-user-select: none; user-select: none;
+  font-family: var(--font-ui);
 }
 .tb-left, .tb-center, .tb-right { display: flex; align-items: center; height: 100%; }
 .tb-left { min-width: 0; }
-.tb-logo { display: inline-flex; align-items: center; padding: 0 8px 0 12px; opacity: .85; }
-.tb-menus { display: flex; align-items: center; height: 100%; }
-.tb-menu {
-  font: inherit; color: inherit; background: transparent; border: 0;
-  height: 100%; padding: 0 9px; cursor: default;
+.tb-logo {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; margin: 0 4px 0 10px; flex: none;
 }
-.tb-menu:hover { background: var(--tb-hover); }
-.tb-menu.open { background: var(--tb-active); }
+.tb-logo img { display: block; width: 16px; height: 16px; }
+.tb-menus { display: flex; align-items: center; height: 100%; gap: 2px; }
+.tb-menu {
+  font: inherit; font-size: 12px; color: inherit; background: transparent; border: 0;
+  height: 100%; padding: 0 8px; cursor: default; border-radius: 4px;
+  transition: background-color 60ms ease, color 60ms ease;
+}
+.tb-menu:hover { background: var(--hover); }
+.tb-menu.open { background: var(--accent-soft); color: var(--accent); }
 .tb-center { flex: 1; justify-content: center; min-width: 0; }
 .tb-title {
-  max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--tb-bar-fg); opacity: .7; font-size: 12px;
+  max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); font-size: 14px; font-weight: 600;
+  pointer-events: none;
 }
 .tb-right { height: 100%; }
 .tb-ctl {
   width: 46px; height: 100%; display: inline-flex; align-items: center; justify-content: center;
   font: inherit; color: inherit; background: transparent; border: 0; cursor: default;
+  transition: background-color 60ms ease, color 60ms ease;
 }
-.tb-ctl:hover { background: var(--tb-hover); }
+.tb-ctl:hover { background: var(--hover); }
 .tb-ctl.tb-close:hover { background: var(--tb-close-hover); color: #fff; }
 
 /* 下拉菜单：绝对定位在标题栏下方，逐项渲染自 titlebar.js */
 html.custom-titlebar #tb-menu-popup {
-  display: block; position: fixed; z-index: 31; min-width: 220px;
-  padding: 4px 0; background: var(--tb-popup-bg);
-  border: 1px solid var(--tb-popup-border);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .22);
-  font: 13px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif;
-  color: var(--tb-bar-fg);
+  display: block; position: fixed; z-index: 31; min-width: 252px;
+  padding: 4px; background: var(--control);
+  border: 1px solid var(--tile-border); border-radius: 6px;
+  box-shadow: var(--shadow-menu);
+  font-family: var(--font-ui); font-size: 14px; line-height: 1.45;
+  color: var(--text);
+  animation: tb-menu-in 120ms ease-out;
+}
+@keyframes tb-menu-in {
+  from { opacity: 0; transform: translateY(-4px) scale(.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 #tb-menu-popup[hidden] { display: none !important; }
 #tb-menu-popup button {
-  display: flex; align-items: center; justify-content: space-between; gap: 24px;
-  width: 100%; padding: 5px 14px 5px 26px; text-align: left;
-  font: inherit; color: inherit; background: transparent; border: 0; cursor: default;
+  display: flex; align-items: center; width: 100%; height: 26px;
+  padding: 0 8px 0 0; text-align: left;
+  font: inherit; font-size: 14px; color: inherit; background: transparent; border: 0;
+  border-radius: 4px; cursor: default;
 }
 #tb-menu-popup button:hover, #tb-menu-popup button:focus-visible,
-#tb-menu-popup button.focused {
-  background: var(--tb-popup-hover); outline: none;
+#tb-menu-popup button.focused { background: var(--accent); color: #fff; outline: none; }
+#tb-menu-popup .gutter {
+  width: 22px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; color: var(--text2);
 }
-#tb-menu-popup button .acc { color: var(--faint); font-size: 12px; }
-#tb-menu-popup .sep { height: 1px; margin: 4px 0; background: var(--tb-bar-border); }
+#tb-menu-popup button:hover .gutter,
+#tb-menu-popup button.focused .gutter { color: rgba(255, 255, 255, .9); }
+#tb-menu-popup .label {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#tb-menu-popup .acc {
+  margin-left: auto; padding-left: 24px;
+  font-size: 12px; color: var(--text3); font-variant-numeric: tabular-nums;
+}
+#tb-menu-popup button:hover .acc,
+#tb-menu-popup button.focused .acc { color: rgba(255, 255, 255, .85); }
+#tb-menu-popup button.danger .label { color: var(--danger); }
+#tb-menu-popup button.danger:hover .label,
+#tb-menu-popup button.danger.focused .label { color: #fff; }
+#tb-menu-popup .chev { margin-left: auto; color: var(--text3); font-size: 14px; }
+#tb-menu-popup button:hover .chev,
+#tb-menu-popup button.focused .chev { color: #fff; }
+/* 菜单分隔线用独立的 tb-sep：正文表格间隙那个 .sep 虽已收进 #doc 作用域，
+   外壳 UI 仍不复用渲染区的短类名，双保险。 */
+#tb-menu-popup .tb-sep {
+  display: block; width: auto; height: 1px;
+  /* 左端与菜单文字对齐：按钮左边是 22px 的勾选槽（gutter） */
+  margin: 4px 4px 4px 22px; background: var(--hairline);
+}
+#tb-menu-popup .submenu-host { position: relative; }
+#tb-menu-popup .submenu-trigger { display: flex; }
+#tb-menu-popup .submenu-trigger.open { background: var(--accent); color: #fff; outline: none; }
+#tb-menu-popup .submenu-trigger.open .gutter,
+#tb-menu-popup .submenu-trigger.open .chev { color: rgba(255, 255, 255, .9); }
+#tb-menu-popup .tb-submenu {
+  position: absolute; top: -4px; left: 100%; margin-left: 3px;
+  min-width: 180px; padding: 4px;
+  background: var(--control); border: 1px solid var(--tile-border);
+  border-radius: 6px; box-shadow: var(--shadow-menu);
+}
 
 /* 有自绘标题栏时，正文与侧栏都从它下面开始 */
-html.custom-titlebar #outline { top: 35px; }
-html.custom-titlebar #doc { padding-top: 91px; }
+html.custom-titlebar #outline { top: 30px; }
+html.custom-titlebar #doc { padding-top: 86px; }
 
 /* 自绘纵向滚动条：原生滚动条属于窗口视口，会纵跨标题栏和状态栏。
+   正文（#vscroll）和大纲（#outline-scroll）共用这一套视觉与交互，只有
+   定位边缘不同：正文贴窗口右侧，大纲贴侧栏右侧（left:220px = 232-12）。
    top/bottom 由 JS 按标题栏、状态栏的实际高度算出来，只占中间那段。 */
 html.custom-titlebar { scrollbar-width: none; }
 html.custom-titlebar::-webkit-scrollbar,
 html.custom-titlebar body::-webkit-scrollbar { width: 0; height: 0; display: none; }
-#vscroll { display: none; }
-html.custom-titlebar #vscroll {
-  display: block; position: fixed; right: 0; z-index: 25; width: 12px;
-  top: 35px; bottom: 36px;
+.tb-vscroll { display: none; }
+html.custom-titlebar .tb-vscroll {
+  display: block; position: fixed; z-index: 25; width: 12px;
+  top: 30px; bottom: 36px;
 }
-#vscroll-thumb {
+#vscroll { right: 0; }
+#outline-scroll { left: 220px; }
+.tb-vscroll-thumb {
   position: absolute; right: 3px; width: 6px; min-height: 28px;
   border-radius: 3px; background: var(--tb-scroll-thumb);
 }
-html.custom-titlebar #vscroll:hover #vscroll-thumb,
-html.custom-titlebar #vscroll.dragging #vscroll-thumb { background: var(--tb-scroll-thumb-hover); }
+html.custom-titlebar .tb-vscroll:hover .tb-vscroll-thumb,
+html.custom-titlebar .tb-vscroll.dragging .tb-vscroll-thumb {
+  background: var(--tb-scroll-thumb-hover);
+}
 
 /* 大纲侧栏：固定在左侧，正文靠右边距让出位置 */
 #outline {
@@ -171,6 +238,10 @@ html.custom-titlebar #vscroll.dragging #vscroll-thumb { background: var(--tb-scr
   font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
   scrollbar-width: thin;
 }
+/* 自定义标题栏下，大纲的滚动条交给 #outline-scroll 自绘，和正文同一套视觉；
+   原生条必须让位。macOS 用原生标题栏、自绘条不显示，故保留原生滚动条。 */
+html.custom-titlebar #outline { scrollbar-width: none; }
+html.custom-titlebar #outline::-webkit-scrollbar { width: 0; height: 0; display: none; }
 #outline .oc-title {
   font-weight: 600; color: var(--muted); padding: 0 8px 10px;
   letter-spacing: .02em;
@@ -190,48 +261,60 @@ html.custom-titlebar #vscroll.dragging #vscroll-thumb { background: var(--tb-scr
 #outline a.level-5, #outline a.level-6 { padding-left: 54px; }
 #outline a.active { background: var(--outline-active-bg); color: var(--outline-active-fg); }
 
+/* ---- Markdown 渲染区（#doc）------------------------------------
+   这里的选择器一律限定在 #doc 下。投影生成的类名都是短名（.sep/.li/
+   .b/.a…），若放任全局作用域，就会和标题栏、菜单、大纲的同名类串味——
+   菜单分隔符曾因也叫 .sep 被表格间隙规则压成 8px 的短线。 */
 #doc {
   max-width: 780px; margin: 0 auto; padding: 56px 32px 45vh;
   margin-left: max(calc(50% - 390px + 116px), 232px + 32px);
   outline: none; cursor: text;
 }
-.blk { position: relative; margin: 0 0 1.1em; white-space: pre-wrap; }
-.p { margin: 0; }
-h1, h2, h3, h4, h5, h6 { margin: 1.5em 0 .6em; line-height: 1.35; font-weight: 650; }
-h1 { font-size: 1.9em; } h2 { font-size: 1.55em; } h3 { font-size: 1.3em; }
-h4 { font-size: 1.12em; } h5, h6 { font-size: 1em; }
-.code {
+#doc .blk { position: relative; margin: 0 0 1.1em; white-space: pre-wrap; }
+#doc .p { margin: 0; }
+#doc h1, #doc h2, #doc h3, #doc h4, #doc h5, #doc h6 {
+  margin: 1.5em 0 .6em; line-height: 1.35; font-weight: 650;
+}
+#doc h1 { font-size: 1.9em; } #doc h2 { font-size: 1.55em; } #doc h3 { font-size: 1.3em; }
+#doc h4 { font-size: 1.12em; } #doc h5, #doc h6 { font-size: 1em; }
+#doc .code {
   font-family: "Cascadia Code", Consolas, "Courier New", monospace;
   font-size: .92em; line-height: 1.6; white-space: pre;
   background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px;
   padding: .9em 1em; overflow-x: auto;
 }
-blockquote {
+#doc blockquote {
   margin: 0; padding-left: 1em; border-left: 3px solid var(--quote-border); color: var(--muted);
 }
-.kind-list { padding-left: 1.5em; }
-.li { position: relative; }
-.li::before { content: "•"; position: absolute; left: -1.05em; color: var(--faint); }
+#doc .kind-list { padding-left: 1.5em; }
+#doc .li { position: relative; }
+#doc .li::before { content: "•"; position: absolute; left: -1.05em; color: var(--faint); }
 /* 有序项：序号右对齐、向左生长。`data-m` 是源码里那一项自己的标记
    （`1.` / `2)`），多位数不会把正文顶开，也不会被 counter 改号。 */
-.li[data-m]::before { content: attr(data-m); left: auto; right: calc(100% + .35em); }
-.li:has(.atom.task)::before { content: none; }
-.li:has(.atom.task) { padding-left: .1em; }
-.sep { display: inline-block; width: .55em; }
-.atom.rule { display: block; color: var(--rule); letter-spacing: .1em; }
-.b { font-weight: 650; }
-.i { font-style: italic; }
-.d { text-decoration: line-through; color: var(--muted); }
-.c {
+#doc .li[data-m]::before { content: attr(data-m); left: auto; right: calc(100% + .35em); }
+#doc .li:has(.atom.task)::before { content: none; }
+#doc .li:has(.atom.task) { padding-left: .1em; }
+#doc .sep { display: inline-block; width: .55em; }
+/* 分割线：`---` 折叠成一个原子停靠点，8 个 `─` 只负责占位与光标矩形。
+   可见的横线交给伪元素，占满整行；文字本身透明，避免只画出短短一截。 */
+#doc .atom.rule { display: block; position: relative; color: transparent; }
+#doc .atom.rule::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%;
+  border-top: 1px solid var(--rule); pointer-events: none;
+}
+#doc .b { font-weight: 650; }
+#doc .i { font-style: italic; }
+#doc .d { text-decoration: line-through; color: var(--muted); }
+#doc .c {
   font-family: "Cascadia Code", Consolas, monospace; font-size: .9em;
   background: var(--inline-code-bg); border-radius: 3px;
 }
-.a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+#doc .a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
 /* 折叠的标记仍然占位，只是不可见：它是停靠点之间的「跨栏」 */
 /* 表格网格。边框与 4px 圆角由最外层 table 承担；内部线只画右边和下边，
    否则 separate 模型下相邻两格各画一条，看起来是 2px。overflow 负责把
    内格的方角裁进外框圆角里。 */
-.md-table {
+#doc .md-table {
   border-collapse: separate;
   border-spacing: 0;
   border: 1px solid var(--rule);
@@ -239,7 +322,7 @@ blockquote {
   overflow: hidden;
   margin: .2em 0;
 }
-.md-table th, .md-table td {
+#doc .md-table th, #doc .md-table td {
   padding: .35em .7em;
   vertical-align: top;
   min-width: 3em;
@@ -247,23 +330,23 @@ blockquote {
   border-right: 1px solid var(--rule);
   border-bottom: 1px solid var(--rule);
 }
-.md-table th:last-child, .md-table td:last-child { border-right: 0; }
-.md-table tr:last-child th, .md-table tr:last-child td { border-bottom: 0; }
-.md-table th { background: var(--code-bg); font-weight: 650; }
-.md-table .al { text-align: left; }
-.md-table .ac { text-align: center; }
-.md-table .ar { text-align: right; }
-.md-table .sep { display: none; }
+#doc .md-table th:last-child, #doc .md-table td:last-child { border-right: 0; }
+#doc .md-table tr:last-child th, #doc .md-table tr:last-child td { border-bottom: 0; }
+#doc .md-table th { background: var(--code-bg); font-weight: 650; }
+#doc .md-table .al { text-align: left; }
+#doc .md-table .ac { text-align: center; }
+#doc .md-table .ar { text-align: right; }
+#doc .md-table .sep { display: none; }
 
-.mk { color: transparent; }
-.eob, .mk { user-select: none; }
-.atom { display: inline-block; vertical-align: baseline; }
-.atom.img {
+#doc .mk { color: transparent; }
+#doc .eob, #doc .mk { user-select: none; }
+#doc .atom { display: inline-block; vertical-align: baseline; }
+#doc .atom.img {
   min-width: 1.6em; padding: 0 .35em; border: 1px dashed var(--img-border); border-radius: 4px;
   color: var(--muted); font-size: .82em; text-align: center; background: var(--img-bg);
 }
-.atom.task { color: var(--muted); }
-.sel { background: var(--sel); border-radius: 2px; }
+#doc .atom.task { color: var(--muted); }
+#doc .sel { background: var(--sel); border-radius: 2px; }
 /* 原生选区不上色：选区只由自绘 .sel 表达（见 app.js 的 selectionchange）。
    留着这条兜底，是怕清理晚一帧时用户看到两套高亮叠在一起。 */
 #doc ::selection { background: transparent; }
@@ -303,20 +386,13 @@ blockquote {
 }
 #bar b { color: var(--fg); font-weight: 600; }
 #bar .hint { margin-left: auto; color: var(--faint); }
-#bar .dirty { color: var(--dirty); }
-#theme-btn {
-  font: inherit; color: var(--muted); background: transparent;
-  border: 1px solid var(--border); border-radius: 4px;
-  padding: 1px 8px; cursor: pointer;
-}
-#theme-btn:hover { color: var(--fg); background: var(--outline-hover); }
-.table-tools { display: inline-flex; gap: 4px; }
-.table-tools button {
+#bar .table-tools { display: inline-flex; gap: 4px; }
+#bar .table-tools button {
   font: inherit; color: var(--muted); background: transparent;
   border: 1px solid var(--border); border-radius: 4px;
   padding: 1px 7px; cursor: pointer;
 }
-.table-tools button:hover { color: var(--fg); background: var(--outline-hover); }
+#bar .table-tools button:hover { color: var(--fg); background: var(--outline-hover); }
 #toast {
   position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%);
   padding: 6px 14px; border-radius: 6px; font-size: 13px;

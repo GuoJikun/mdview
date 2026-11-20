@@ -20,6 +20,9 @@ let maxStop = -1;           // 最大停靠点序号，供上下移动取上界
 let caret = null;           // 最近一次内核回报的光标
 let pendingStop = null;     // 已发出、尚未回包的垂直移动落点
 let meta = { revision: 0, dirty: false, path: null, stops: 0 };
+// 当前视图模式：内核快照不带这个字段，前端记住菜单点选的结果供自绘菜单画单选圆点。
+// 与内核默认值（wysiwyg）一致；macOS 原生菜单切模式也走 runAction，会同步更新。
+window.__mdviewMode = 'wysiwyg';
 let dragging = false;
 let dragPoint = null;       // 拖动期间指针的视口坐标（自动滚动要按它反复求落点）
 let dragStop = null;        // 拖动中已发出的落点，避免同一落点每帧都过一趟 IPC
@@ -300,17 +303,13 @@ function inTable() {
 function renderStatus() {
   const blocks = docEl.children.length;
   const block = caret && caret.block !== null && caret.block !== undefined ? caret.block + 1 : '-';
-  const name = meta.path ? meta.path.split(/[\\/]/).pop() : '未命名';
   // 标题栏只在文件名或脏标记变化时才走一次 IPC，别在每次输入后都设
   const titleKey = (meta.path || '') + '|' + !!meta.dirty;
   if (titleKey !== lastTitleKey && window.__mdviewSetTitle) {
     lastTitleKey = titleKey;
     window.__mdviewSetTitle(meta.path, meta.dirty);
   }
-  const theme = document.documentElement.getAttribute('data-theme');
-  const themeLabel = theme === 'dark' ? '☾ 深色' : '☀ 浅色';
   barEl.innerHTML =
-    '<span>' + name + (meta.dirty ? ' <b class="dirty">●</b>' : '') + '</span>' +
     '<span>块 <b>' + block + '/' + blocks + '</b></span>' +
     '<span>停靠点 <b>' + (caret ? caret.stop : '-') + '</b></span>' +
     '<span>列 <b>' + (caret && caret.visual !== null ? caret.visual : '-') + '</b></span>' +
@@ -323,7 +322,6 @@ function renderStatus() {
         '<button data-table="col-" title="删除当前列">列−</button>' +
         '</span>'
       : '') +
-    '<button id="theme-btn" title="切换浅色/深色主题">' + themeLabel + '</button>' +
     '<span class="hint">← → 移动 · Shift 扩选 · Enter 分段 · Tab 跨格 · Ctrl+S 保存</span>';
 }
 
@@ -354,15 +352,14 @@ function runAction(action) {
         toast('请按 Ctrl+V 粘贴');
       }
       break;
-    case 'theme': {
-      const next = mdviewTheme.toggle();
-      const btn = barEl.querySelector('#theme-btn');
-      if (btn) btn.textContent = next === 'dark' ? '☾ 深色' : '☀ 浅色';
+    case 'theme-system':
+    case 'theme-light':
+    case 'theme-dark':
+      mdviewTheme.set(action.slice(6));
       break;
-    }
-    case 'mode-wysiwyg': send({ kind: 'setMode', mode: 'wysiwyg' }); break;
-    case 'mode-reading': send({ kind: 'setMode', mode: 'reading' }); break;
-    case 'mode-source': send({ kind: 'setMode', mode: 'source' }); break;
+    case 'mode-wysiwyg': window.__mdviewMode = 'wysiwyg'; send({ kind: 'setMode', mode: 'wysiwyg' }); break;
+    case 'mode-reading': window.__mdviewMode = 'reading'; send({ kind: 'setMode', mode: 'reading' }); break;
+    case 'mode-source': window.__mdviewMode = 'source'; send({ kind: 'setMode', mode: 'source' }); break;
     case 'line-home':
     case 'line-end':
       // 复用键盘路径：行首/行尾的视觉行判定已经在那里实现
@@ -831,13 +828,6 @@ outlineEl.addEventListener('click', (event) => {
 
 // 状态栏按钮（事件委托：renderStatus 每次都会重建 innerHTML）
 barEl.addEventListener('click', (event) => {
-  const btn = event.target.closest('#theme-btn');
-  if (btn) {
-    const theme = mdviewTheme.toggle();
-    btn.textContent = theme === 'dark' ? '☾ 深色' : '☀ 浅色';
-    if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
-    return;
-  }
   const tableBtn = event.target.closest('[data-table]');
   if (!tableBtn) return;
   const ops = {
@@ -1148,6 +1138,30 @@ window.__mdviewSelfTest = async function () {
     } else {
       check('大纲跳转目标在文档内', true, '只有一个标题，跳过');
     }
+    // 大纲滚动条：与正文共用 .tb-vscroll 视觉，原生条让位，且内容溢出时
+    // 自绘滑块会出现（样张标题少不溢出，临时撑高大纲再刷新来覆盖这条路径）
+    const oTrack = document.getElementById('outline-scroll');
+    const oThumb = document.getElementById('outline-scroll-thumb');
+    const docTrack = document.getElementById('vscroll');
+    const docThumb = document.getElementById('vscroll-thumb');
+    check('大纲与正文共用自绘滚动条样式',
+      !!oTrack && !!oThumb && oTrack.className === docTrack.className &&
+        oThumb.className === docThumb.className,
+      oTrack ? oTrack.className : '无大纲滚动条');
+    check('大纲原生滚动条已让位',
+      getComputedStyle(outlineEl).scrollbarWidth === 'none',
+      getComputedStyle(outlineEl).scrollbarWidth);
+    if (oThumb) {
+      const probe = document.createElement('div');
+      probe.style.height = '5000px';
+      outlineEl.appendChild(probe);
+      window.__mdviewRefreshScrollbar();
+      check('大纲溢出时自绘滑块出现',
+        oThumb.style.display !== 'none' && parseFloat(oThumb.style.height) >= 28,
+        'display=' + oThumb.style.display + ' height=' + oThumb.style.height);
+      probe.remove();
+      window.__mdviewRefreshScrollbar();
+    }
     // 主题：data-theme 已被 init 定下，切换按钮能翻到另一档
     const themeBefore = document.documentElement.getAttribute('data-theme');
     check('主题属性已初始化', themeBefore === 'light' || themeBefore === 'dark',
@@ -1165,6 +1179,51 @@ window.__mdviewSelfTest = async function () {
       else localStorage.setItem('mdview-theme', savedPref);
     } catch (_) {}
     mdviewTheme.init(); // 按恢复后的偏好重新应用
+
+    // 视图 → 主题 是三档子菜单，当前档带圆点；三个动作都要真正落地
+    const viewBtn = document.querySelector('#tb-menus [data-menu="view"]');
+    if (viewBtn) {
+      viewBtn.click();
+      const popup = document.getElementById('tb-menu-popup');
+      const trigger = popup && popup.querySelector('.submenu-trigger');
+      check('视图菜单有主题子菜单', !!trigger &&
+        trigger.querySelector('.label').textContent === '主题',
+        trigger ? trigger.textContent : '无子菜单触发器');
+      if (trigger) {
+        trigger.dispatchEvent(new Event('pointerenter'));
+        const subBtns = Array.from(popup.querySelectorAll('.tb-submenu button[data-action]'));
+        const actions = subBtns.map((b) => b.dataset.action).join(',');
+        check('主题子菜单是三档',
+          actions === 'theme-system,theme-light,theme-dark', actions);
+        const active = 'theme-' + mdviewTheme.mode();
+        check('当前档位带圆点',
+          subBtns.some((b) => b.dataset.action === active &&
+            b.querySelector('.gutter').textContent === '•'), active);
+        // 回归：鼠标移到子菜单项上不能让面板消失。普通菜单项的 pointerenter
+        // 会收起子菜单，但子菜单内部的项必须豁免，否则永远点不到这些项。
+        if (subBtns.length) {
+          subBtns[0].dispatchEvent(new Event('pointerenter'));
+          check('悬停子菜单项面板不消失',
+            !!popup.querySelector('.tb-submenu'), '面板被误关');
+        }
+      }
+      viewBtn.click(); // 收起菜单，后面的按键测试不受影响
+    }
+    const themePref = mdviewTheme.mode();
+    window.__mdviewRunAction('theme-light');
+    check('主题菜单选亮色生效',
+      mdviewTheme.mode() === 'light' &&
+        document.documentElement.getAttribute('data-theme') === 'light', mdviewTheme.mode());
+    window.__mdviewRunAction('theme-dark');
+    check('主题菜单选暗色生效',
+      mdviewTheme.mode() === 'dark' &&
+        document.documentElement.getAttribute('data-theme') === 'dark', mdviewTheme.mode());
+    window.__mdviewRunAction('theme-system');
+    check('主题菜单跟随系统生效',
+      mdviewTheme.mode() === 'system' &&
+        document.documentElement.getAttribute('data-theme') ===
+          mdviewTheme.resolve(null, mdviewTheme.systemTheme()), mdviewTheme.mode());
+    mdviewTheme.set(themePref); // 恢复原始偏好
 
     // 表格：网格渲染 + Tab 跨格 + 行增删，整条 IPC 链路都要走到
     const table = docEl.querySelector('.md-table');

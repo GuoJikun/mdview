@@ -500,73 +500,81 @@ body {
   color: #1f2328; background: #fff;
   -webkit-font-smoothing: antialiased;
 }
+/* Markdown 投影的短类名一律限定在 #doc 下，与外壳 UI 隔离（桌面端同理）。 */
 #doc {
   max-width: 780px; margin: 0 auto; padding: 64px 32px 45vh;
   outline: none; cursor: text;
 }
-.blk { position: relative; margin: 0 0 1.1em; white-space: pre-wrap; }
-.p { margin: 0; }
-h1, h2, h3, h4, h5, h6 { margin: 1.5em 0 .6em; line-height: 1.35; font-weight: 650; }
-h1 { font-size: 1.9em; } h2 { font-size: 1.55em; } h3 { font-size: 1.3em; }
-h4 { font-size: 1.12em; } h5, h6 { font-size: 1em; }
-.code {
+#doc .blk { position: relative; margin: 0 0 1.1em; white-space: pre-wrap; }
+#doc .p { margin: 0; }
+#doc h1, #doc h2, #doc h3, #doc h4, #doc h5, #doc h6 {
+  margin: 1.5em 0 .6em; line-height: 1.35; font-weight: 650;
+}
+#doc h1 { font-size: 1.9em; } #doc h2 { font-size: 1.55em; } #doc h3 { font-size: 1.3em; }
+#doc h4 { font-size: 1.12em; } #doc h5, #doc h6 { font-size: 1em; }
+#doc .code {
   font-family: "Cascadia Code", Consolas, "Courier New", monospace;
   font-size: .92em; line-height: 1.6; white-space: pre;
   background: #f6f8fa; border: 1px solid #eaecef; border-radius: 6px;
   padding: .9em 1em; overflow-x: auto;
 }
-blockquote {
+#doc blockquote {
   margin: 0; padding-left: 1em; border-left: 3px solid #dfe2e5; color: #57606a;
 }
-.kind-list { padding-left: 1.5em; }
-.li { position: relative; }
-.li::before { content: "•"; position: absolute; left: -1.05em; color: #8b949e; }
+#doc .kind-list { padding-left: 1.5em; }
+#doc .li { position: relative; }
+#doc .li::before { content: "•"; position: absolute; left: -1.05em; color: #8b949e; }
 /* 有序项：序号右对齐、向左生长。`data-m` 是源码里那一项自己的标记
    （`1.` / `2)`），多位数不会把正文顶开，也不会被 counter 改号。 */
-.li[data-m]::before { content: attr(data-m); left: auto; right: calc(100% + .35em); }
-.li:has(.atom.task)::before { content: none; }
-.li:has(.atom.task) { padding-left: .1em; }
-.sep { display: inline-block; width: .55em; }
+#doc .li[data-m]::before { content: attr(data-m); left: auto; right: calc(100% + .35em); }
+#doc .li:has(.atom.task)::before { content: none; }
+#doc .li:has(.atom.task) { padding-left: .1em; }
+#doc .sep { display: inline-block; width: .55em; }
 /* 表格边框与 4px 圆角由最外层 table 承担；内部线只画右/下两边，
    separate + spacing 0 + overflow 才能让圆角裁住内格，又不会叠成 2px。 */
-.md-table {
+#doc .md-table {
   border-collapse: separate; border-spacing: 0;
   border: 1px solid #d0d7de; border-radius: 4px; overflow: hidden;
   margin: .2em 0;
 }
-.md-table th, .md-table td {
+#doc .md-table th, #doc .md-table td {
   border-right: 1px solid #d0d7de; border-bottom: 1px solid #d0d7de;
   padding: .35em .7em; vertical-align: top;
   min-width: 3em; white-space: pre-wrap;
 }
-.md-table th:last-child, .md-table td:last-child { border-right: 0; }
-.md-table tr:last-child th, .md-table tr:last-child td { border-bottom: 0; }
-.md-table th { background: #f6f8fa; font-weight: 650; }
-.md-table .al { text-align: left; }
-.md-table .ac { text-align: center; }
-.md-table .ar { text-align: right; }
-.md-table .sep { display: none; }
-.atom.rule { display: block; color: #d0d7de; letter-spacing: .1em; }
-.ch { }
-.b { font-weight: 650; }
-.i { font-style: italic; }
-.d { text-decoration: line-through; color: #6e7781; }
-.c {
+#doc .md-table th:last-child, #doc .md-table td:last-child { border-right: 0; }
+#doc .md-table tr:last-child th, #doc .md-table tr:last-child td { border-bottom: 0; }
+#doc .md-table th { background: #f6f8fa; font-weight: 650; }
+#doc .md-table .al { text-align: left; }
+#doc .md-table .ac { text-align: center; }
+#doc .md-table .ar { text-align: right; }
+#doc .md-table .sep { display: none; }
+/* 与桌面端一致：横线铺满整行，透明字符仍占一列供光标停靠。 */
+#doc .atom.rule { display: block; position: relative; color: transparent; }
+#doc .atom.rule::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%;
+  border-top: 1px solid #d0d7de; pointer-events: none;
+}
+#doc .ch { }
+#doc .b { font-weight: 650; }
+#doc .i { font-style: italic; }
+#doc .d { text-decoration: line-through; color: #6e7781; }
+#doc .c {
   font-family: "Cascadia Code", Consolas, monospace; font-size: .9em;
   background: #eff1f3; border-radius: 3px;
 }
-.a { color: #0969da; text-decoration: underline; text-underline-offset: 2px; }
-.mk { color: transparent; }
-.eob, .mk { user-select: none; }
-.atom {
+#doc .a { color: #0969da; text-decoration: underline; text-underline-offset: 2px; }
+#doc .mk { color: transparent; }
+#doc .eob, #doc .mk { user-select: none; }
+#doc .atom {
   display: inline-block; vertical-align: baseline;
 }
-.atom.img {
+#doc .atom.img {
   min-width: 1.6em; padding: 0 .35em; border: 1px dashed #b6bcc4; border-radius: 4px;
   color: #57606a; font-size: .82em; text-align: center; background: #fafbfc;
 }
-.atom.task { color: #57606a; }
-.sel { background: rgba(37, 99, 235, .18); border-radius: 2px; }
+#doc .atom.task { color: #57606a; }
+#doc .sel { background: rgba(37, 99, 235, .18); border-radius: 2px; }
 #caret {
   position: absolute; width: 2px; background: #0969da; border-radius: 1px;
   pointer-events: none; display: none;
