@@ -336,6 +336,19 @@ function toast(text) {
 /** 菜单动作统一入口：Windows/Linux 的自绘菜单、macOS 的原生菜单栏共用。 */
 function runAction(action) {
   switch (action) {
+    case 'open-file':
+      // 先等在途 dispatch 回包，否则旧 revision 的 reply 会盖掉刚打开的文档。
+      // 对话框由 Rust 侧弹；用户取消返回 null，什么都不动。
+      queue = queue.then(async () => {
+        const snap = await invoke('open_file');
+        if (!snap) return;
+        applySnapshot(snap);
+        window.scrollTo(0, 0);
+        if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
+        if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+        toast('已打开文件');
+      }).catch((err) => toast('打开文件失败：' + err));
+      break;
     case 'undo': send({ kind: 'undo' }); break;
     case 'redo': send({ kind: 'redo' }); break;
     case 'save': send({ kind: 'save' }); break;
@@ -468,16 +481,21 @@ function writeClipboard(text) {
     });
 }
 
-async function boot() {
-  // 主题必须在渲染前定下来，避免浅色闪一下再切深色
-  mdviewTheme.init();
-  const snap = await invoke('snapshot');
+/** 用一份内核快照全量重绘。boot 与「打开文件」共用，避免两处渲染逻辑漂移。 */
+function applySnapshot(snap) {
   meta = { revision: snap.revision, dirty: snap.dirty, path: snap.path, stops: snap.stops };
   renderAll(snap.blocks);
   rebuildOutline(snap.outline || []);
   applyCaret(snap.caret);
   paintSelection(snap.selection);
+  renderStatus();
   if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
+}
+
+async function boot() {
+  // 主题必须在渲染前定下来，避免浅色闪一下再切深色
+  mdviewTheme.init();
+  applySnapshot(await invoke('snapshot'));
   // 焦点必须落在透明输入框上：输入法只认真正的可编辑元素
   imeEl.focus({ preventScroll: true });
   // 给内核一个「页面已接管」的信号，日志里能对上游标是否真的画出来了
@@ -560,6 +578,7 @@ window.addEventListener('keydown', (event) => {
       send({ kind: 'setCaret', stop: key === 'home' ? 0 : maxStop, extend: event.shiftKey });
       return;
     }
+    if (key === 'o') { event.preventDefault(); runAction('open-file'); return; }
     if (key === 's') { event.preventDefault(); send({ kind: 'save' }); return; }
     if (key === 'z') { event.preventDefault(); send({ kind: event.shiftKey ? 'redo' : 'undo' }); return; }
     if (key === 'y') { event.preventDefault(); send({ kind: 'redo' }); return; }
@@ -1263,6 +1282,38 @@ window.__mdviewSelfTest = async function () {
         await queue;
         check('插行后可撤销', meta.revision > revBefore);
       }
+    }
+
+    // 文件 → 打开文件：菜单项接线 + 按路径注入走完整 IPC → 内核 → 全量重绘链路。
+    // 用临时文件，验证完打开回原样张，避免影响可能的后续断言。
+    const fileMenu = document.querySelector('#tb-menus [data-menu="file"]');
+    if (fileMenu) {
+      fileMenu.click();
+      const openItem = document.querySelector('#tb-menu-popup button[data-action="open-file"]');
+      check('文件菜单有打开文件项', !!openItem,
+        openItem ? openItem.textContent : '无');
+      fileMenu.click(); // 收起
+    } else {
+      check('文件菜单有打开文件项', false, '无文件菜单');
+    }
+    const originalPath = meta.path;
+    try {
+      // 用注入路径打开已知存在的样张自身（不弹对话框），验证 open_file 返回
+      // 完整快照、前端能全量重绘、光标归零。Rust 单测另覆盖了「换成不同文件」。
+      const snap = await invoke('open_file', { path: originalPath });
+      check('open_file 返回完整快照',
+        !!snap && Array.isArray(snap.blocks) && snap.blocks.length > 0 && snap.path === originalPath,
+        snap ? 'blocks=' + snap.blocks.length + ' path=' + snap.path : 'null');
+      if (snap) {
+        applySnapshot(snap);
+        check('打开文件后正文全量重绘',
+          docEl.children.length === snap.blocks.length,
+          docEl.children.length + ' vs ' + snap.blocks.length);
+        check('打开文件后回到文档开头', caret && caret.stop === 0,
+          caret ? String(caret.stop) : 'null');
+      }
+    } catch (err) {
+      check('open_file 注入路径可用', false, String(err));
     }
   } catch (err) {
     check('自检未抛异常', false, String(err));

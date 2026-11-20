@@ -200,6 +200,20 @@ impl Session {
         }
     }
 
+    /// 打开磁盘上的另一个文件，整体替换当前文档状态。
+    ///
+    /// 复用 `AppState::open` 走和启动同一条构造路径（解析、指纹、光标归零都一致）；
+    /// 读盘失败时返回错误且不改动现有状态。返回新快照供前端全量重绘。
+    pub fn open_file(&self, path: PathBuf) -> Result<Snapshot, String> {
+        let content = self
+            .files
+            .load(&path)
+            .map_err(|err| format!("{}: {err}", path.display()))?;
+        let fresh = AppState::open(&content, Some(path), &self.files);
+        *self.state.lock().expect("状态锁中毒") = fresh;
+        Ok(self.snapshot())
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         let app = self.state.lock().expect("状态锁中毒");
         Snapshot {
@@ -427,6 +441,33 @@ mod tests {
         assert!(reply.patch.is_some(), "剪切同样走增量重绘");
         assert_eq!(reply.selection, None);
         assert!(reply.dirty);
+    }
+
+    #[test]
+    fn open_file_replaces_state_and_updates_path() {
+        let session = session("旧内容");
+        session.dispatch(Wire::InsertText { text: "未保存".into() });
+        assert!(session.snapshot().dirty);
+
+        let dir = std::env::temp_dir().join(format!("mdview-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sample.md");
+        std::fs::write(&path, "# 新标题\n\n正文").unwrap();
+
+        let snap = session.open_file(path.clone()).unwrap();
+        assert_eq!(session.text(), "# 新标题\n\n正文");
+        assert_eq!(snap.path.as_deref(), Some(path.to_str().unwrap()));
+        assert!(!snap.dirty, "打开新文件后脏标记应清空");
+        assert_eq!(snap.revision, 0);
+        assert_eq!(snap.blocks.len(), 2, "新文档应解析出标题块和正文块");
+        assert!(snap.stops > 0);
+
+        // 读不到文件时不能破坏当前状态
+        let missing = dir.join("不存在.md");
+        assert!(session.open_file(missing).is_err());
+        assert_eq!(session.text(), "# 新标题\n\n正文");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

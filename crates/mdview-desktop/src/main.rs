@@ -18,6 +18,7 @@ use std::{path::PathBuf, process};
 use mdview_app::Watcher;
 use session::{Reply, Session, Snapshot, Wire};
 use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::DialogExt;
 
 /// 前端资源的内容指纹，由 `build.rs` 注入。
 ///
@@ -75,6 +76,39 @@ fn selftest(app: tauri::AppHandle, report: String) {
     }
 }
 
+/// 文件 → 打开文件：弹原生对话框选 .md，读盘后整体替换文档。
+///
+/// 用 async command 承载 blocking_pick_file（对话框会阻塞），避免卡住主 UI 线程。
+/// 用户取消时返回 Ok(None)，前端据此不做任何改动。读盘/解析失败返回 Err。
+///
+/// `path` 可选：正常菜单调用不传，走对话框；传入时直接用该路径——给端到端自检
+/// 一条不弹窗也能走完整链路的注入点。
+#[tauri::command]
+async fn open_file(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, Session>,
+    path: Option<PathBuf>,
+) -> Result<Option<Snapshot>, String> {
+    let path = match path {
+        Some(p) => p,
+        None => {
+            let picked = app
+                .dialog()
+                .file()
+                .set_title("打开 Markdown 文件")
+                .add_filter("Markdown", &["md", "markdown", "txt"])
+                .blocking_pick_file();
+            let Some(file) = picked else {
+                return Ok(None);
+            };
+            file.into_path()
+                .map_err(|_| "选中的文件路径无效".to_string())?
+        }
+    };
+    log::info!("打开文件：{}", path.display());
+    session.open_file(path).map(Some)
+}
+
 /// 前端据此决定显示自绘标题栏还是让位给系统标题栏。
 /// 必须和 tauri.{windows,linux}.conf.json 的 `decorations` 保持一致。
 #[tauri::command]
@@ -87,6 +121,7 @@ fn use_custom_titlebar() -> bool {
 #[cfg(target_os = "macos")]
 fn menu_action(id: &str) -> Option<&'static str> {
     Some(match id {
+        "open-file" => "open-file",
         "save" => "save",
         "undo" => "undo",
         "redo" => "redo",
@@ -129,6 +164,7 @@ fn build_native_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<
         .build()?;
 
     let file_menu = SubmenuBuilder::new(app, "文件")
+        .item(&item("open-file", "打开文件…")?)
         .item(&item("save", "保存")?)
         .separator()
         .close_window_with_text("关闭窗口")
@@ -223,14 +259,12 @@ fn main() {
     // 外部修改监听：起一个后台线程 poll Watcher。命中的事件还要经 Session
     // 用指纹二次确认（挡掉自己保存产生的事件），再 emit 给前端提示。
     // 自检模式不开监听——自检样张是临时文件，且不应受外部事件干扰。
-    let watch_path = if self_test {
-        None
-    } else {
-        session.watch_path()
-    };
+    // 线程每轮读 Session 的当前路径：打开文件后路径变了，就重建 Watcher，
+    // 否则会继续盯着旧文件。NotifyWatcher 的回调绑定构造时的路径，必须重建。
     let watch_session = session.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(session)
         .manage(RunMode { self_test })
         .invoke_handler(tauri::generate_handler![
@@ -238,6 +272,7 @@ fn main() {
             dispatch,
             ready,
             selftest,
+            open_file,
             use_custom_titlebar
         ])
         .setup(move |app| {
@@ -253,25 +288,36 @@ fn main() {
                 });
             }
 
-            let Some(path) = watch_path else {
+            if self_test {
                 return Ok(());
-            };
-            let watcher = match mdview_app::NotifyWatcher::new(&path) {
-                Ok(w) => w,
-                Err(err) => {
-                    log::warn!("文件监听未启动（不影响编辑）：{err}");
-                    return Ok(());
-                }
-            };
-            log::info!("已启动外部修改监听：{}", path.display());
+            }
             let handle = app.handle().clone();
             let session = watch_session.clone();
             std::thread::spawn(move || {
-                let mut watcher = watcher;
+                // current 是 watcher 当前绑定的路径；None 表示没有有效监听。
+                let mut current: Option<(PathBuf, mdview_app::NotifyWatcher)> = None;
                 loop {
-                    if !watcher.poll().is_empty() && session.externally_modified() {
-                        log::info!("检测到外部修改：{}", path.display());
-                        let _ = handle.emit("external-change", path.to_string_lossy());
+                    let target = session.watch_path();
+                    if current.as_ref().map(|(p, _)| p) != target.as_ref() {
+                        // 路径变了（打开文件 / 未命名 / 初次启动）：重建或撤掉监听。
+                        current = target.as_ref().and_then(|p| {
+                            match mdview_app::NotifyWatcher::new(p) {
+                                Ok(w) => {
+                                    log::info!("已启动外部修改监听：{}", p.display());
+                                    Some((p.clone(), w))
+                                }
+                                Err(err) => {
+                                    log::warn!("文件监听未启动（不影响编辑）：{err}");
+                                    None
+                                }
+                            }
+                        });
+                    }
+                    if let Some((path, watcher)) = current.as_mut() {
+                        if !watcher.poll().is_empty() && session.externally_modified() {
+                            log::info!("检测到外部修改：{}", path.display());
+                            let _ = handle.emit("external-change", path.to_string_lossy());
+                        }
                     }
                     std::thread::sleep(std::time::Duration::from_millis(400));
                 }

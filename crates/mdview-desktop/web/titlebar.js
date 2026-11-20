@@ -34,6 +34,7 @@ const thumbEl = document.getElementById('vscroll-thumb');
  */
 const MENUS = {
   file: [
+    { action: 'open-file', label: '打开文件…', acc: 'Ctrl+O' },
     { action: 'save', label: '保存', acc: 'Ctrl+S' },
     { sep: true },
     { action: 'close-window', label: '关闭窗口', acc: 'Alt+F4', danger: true },
