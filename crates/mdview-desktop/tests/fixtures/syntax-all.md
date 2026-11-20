@@ -261,17 +261,17 @@ https://example.com 和 www.example.com
 
 行内图片：
 
-![替代文本](https://example.com/img.png)
+![替代文本](https://pic1.imgdb.cn/i/0350haCGaa3B5rKAAcxl4L.png)
 
 带标题的图片：
 
-![替代文本](https://example.com/img.png "图片标题")
+![替代文本](https://pic1.imgdb.cn/i/0350haCGaa3B5rKAAcxl4L.png "图片标题")
 
 引用式图片：
 
 ![引用式图片][img1]
 
-[img1]: https://example.com/photo.jpg "图片标题"
+[img1]: https://pic1.imgdb.cn/i/0350haCGaa3B5rKAAcxl4L.png "图片标题"
 
 ## 16. 分隔线
 
