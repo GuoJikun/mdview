@@ -120,14 +120,14 @@ byte   0  2  5  8  10
 - 探针工程在 `.workbuddy/lab/`（`inline-probe` / `comrak-probe` / `ts-md-probe`，均为独立 workspace，不属主项目）。
 - 已确认：`End` 事件区间语义、`Code` 含反引号、Break 不可折叠、逐块解析丢引用链接、性能数据。
 
-### M1 内核 ✅（除原子写缺陷）
+### M1 内核 ✅
 - ✅ `Document`：ropey 包装、`byte_to_char` / `char_to_byte` / `slice` / `revision`
 - ✅ `Transaction` / `History`：逆操作撤销、undo/redo 栈
 - ✅ `Anchor` / `Selection`：带 Bias 的位置锚点，可随 Transaction 平移
 - ✅ `Revision` 单调递增
-- 🔶 原子保存：`StdFileStore::save` 目前是「写临时文件 → 若目标存在先 `remove_file` → `rename`」，中间有窗口期。**生产实现应改用 `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` 或 `ReplaceFileW`**
+- ✅ **原子保存**（2026-11-20 修复）：`StdFileStore::save` 改为「同目录临时文件 → `atomic_replace`」。Windows 走 `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`（extern 直连 kernel32，零新依赖），Unix 走 POSIX `rename`。两者都是内核级单步替换，彻底消除旧实现 `remove_file → rename` 之间目标文件消失的窗口期；失败时清理临时文件且不掩盖原错误。4 项单测覆盖覆盖/新建/无残留/指纹变化
 - ✅ 外部冲突检测：mtime + size 指纹比对（`Fingerprint`）
-- ⬜ `Watcher` 只有 trait，无实现（应基于 `notify`）
+- ✅ **Watcher 实现**（2026-11-20）：`NotifyWatcher`（notify 8）监听父目录而非单文件——编辑器保存常走「写临时文件 → rename 覆盖」，watch 单文件会在 rename 瞬间丢监听目标。回调过滤 Modify/Create/Remove（忽略 Access），`poll()` 取走并去重。后台线程 400ms 轮询，命中后用 `AppState::externally_modified` 指纹比对**挡掉自己保存产生的事件**，再 emit `external-change`；前端 `app.js` 监听后 toast 提示（不自动重载，避免冲掉未保存编辑）。自检模式不开监听。端到端测试 + 去重单测各 1 项
 
 ### M2 只读渲染 🔶
 - ✅ 投影模型：`Block` / `Span` / `hidden`，HTML 合成（`to_html()`）
@@ -208,8 +208,8 @@ byte   0  2  5  8  10
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-08
-- 测试：**Rust 163 项全过**（markdown 79 / app 58 / desktop 14 / support 7 / core 5），无编译告警；desktop 那一组里 5 项是前端守门（`node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`）+ 四套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项，共 54 项）
+- 日期：2026-11-20（M1 收尾）
+- 测试：**Rust 169 项全过**（markdown 79 / app 64 / desktop 14 / support 7 / core 5），无编译告警；desktop 那一组里 5 项是前端守门（`node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`）+ 四套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项，共 54 项）
 - 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
 - 自检：`cargo run -p mdview-desktop -- crates/mdview-desktop/tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 34/34」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
@@ -234,6 +234,7 @@ byte   0  2  5  8  10
   - `feat(app): 全选、复制、剪切走内核，Ctrl+A/C/X 接上`
   - `feat(desktop): 拖动选区到窗口边缘时自动滚动`
   - `fix(markdown): 有序列表显示序号，松散列表不再退化成段落`
+  - `feat(app): 保存改为内核级原子替换并接入文件监听，补齐 M1`
 - 分支：全部特性/修复分支已按线性顺序快进并入 `main`（`3110c20`），`origin/main` 只差在 `feat: 初始化内核…`，普通 `git push origin main` 即可，不需要 force
 
 ---
@@ -245,10 +246,10 @@ byte   0  2  5  8  10
 1. ~~**删字后留下空标记**~~ **已修（M3）**：删除区间会把「内容被吃空的容器」连标记一起收起。关键是**必须在删的当下做**——`**粗**` 删掉 `粗` 之后源码是 `****`，pulldown 已不把它当容器，事后再看就没有配对了。同一函数还负责「选区切进标记一半时扩到整对」。
 2. **表格没有网格**：markdown 层把 `|` 与 `---` 折叠后，表格退化成普通文本流。当前只做到「行分行、单元格加间隙」。
 3. **每字符一个 DOM 元素**：`preview.rs` 为了让停靠点可寻址，把每个字符渲染成独立 `<span>`。副作用是英文单词任意处可断行，DOM 节点数也偏高。生产实现应改为「每片段一个元素 + 内核 `align` 换算 char↔byte」。
-4. **Windows 原子写窗口期**：见 M1。
+4. ~~**Windows 原子写窗口期**~~ **已修（M1，2026-11-20）**：见 M1，`atomic_replace` 内核级单步替换。
 5. **无虚拟化**：全文档一次性建 DOM。5 万字以上会卡，但暂无此需求。
 6. **图片只渲染占位符**：不加载真实图片，路径沙箱与尺寸测量未做。
-7. **`Watcher` 无实现**：外部修改只在保存时靠指纹被动发现。
+7. ~~**`Watcher` 无实现**~~ **已修（M1，2026-11-20）**：见 M1，`NotifyWatcher` + 后台轮询 + 指纹二次确认 + 前端 toast。当前提示要用户手动重新打开，自动重载（会冲掉未保存编辑）未做。
 8. **列表嵌套未验证**：多级列表的 `Item` 边界换行只测了单层。
 9. ~~**退格会先吃掉标记字符**~~ **已修（M3）**：`Block.markers` 记录成对标记（`**…**`、`` `…` ``、`[…]() `），配对来自 pulldown 的容器事件而不是猜。退格/Delete 落在标记里时按「整对抽掉、保留中间原文」处理，一次事务完成。副作用是**语义选择**：在加粗词首退格 = 去掉加粗，而不是删掉前一个可见字。想反过来的话改 `marker_edit_at` 的调用点即可，但那样就没有「不删字去格式」的入口了。
    - 由此带出**重合停靠点**的坑，两端已经区别处理：
@@ -269,10 +270,11 @@ byte   0  2  5  8  10
 
 1. ~~**`selectAll`**~~ **已完成**：全选 / 复制 / 剪切三条消息 + `Ctrl+A` / `Ctrl+C` / `Ctrl+X`。剩下的相关缺口是 **粘贴**——`paste` 事件直接把 `clipboardData` 的纯文本发给 `InsertText`，还没有 HTML→Markdown 的规范化（见 M4）
 2. ~~**选区拖动到窗口边缘的自动滚动**~~ **已完成**：`web/dragscroll.js` + `--self-test` 三项。剩下的相邻缺口只有「拖到窗口左右两侧时横向自动滚动」——正文不横向滚动，当前不需要。
-3. **词尾重合停靠点的退格语义**：词首已经收敛为一处（不可见的那端不再产生停靠点），词尾仍保留两个（见第 8 节第 9 条），需要按实际手感定方向。
-4. **表格子工程**：`<table>` 渲染 + 单元格内停靠点，替代当前的文本流占位。这是剩余最大的一块。
-5. **`Watcher` 落地**（`notify`），把外部修改从「保存时被动发现」变成主动提示。
-6. **引用 / 分隔线的成形判定**：见第 8 节第 17 条，与标题同源，可复用判定函数。
+3. ~~**`Watcher` 落地**（`notify`）~~ **已完成（M1，2026-11-20）**：`NotifyWatcher` + 父目录监听 + 指纹二次确认 + `external-change` 事件 + 前端 toast。
+4. **M2 收尾**：主题系统、大纲侧栏、同步滚动（锚点插值）——见第 6 节 M2。
+5. **词尾重合停靠点的退格语义**：词首已经收敛为一处（不可见的那端不再产生停靠点），词尾仍保留两个（见第 8 节第 9 条），需要按实际手感定方向。
+6. **表格子工程**：`<table>` 渲染 + 单元格内停靠点，替代当前的文本流占位。这是剩余最大的一块。
+7. **引用 / 分隔线的成形判定**：见第 8 节第 17 条，与标题同源，可复用判定函数。
 
 每完成一项，更新第 6 节状态、第 7 节快照，并用 Angular 规范提交。
 
@@ -319,7 +321,9 @@ node crates/mdview-desktop/web/dragscroll.test.js # 边缘自动滚动几何单�
 | **视觉布局与停靠点** | `crates/mdview-markdown/src/layout.rs` |
 | **分块帧与增量 patch**（`block_frames` / `diff_frames`）+ 验证页 | `crates/mdview-markdown/src/preview.rs` |
 | **编辑闭环**（输入 → 事务 → 光标回填 → patch） | `crates/mdview-app/src/state.rs` |
-| 端口（FileStore / RenderSink / Watcher） | `crates/mdview-app/src/ports.rs` |
+| 端口（FileStore 原子写 / RenderSink / **NotifyWatcher**） | `crates/mdview-app/src/ports.rs` |
+| 外部修改监听线程 + `external-change` emit | `crates/mdview-desktop/src/main.rs`（setup 钩子） |
+| 外部修改提示（前端 listen + toast） | `crates/mdview-desktop/web/app.js`（boot） |
 | 日志滚动 | `crates/mdview-support/src/logging.rs` |
 | 命令行入口（含 `demo edit` 回放） | `crates/mdview-cli/src/main.rs` |
 | **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包） | `crates/mdview-desktop/src/session.rs` |

@@ -8,7 +8,7 @@ mod state;
 
 pub use mdview_support::{logging, init_logging, init_logging_default, AppError, LogConfig};
 pub use ports::{
-    CollectingSink, FileStore, Fingerprint, InMemoryFileStore, RenderFrame, RenderSink,
-    StdFileStore, Watcher,
+    CollectingSink, FileStore, Fingerprint, InMemoryFileStore, NotifyWatcher, RenderFrame,
+    RenderSink, StdFileStore, Watcher,
 };
 pub use state::{AppState, Effect, Message, ViewMode};

@@ -3,6 +3,7 @@
 'use strict';
 
 const { invoke } = window.__TAURI__.core;
+const listen = window.__TAURI__.event?.listen;
 
 const docEl = document.getElementById('doc');
 const caretEl = document.getElementById('caret');
@@ -323,6 +324,13 @@ async function boot() {
   imeEl.focus({ preventScroll: true });
   // 给内核一个「页面已接管」的信号，日志里能对上游标是否真的画出来了
   invoke('ready').catch(() => {});
+  // 外部修改：后端 Watcher 发现磁盘上的文件被别的进程改了会 emit 这个事件。
+  // 只提示，不自动重载——自动重载会冲掉用户未保存的编辑。
+  if (listen) {
+    listen('external-change', () => {
+      toast('文件已被外部修改，请重新打开以载入最新内容');
+    }).catch(() => {});
+  }
 }
 
 // ---- 输入 ------------------------------------------------------------

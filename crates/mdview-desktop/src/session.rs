@@ -5,7 +5,10 @@
 //!
 //! 前端只做两件事：把停靠点画成像素、把输入翻译成消息。文本真值始终在内核里。
 
-use std::{path::PathBuf, sync::Mutex};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use mdview_app::{AppState, Effect, FileStore, Message, StdFileStore, ViewMode};
 use mdview_markdown::BlockFrame;
@@ -142,8 +145,9 @@ pub struct PatchDto {
     pub html: String,
 }
 
+#[derive(Clone)]
 pub struct Session {
-    state: Mutex<AppState>,
+    state: Arc<Mutex<AppState>>,
     files: StdFileStore,
 }
 
@@ -160,7 +164,7 @@ impl Session {
     pub fn from_text(content: &str, path: Option<PathBuf>) -> Self {
         let files = StdFileStore;
         Self {
-            state: Mutex::new(AppState::open(content, path, &files)),
+            state: Arc::new(Mutex::new(AppState::open(content, path, &files))),
             files,
         }
     }
@@ -225,6 +229,22 @@ impl Session {
             reply.caret = caret_of(&app);
         }
         reply
+    }
+
+    /// 磁盘内容是否被外部改动。用于 Watcher 事件的二次确认，挡掉自己保存
+    /// 产生的事件（保存后指纹已刷新），只把真正的外部改动报给 UI。
+    pub fn externally_modified(&self) -> bool {
+        let app = self.state.lock().expect("状态锁中毒");
+        app.externally_modified(&self.files)
+    }
+
+    /// 是否有可监听的文件路径（无标题文档不需要 Watcher）。
+    pub fn watch_path(&self) -> Option<PathBuf> {
+        self.state
+            .lock()
+            .expect("状态锁中毒")
+            .path
+            .clone()
     }
 
     #[cfg(test)]

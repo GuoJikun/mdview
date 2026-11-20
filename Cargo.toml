@@ -17,6 +17,7 @@ pulldown-cmark = "0.13"
 thiserror = "2"
 log = "0.4"
 time = { version = "0.3", features = ["formatting", "local-offset"] }
+notify = "8"
 
 [profile.release]
 lto = "thin"

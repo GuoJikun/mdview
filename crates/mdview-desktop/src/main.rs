@@ -15,8 +15,9 @@ mod session;
 
 use std::{path::PathBuf, process};
 
+use mdview_app::Watcher;
 use session::{Reply, Session, Snapshot, Wire};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// 前端资源的内容指纹，由 `build.rs` 注入。
 ///
@@ -102,10 +103,46 @@ fn main() {
         process::exit(1);
     });
 
+    // 外部修改监听：起一个后台线程 poll Watcher。命中的事件还要经 Session
+    // 用指纹二次确认（挡掉自己保存产生的事件），再 emit 给前端提示。
+    // 自检模式不开监听——自检样张是临时文件，且不应受外部事件干扰。
+    let watch_path = if self_test {
+        None
+    } else {
+        session.watch_path()
+    };
+    let watch_session = session.clone();
+
     tauri::Builder::default()
         .manage(session)
         .manage(RunMode { self_test })
         .invoke_handler(tauri::generate_handler![snapshot, dispatch, ready, selftest])
+        .setup(move |app| {
+            let Some(path) = watch_path else {
+                return Ok(());
+            };
+            let watcher = match mdview_app::NotifyWatcher::new(&path) {
+                Ok(w) => w,
+                Err(err) => {
+                    log::warn!("文件监听未启动（不影响编辑）：{err}");
+                    return Ok(());
+                }
+            };
+            log::info!("已启动外部修改监听：{}", path.display());
+            let handle = app.handle().clone();
+            let session = watch_session.clone();
+            std::thread::spawn(move || {
+                let mut watcher = watcher;
+                loop {
+                    if !watcher.poll().is_empty() && session.externally_modified() {
+                        log::info!("检测到外部修改：{}", path.display());
+                        let _ = handle.emit("external-change", path.to_string_lossy());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                }
+            });
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("窗口启动失败");
 }

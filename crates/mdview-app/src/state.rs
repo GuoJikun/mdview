@@ -180,6 +180,23 @@ impl AppState {
         }
     }
 
+    /// 当前磁盘内容是否与上次保存的指纹不一致（即被外部修改）。
+    ///
+    /// 供 Watcher 检测到文件事件后二次确认：自己保存产生的事件到达时指纹
+    /// 已被刷新，会被这里挡掉，只有真正的外部改动才会上报给 UI。
+    pub fn externally_modified(&self, files: &impl FileStore) -> bool {
+        let Some(path) = self.path.as_ref() else {
+            return false;
+        };
+        match self.saved_fingerprint {
+            Some(expected) => files
+                .fingerprint(path)
+                .map(|now| now != expected)
+                .unwrap_or(true), // 文件读不到（如被删）也算变化
+            None => files.fingerprint(path).is_ok(), // 原本无文件，现在有了
+        }
+    }
+
     pub fn update(&mut self, msg: Message, files: &impl FileStore) -> Vec<Effect> {
         let is_undo = matches!(&msg, Message::Undo);
         match msg {

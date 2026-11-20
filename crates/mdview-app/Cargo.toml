@@ -10,3 +10,4 @@ mdview-core = { workspace = true }
 mdview-markdown = { workspace = true }
 mdview-support = { workspace = true }
 log = { workspace = true }
+notify = { workspace = true }
