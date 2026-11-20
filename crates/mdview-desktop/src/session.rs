@@ -184,7 +184,9 @@ impl Session {
     pub fn open(path: Option<PathBuf>) -> Result<Self, String> {
         let files = StdFileStore;
         let content = match &path {
-            Some(path) => files.load(path).map_err(|err| format!("{}: {err}", path.display()))?,
+            Some(path) => files
+                .load(path)
+                .map_err(|err| format!("{}: {err}", path.display()))?,
             None => String::new(),
         };
         Ok(Self::from_text(&content, path))
@@ -271,11 +273,7 @@ impl Session {
 
     /// 是否有可监听的文件路径（无标题文档不需要 Watcher）。
     pub fn watch_path(&self) -> Option<PathBuf> {
-        self.state
-            .lock()
-            .expect("状态锁中毒")
-            .path
-            .clone()
+        self.state.lock().expect("状态锁中毒").path.clone()
     }
 
     #[cfg(test)]
@@ -352,8 +350,15 @@ mod tests {
         let wire: Wire = serde_json::from_str(r#"{"kind":"insertText","text":"甲"}"#).unwrap();
         assert!(matches!(wire, Wire::InsertText { ref text } if text == "甲"));
 
-        let wire: Wire = serde_json::from_str(r#"{"kind":"setCaret","stop":3,"extend":true}"#).unwrap();
-        assert!(matches!(wire, Wire::SetCaret { stop: 3, extend: true }));
+        let wire: Wire =
+            serde_json::from_str(r#"{"kind":"setCaret","stop":3,"extend":true}"#).unwrap();
+        assert!(matches!(
+            wire,
+            Wire::SetCaret {
+                stop: 3,
+                extend: true
+            }
+        ));
 
         assert!(serde_json::from_str::<Wire>(r#"{"kind":"backspace"}"#).is_ok());
         // 取消组合漏接会在内核里留下永久挂起，契约里必须有这一条
@@ -370,8 +375,7 @@ mod tests {
         // 表格操作：前端用 camelCase 的 kind，内核收到的是同一组语义
         let wire: Wire = serde_json::from_str(r#"{"kind":"tableMoveCell","delta":1}"#).unwrap();
         assert!(matches!(wire, Wire::TableMoveCell { delta: 1 }));
-        let wire: Wire =
-            serde_json::from_str(r#"{"kind":"tableInsertRow","after":true}"#).unwrap();
+        let wire: Wire = serde_json::from_str(r#"{"kind":"tableInsertRow","after":true}"#).unwrap();
         assert!(matches!(wire, Wire::TableInsertRow { after: true }));
         assert!(serde_json::from_str::<Wire>(r#"{"kind":"tableDeleteRow"}"#).is_ok());
         let wire: Wire =
@@ -440,7 +444,10 @@ mod tests {
     #[test]
     fn typing_returns_patch_and_caret() {
         let session = session("甲\n\n乙");
-        let reply = session.dispatch(Wire::SetCaret { stop: 1, extend: false });
+        let reply = session.dispatch(Wire::SetCaret {
+            stop: 1,
+            extend: false,
+        });
         assert_eq!(reply.caret.unwrap().stop, 1);
 
         let reply = session.dispatch(Wire::InsertText { text: "丙".into() });
@@ -470,7 +477,10 @@ mod tests {
     #[test]
     fn enter_returns_two_blocks_after_split() {
         let session = session("甲");
-        session.dispatch(Wire::SetCaret { stop: 1, extend: false });
+        session.dispatch(Wire::SetCaret {
+            stop: 1,
+            extend: false,
+        });
         let reply = session.dispatch(Wire::Newline);
         assert_eq!(session.text(), "甲\n\n");
         assert!(reply.patch.is_some());
@@ -490,9 +500,15 @@ mod tests {
     #[test]
     fn selection_is_reported_after_extend() {
         let session = session("甲乙丙");
-        let reply = session.dispatch(Wire::SetCaret { stop: 2, extend: true });
+        let reply = session.dispatch(Wire::SetCaret {
+            stop: 2,
+            extend: true,
+        });
         assert_eq!(reply.selection, Some([0, 2]));
-        let reply = session.dispatch(Wire::SetCaret { stop: 1, extend: false });
+        let reply = session.dispatch(Wire::SetCaret {
+            stop: 1,
+            extend: false,
+        });
         assert_eq!(reply.selection, None, "收起光标后不应再报选区");
     }
 }
