@@ -3,7 +3,7 @@
 #vue-app {
   position: fixed;
   inset: 0;
-  z-index: 10;
+  z-index: 40;
   pointer-events: none;
 }
 /* 标题栏与菜单弹层必须能接收鼠标；漏了这两条，拖拽区和菜单都会失效。 */
