@@ -13,7 +13,10 @@
 
 mod session;
 
-use std::{path::PathBuf, process};
+use std::{
+    path::{Path, PathBuf},
+    process,
+};
 
 use mdview_app::Watcher;
 use session::{Reply, Session, Snapshot, Wire};
@@ -286,7 +289,32 @@ fn main() {
     // 否则会继续盯着旧文件。NotifyWatcher 的回调绑定构造时的路径，必须重建。
     let watch_session = session.clone();
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // 单例插件必须第一个注册：它要在其它插件之前抢占实例锁。
+    // 回调运行在「已经活着」的那个实例里，第二个实例已被引擎拦截并退出。
+    builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        // 有文件参数就交给已运行实例打开，否则新实例带着文档启动会「没反应」。
+        // 跳过 --self-test 这类开关，只认 Markdown 扩展名的路径。
+        let path = args.iter().find(|arg| {
+            !arg.starts_with('-')
+                && Path::new(arg)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| matches!(ext, "md" | "markdown" | "txt"))
+        });
+        if let Some(path) = path {
+            log::info!("单例收到打开请求：{path}");
+            let _ = app.emit("single-instance-open", path);
+        }
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
+        // 自动记住窗口的位置、尺寸与最大化状态，下次启动恢复。
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(session)
         .manage(RunMode { self_test })

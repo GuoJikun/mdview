@@ -555,6 +555,21 @@ async function boot() {
       const action = typeof event.payload === 'string' ? event.payload : event.payload?.action;
       if (action) runAction(action);
     }).catch(() => {});
+    // 二次启动的实例被单例插件拦下后，把命令行里的文档路径转到这里。
+    // 复用 open_file 的注入路径分支，不弹对话框；走 queue 避免覆盖在途编辑。
+    listen('single-instance-open', (event) => {
+      const path = typeof event.payload === 'string' ? event.payload : null;
+      if (!path) return;
+      queue = queue.then(async () => {
+        const snap = await invoke('open_file', { path });
+        if (!snap) return;
+        applySnapshot(snap);
+        window.scrollTo(0, 0);
+        if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
+        if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+        toast('已打开文件');
+      }).catch((err) => toast('打开文件失败：' + err));
+    }).catch(() => {});
   }
 }
 
