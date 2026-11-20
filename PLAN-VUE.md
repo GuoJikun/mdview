@@ -292,4 +292,5 @@ cargo run -p mdview-desktop -- crates/mdview-desktop/src-tauri/tests/fixtures/se
 | 2026-11-20 | 用户调整：产物 `web` → `dist`、端口 1420 → 1450、前端工程根从 `frontend/` 提到 crate 根 |
 | 2026-11-20 | 用户再调整：`web/` 改名 `src/`；为此把 Rust crate 整体挪进 `src-tauri/`，采用标准 Tauri 结构；新增 P0-a 阶段与第 4.4 节路径清单 |
 | 2026-11-20 | **P0-a 完成**：`git mv` 搬迁 9 项 Rust 文件 + gen；根 Cargo.toml 改显式 members；build.rs/conf/web_ime.rs/.gitignore 路径改 `../web`（中间态）；补改跨 crate 的 `mdview-app/state.rs` fixtures 路径（原清单漏项，已补进 4.4）。验证：`cargo test --workspace` 204 项 + 守门 7 项全绿，端到端自检 **OK 61/61** |
-| 2026-11-20 | **P0-b 完成**：`web/` → `src/`；`index.html` 移到 crate 根；建 package.json / vite.config.ts（outDir=dist, port=1450）/ tsconfig.json；Vue 空壳挂载 `#vue-app`（覆盖层留洞、整层穿透）；路径切最终值（frontendDist `../dist`、build.rs `../dist`、web_ime.rs `../src`）；两处 Rust 注释更新。踩坑两则见 7.10/7.11。验证：`pnpm build` 通过、`cargo test --workspace` 全绿、端到端自检 **OK 61/61**（17:11:39 本次实跑）|
+| 2026-11-20 | **P0-b 完成**：`web/` → `src/`；`index.html` 移到 crate 根；建 package.json / vite.config.ts（outDir=dist, port=1450）/ tsconfig.json；Vue 空壳挂载 `#vue-app`（覆盖层留洞、整层穿透）；路径切最终值（frontendDist `../dist`、build.rs `../dist`、web_ime.rs `../src`）；两处 Rust 注释更新。踩坑两则见 7.10/7.11。验证：`pnpm build` 通过、`cargo test --workspace` 全绿、端到端自检 **OK 61/61**（17:11:39 本次实跑）、`pnpm dev` 在 1450 起服正常 |
+| 2026-11-20 | P0 合并提交 `65ab110 refactor(desktop): 改用标准 Tauri 结构并接入 Vite 骨架`（P0-a/P0-b 中间态无法独立编译，故合一）|
