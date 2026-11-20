@@ -5,7 +5,7 @@
 //!
 //! 用法：`mdview-desktop [file.md] [--self-test]`
 //!
-//! `--self-test` 会在页面接管后跑一遍输入法自检（见 `web/app.js` 里的
+//! `--self-test` 会在页面接管后跑一遍输入法自检（见前端 `src/editor.ts` 里的
 //! `__mdviewSelfTest`），把结果写进日志并按成败退出。它是唯一能不靠肉眼
 //! 确认「composition 事件真的接上了内核」的手段。
 
@@ -26,7 +26,7 @@ use tauri_plugin_dialog::DialogExt;
 /// 前端资源的内容指纹，由 `build.rs` 注入。
 ///
 /// 值本身没有用处，引用它是为了让 cargo 把 `MDVIEW_WEB_STAMP` 记进编译指纹：
-/// 只要 `web/` 里的内容变了，crate 就会重编，嵌进二进制的页面才是新的。
+/// 只要 Vite 产物 `dist/` 里的内容变了，crate 就会重编，嵌进二进制的页面才是新的。
 #[allow(dead_code)]
 const WEB_STAMP: &str = env!("MDVIEW_WEB_STAMP");
 

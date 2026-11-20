@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mdview</title>
-<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="/src/app.css">
 <script>
   // 平台外观要在首帧前定下来：macOS 用系统标题栏，Windows/Linux 用自绘标题栏。
   // 真正的判据在 Rust（与窗口 decorations 一致），这里先用 UA 抢一个初值避免闪一下。
@@ -70,14 +70,18 @@
           spellcheck="false" aria-label="编辑器输入"></textarea>
 <div id="toast"></div>
 <div id="bar"></div>
-<script src="ime.js"></script>
-<script src="caretline.js"></script>
-<script src="dragscroll.js"></script>
-<script src="selection.js"></script>
-<script src="clipboard.js"></script>
-<script src="outline.js"></script>
-<script src="theme.js"></script>
-<script src="titlebar.js"></script>
-<script src="app.js"></script>
+<!-- Vue 覆盖层挂载点：P0-b 阶段为空壳，P2 迁入标题栏/状态栏/toast。
+     大纲与正文区刻意不放任何 Vue 节点（留洞），鼠标穿透到上面的现有 DOM。 -->
+<div id="vue-app"></div>
+<script type="module" src="/src/ime.js"></script>
+<script type="module" src="/src/caretline.js"></script>
+<script type="module" src="/src/dragscroll.js"></script>
+<script type="module" src="/src/selection.js"></script>
+<script type="module" src="/src/clipboard.js"></script>
+<script type="module" src="/src/outline.js"></script>
+<script type="module" src="/src/theme.js"></script>
+<script type="module" src="/src/titlebar.js"></script>
+<script type="module" src="/src/app.js"></script>
+<script type="module" src="/src/main.ts"></script>
 </body>
 </html>

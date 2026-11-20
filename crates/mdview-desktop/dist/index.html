@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mdview</title>
+<script>
+  // 平台外观要在首帧前定下来：macOS 用系统标题栏，Windows/Linux 用自绘标题栏。
+  // 真正的判据在 Rust（与窗口 decorations 一致），这里先用 UA 抢一个初值避免闪一下。
+  (function () {
+    var mac = /Macintosh|Mac OS X/i.test(navigator.userAgent) || /^Mac/i.test(navigator.platform);
+    document.documentElement.classList.add(mac ? 'native-titlebar' : 'custom-titlebar');
+  })();
+</script>
+  <script type="module" crossorigin src="/assets/index-BgX7lE13.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-CYGw7chP.css">
+</head>
+<body>
+<!-- 自绘标题栏：模仿 VSCode。仅 Windows / Linux 显示，macOS 下由 CSS 隐藏 -->
+<header id="titlebar" data-tauri-drag-region="deep">
+  <div class="tb-left" data-tauri-drag-region>
+    <span class="tb-logo" data-tauri-drag-region aria-hidden="true">
+      <img alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAASUlEQVR42mNgGAVQIK+s8Z+eeNQBow4YdQDRDui8+I0iPPQdMJoGRh1w4uwlsvDwccBoGhh1ALUS3dB1wGgaGHXAqAPo5oARCwCme+39B8DaVAAAAABJRU5ErkJggg==">
+    </span>
+    <nav class="tb-menus" id="tb-menus" aria-label="应用菜单">
+      <button type="button" class="tb-menu" data-menu="file">文件</button>
+      <button type="button" class="tb-menu" data-menu="edit">编辑</button>
+      <button type="button" class="tb-menu" data-menu="selection">选择</button>
+      <button type="button" class="tb-menu" data-menu="view">视图</button>
+      <button type="button" class="tb-menu" data-menu="go">转到</button>
+      <button type="button" class="tb-menu" data-menu="help">帮助</button>
+    </nav>
+  </div>
+  <div class="tb-center" data-tauri-drag-region>
+    <span class="tb-title" id="tb-title">mdview</span>
+  </div>
+  <div class="tb-right" data-tauri-drag-region>
+    <button type="button" class="tb-ctl" id="tb-min" title="最小化" aria-label="最小化">
+      <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2 6h8" stroke="currentColor" stroke-width="1"/></svg>
+    </button>
+    <button type="button" class="tb-ctl" id="tb-max" title="最大化 / 还原" aria-label="最大化">
+      <svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true">
+        <rect class="tb-max-rect" x="2.5" y="2.5" width="7" height="7"/>
+        <g class="tb-restore-icon" style="display:none">
+          <rect x="1.5" y="3.5" width="6" height="6"/>
+          <path d="M4 3.5V2h6v6H8.5"/>
+        </g>
+      </svg>
+    </button>
+    <button type="button" class="tb-ctl tb-close" id="tb-close" title="关闭" aria-label="关闭">
+      <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1"/></svg>
+    </button>
+  </div>
+</header>
+<div id="tb-menu-popup" class="tb-menu-popup" role="menu" hidden></div>
+<!-- 自绘纵向滚动条：浏览器原生滚动条纵跨整窗，会压住标题栏和状态栏。
+     正文与大纲各一套，共用 .tb-vscroll 的视觉与拖动逻辑 -->
+<div id="vscroll" class="tb-vscroll" aria-hidden="true"><div id="vscroll-thumb" class="tb-vscroll-thumb"></div></div>
+
+<!-- 大纲侧栏：标题清单，点击跳正文，滚动时高亮当前节 -->
+<nav id="outline" aria-label="文档大纲"></nav>
+<div id="outline-scroll" class="tb-vscroll" aria-hidden="true"><div id="outline-scroll-thumb" class="tb-vscroll-thumb"></div></div>
+<!-- 内核持有文本真值，这里只有投影：每块一个 <section>，每个停靠点一个元素 -->
+<div id="doc" tabindex="-1" spellcheck="false"></div>
+<div id="caret"></div>
+<!-- preedit 镜像层：组合期间唯一可见的输入反馈，位置贴着 caret -->
+<div id="preedit"></div>
+<!-- 输入法只能落在真正的可编辑元素上，所以留一个透明输入框承接 IME；
+     它同时决定候选窗弹在哪儿（跟着 caret 走） -->
+<textarea id="ime" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off"
+          spellcheck="false" aria-label="编辑器输入"></textarea>
+<div id="toast"></div>
+<div id="bar"></div>
+<!-- Vue 覆盖层挂载点：P0-b 阶段为空壳，P2 迁入标题栏/状态栏/toast。
+     大纲与正文区刻意不放任何 Vue 节点（留洞），鼠标穿透到上面的现有 DOM。 -->
+<div id="vue-app"></div>
+</body>
+</html>

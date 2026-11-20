@@ -3,14 +3,16 @@ use std::path::Path;
 fn main() {
     // 前端资源由 tauri 在编译期嵌入二进制。cargo 的 `rerun-if-changed` 只能让
     // build script 重跑；脚本输出没变时，目标 crate 依然不会重编——「改了 JS
-    // 但窗口行为没变」就是这么来的。把 web 目录的内容哈希写成 rustc-env，
+    // 但窗口行为没变」就是这么来的。把构建产物的内容哈希写成 rustc-env，
     // 内容一变编译指纹就变，crate 必然重编。
-    println!("cargo:rerun-if-changed=web");
-    println!("cargo:rustc-env=MDVIEW_WEB_STAMP={:016x}", stamp(Path::new("web")));
+    //
+    // build script 的 CWD 是 src-tauri/，Vite 产物在其上一级的 dist/。
+    println!("cargo:rerun-if-changed=../dist");
+    println!("cargo:rustc-env=MDVIEW_WEB_STAMP={:016x}", stamp(Path::new("../dist")));
     tauri_build::build();
 }
 
-/// web 目录的内容指纹（FNV-1a 64）。路径与字节都进哈希：改名也算变化。
+/// 构建产物的内容指纹（FNV-1a 64）。路径与字节都进哈希：改名也算变化。
 fn stamp(dir: &Path) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     let mut stack = vec![dir.to_path_buf()];

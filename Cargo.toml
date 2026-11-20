@@ -1,6 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = [
+  "crates/mdview-core",
+  "crates/mdview-support",
+  "crates/mdview-markdown",
+  "crates/mdview-app",
+  "crates/mdview-cli",
+  "crates/mdview-desktop/src-tauri",
+]
 
 [workspace.package]
 version = "0.1.0"

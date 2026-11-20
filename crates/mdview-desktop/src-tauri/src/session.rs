@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn wire_json_matches_frontend_contract() {
-        // 这两个字面量必须与 web/app.js 里发的一致，改一边就要改另一边
+        // 这两个字面量必须与前端 src/app.js（P2 后为 editor.ts）里发的一致，改一边就要改另一边
         let wire: Wire = serde_json::from_str(r#"{"kind":"insertText","text":"甲"}"#).unwrap();
         assert!(matches!(wire, Wire::InsertText { ref text } if text == "甲"));
 

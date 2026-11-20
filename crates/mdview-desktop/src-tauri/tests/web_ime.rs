@@ -14,7 +14,9 @@
 use std::{path::PathBuf, process::Command};
 
 fn web_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web")
+    // 测试二进制的 manifest 目录是 src-tauri/，前端源码在其上一级的 src/。
+    // 六个纯逻辑模块保持 .js，Node 可直接跑；Vite 产物在 dist/，两边互不干扰。
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src")
 }
 
 fn node_ready() -> bool {

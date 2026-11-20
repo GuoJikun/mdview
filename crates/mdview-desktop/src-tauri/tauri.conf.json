@@ -3,7 +3,10 @@
   "productName": "mdview",
   "identifier": "dev.mdview.desktop",
   "build": {
-    "frontendDist": "./web"
+    "frontendDist": "../dist",
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1450",
+    "beforeBuildCommand": "pnpm build"
   },
   "app": {
     "withGlobalTauri": true,

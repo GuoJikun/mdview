@@ -3,5 +3,5 @@
 .DS_Store
 .workbuddy
 /logs
-crates/mdview-desktop/gen
+crates/mdview-desktop/src-tauri/gen
 node_modules
