@@ -1,9 +1,15 @@
 <template>
-  <!-- P0-b 空壳：覆盖层留洞，大纲与正文区不放任何节点。
-       标题栏/状态栏/toast 组件在 P2 迁入，届时填充这里。 -->
-  <div class="vue-app-root"></div>
+  <!-- P1：三个外壳组件都已挂载并只读订阅 bridge，但整层默认不显示。
+       P2 逐组件接管时，只把对应组件移出隐藏状态并补上 pointer-events/动作。 -->
+  <div class="vue-app-root">
+    <TitleBar />
+    <StatusBar />
+    <Toast />
+  </div>
 </template>
 
 <script setup lang="ts">
-// 占位：P1 接入 bridge.ts 的 reactive store，P2 迁入外壳组件。
+import TitleBar from './components/TitleBar.vue';
+import StatusBar from './components/StatusBar.vue';
+import Toast from './components/Toast.vue';
 </script>

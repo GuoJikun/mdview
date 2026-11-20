@@ -1,5 +1,6 @@
 /* Vue 覆盖层：整层穿透，只有 P2 迁入的真实 UI 组件才各自打开 pointer-events。
-   P0-b 阶段它是空的，这一层规则保证它绝不影响现有交互。 */
+   P1 的组件是只读空壳，默认整层隐藏，保证与现有 DOM 零视觉重叠；
+   需要肉眼核对空壳时，在控制台给 <html> 加 vue-shell-preview 即可显形。 */
 #vue-app {
   position: fixed;
   inset: 0;
@@ -7,6 +8,9 @@
   pointer-events: none;
 }
 .vue-app-root {
-  /* 空壳，不占文档流、不接收事件 */
+  display: none;
   pointer-events: none;
+}
+html.vue-shell-preview .vue-app-root {
+  display: block;
 }

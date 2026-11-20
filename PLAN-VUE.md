@@ -229,9 +229,20 @@ reactive store 字段：`meta.title / stats.blocks / stats.lines / dirty / theme
 
 Vue 组件只读 store，反向不写。
 
+> P1 落地说明（2026-11-20）：写入点仍在 `app.js`（尚未改名 `editor.ts`），统一由
+> `pushShellState()` 推一份快照；标题由 `titlebar.js` 的 `setTitle` 单独推。store 的
+> 字段按现有状态栏实际需要建模：`path / title / dirty / blocks / stop / column /
+> revision / inTable / themeMode / theme / mode / outline / activeOutlineIdx / toast`
+> （计划草图里的 `stats.lines` 与现有状态栏不对应，未采用）。主题不往 `theme.js`
+> 里塞桥接代码，改由 `bridge.ts` 观察 `<html data-theme>` 的变化跟随。
+> 三个外壳组件 P1 已挂载并只读订阅，但整层默认隐藏；调试时给 `<html>` 加
+> `vue-shell-preview` 即可显形，P2 逐组件接管后再正式打开。
+
 ### 5.2 动作出 Vue（单向）
 
 Vue 侧的菜单项、状态栏按钮点击后：`emit('action', name)` → `bridge.dispatch(name)` → 复用现有 `window.__mdviewRunAction(name)`。**动作逻辑一行不重写**。
+
+> P2 注意：`close-window` 目前由 `titlebar.js` 的 `run()` 在调用 `runAction` 之前拦截，窗口最小化/最大化则直接走 Tauri 窗口 API。迁 `TitleBar.vue` 时要把这三条窗口动作补进 bridge（或 app.js），否则 Vue 侧 `dispatch('close-window')` 会落空。
 
 ### 5.3 全局钩子保留
 
@@ -319,3 +330,4 @@ pnpm tauri dev -- -- tests/fixtures/selftest.md
 | 2026-11-20 | P0 合并提交 `65ab110 refactor(desktop): 改用标准 Tauri 结构并接入 Vite 骨架`（P0-a/P0-b 中间态无法独立编译，故合一）|
 | 2026-11-20 | 按用户要求改为不提交 `dist/`：加入 `.gitignore` 并从索引移除，本地产物保留；文档明确「cargo 直跑前先 pnpm build」|
 | 2026-11-20 | **P0-c 完成**：`crates/mdview-desktop/` 整体上提到仓库根（前端工程根 = 仓库根）；改根 Cargo.toml members、.gitignore、跨 crate 的 state.rs fixtures 路径、4 个测试文件注释；`src-tauri/` 内部相对路径与 Vite/Tauri 配置因基准未变而免疫。验证：`pnpm build` + `cargo test --workspace` 全绿；`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test` 端到端自检 **OK 61/61**。注意 `cargo run` 链路同参数得到 60/61（仅「系统剪贴板可写」因窗口焦点为 false），已确认是链路差异非回归，判定以 tauri dev 为准 |
+| 2026-11-20 | **P1 完成**：新增 `src/bridge.ts`（reactive 快照 + `dispatch` 复用 `__mdviewRunAction` + 主题 MutationObserver + toast 计时）；新增 `TitleBar.vue / StatusBar.vue / Toast.vue` 三个只读外壳并挂载，整层默认隐藏（`html.vue-shell-preview` 显形）；`app.js` 的 `renderStatus / rebuildOutline / updateActiveOutline / toast / runAction` 与 `titlebar.js` 的 `setTitle` 接桥。七个纯逻辑模块零改动。验证：`pnpm build`（含 `vue-tsc --noEmit`）通过；`cargo test --workspace` 204 项全绿；六套 Node 用例全过；`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test` 端到端自检 **OK 61/61** |

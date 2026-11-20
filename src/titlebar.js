@@ -144,6 +144,10 @@ function setTitle(path, dirty) {
   titleEl.textContent = text;
   document.title = text;
   appWindow.setTitle(text).catch(() => {});
+  // 标题也过桥：Vue 标题栏只读这一份，不再自己去拼文件名
+  if (window.__mdviewBridge) {
+    window.__mdviewBridge.set({ path: path || null, dirty: !!dirty, title: text });
+  }
 }
 window.__mdviewSetTitle = setTitle;
 

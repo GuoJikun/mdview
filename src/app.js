@@ -153,6 +153,7 @@ function rebuildOutline(items) {
     outlineEl.innerHTML = '<div class="oc-title">大纲</div><div class="oc-empty">（无标题）</div>';
     outlineAnchors = [];
     activeOutlineIdx = -1;
+    pushShellState();
     return;
   }
   outlineEl.replaceChildren(...[
@@ -167,6 +168,7 @@ function rebuildOutline(items) {
     }),
   ]);
   refreshOutlineAnchors();
+  pushShellState();
 }
 
 /** 重新测量锚点（DOM 变化或窗口缩放后调用）。 */
@@ -198,6 +200,7 @@ function updateActiveOutline() {
     if (ar.top < nr.top + 8) outlineEl.scrollTop -= (nr.top + 8 - ar.top);
     else if (ar.bottom > nr.bottom - 8) outlineEl.scrollTop += (ar.bottom - nr.bottom + 8);
   }
+  pushShellState();
 }
 
 /** 点击大纲项：按锚点实际位置把该标题滚到阅读基准线处。 */
@@ -367,7 +370,32 @@ function renderStatus() {
         '</span>'
       : '') +
     '<span class="hint">← → 移动 · Shift 扩选 · Enter 分段 · Tab 跨格 · Ctrl+S 保存</span>';
+  pushShellState();
 }
+
+/**
+ * 把外壳需要的一份状态快照交给 Vue 桥。
+ * 只传显示用的数字/字符串与大纲数组，不传文档内容、不传 DOM 节点。
+ */
+function pushShellState() {
+  const bridge = window.__mdviewBridge;
+  if (!bridge) return;
+  bridge.set({
+    path: meta.path,
+    dirty: !!meta.dirty,
+    blocks: docEl.children.length,
+    stop: caret ? caret.stop : null,
+    column: caret && caret.visual !== null ? caret.visual : null,
+    revision: meta.revision,
+    inTable: inTable(),
+    mode: window.__mdviewMode,
+    themeMode: window.mdviewTheme ? window.mdviewTheme.mode() : 'system',
+    theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
+    outline,
+    activeOutlineIdx,
+  });
+}
+window.__mdviewPushShellState = pushShellState;
 
 let toastTimer = 0;
 function toast(text) {
@@ -375,6 +403,7 @@ function toast(text) {
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1400);
+  if (window.__mdviewBridge) window.__mdviewBridge.notify(text);
 }
 
 /** 菜单动作统一入口：Windows/Linux 的自绘菜单、macOS 的原生菜单栏共用。 */
@@ -437,6 +466,7 @@ function runAction(action) {
     case 'about': toast('mdview v0.1.0 · Rust 内核 + Tauri'); break;
     default: break;
   }
+  pushShellState();
   if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
 }
 window.__mdviewRunAction = runAction;
