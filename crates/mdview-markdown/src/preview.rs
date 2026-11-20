@@ -496,7 +496,7 @@ const STYLE: &str = r#"
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  font: 16px/1.85 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font: 14px/1.85 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   color: #1f2328; background: #fff;
   -webkit-font-smoothing: antialiased;
 }
