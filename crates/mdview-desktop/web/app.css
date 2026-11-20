@@ -182,6 +182,13 @@ blockquote {
   padding: 1px 8px; cursor: pointer;
 }
 #theme-btn:hover { color: var(--fg); background: var(--outline-hover); }
+.table-tools { display: inline-flex; gap: 4px; }
+.table-tools button {
+  font: inherit; color: var(--muted); background: transparent;
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 7px; cursor: pointer;
+}
+.table-tools button:hover { color: var(--fg); background: var(--outline-hover); }
 #toast {
   position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%);
   padding: 6px 14px; border-radius: 6px; font-size: 13px;

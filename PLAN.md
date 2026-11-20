@@ -1,6 +1,6 @@
 # PLAN.md — mdview 开发计划与执行进度
 
-> 最后更新：2026-11-08 20:42
+> 最后更新：2026-11-20 12:15（表格子工程收尾）
 > 适用对象：接手本项目的 AI 或开发者。**本文自包含**，读完即可继续，不需要任何历史对话。
 > 每次有实质进展请同步更新第 6 节的状态和第 7 节的快照。
 
@@ -196,8 +196,8 @@ byte   0  2  5  8  10
   - 内核不碰剪贴板：`Effect::Clipboard { text }` 只产出文本，写入由前端 `clipboard.js` 完成（`navigator.clipboard` → `execCommand` 兜底）
 - 🔶 输入格式化：回车拆分与列表/引用延续已做；Tab 缩进、`**` 自动配对、Delete 合并块未做
 
-### M4 细节 ⬜
-- 🔶 表格：目前仅按行断行 + 单元格间距，**无网格渲染**。表格是独立子工程（列对齐、单元格内光标、行列增删），不要塞进 M3
+### M4 细节 🔶
+- ✅ **表格子工程**（2026-11-20）：仍是源码块，但解析层从 pulldown 事件抽出 `TableGrid / TableRow / TableCell / ColumnAlign`（行列、单元格 byte 区间、对齐），只服务于投影和导航、不替代源码真值。`preview.rs` 把同一组线性停靠点铺进真正的 `<table class="md-table">` 网格，保留全部 `data-b`/`data-a`，行尾换行改零宽标记。应用层新增 `TableMoveCell` / `TableInsertRow` / `TableDeleteRow` / `TableInsertColumn` / `TableDeleteColumn`，所有操作最终转成源码替换事务；表头行插行强制落在分隔行之后，删行禁止删表头/分隔行，删列至少保留一列。前端 Tab 跨格 + 状态栏行列工具条；阅读态 `to_html` 补 `<tr>/<th>/<td>` 与对齐 style（并修掉嵌套 `<table>`）。Rust 单测 + 会话测试 + 端到端自检（新增 6 项）全过
 - ✅ 大纲数据层（`ParseResult::outline`）
 - ⬜ 代码高亮（建议 `syntect` 或 `tree-sitter-highlight`，仅在阅读态启用）
 - ⬜ 链接/图片行内编辑
@@ -209,10 +209,10 @@ byte   0  2  5  8  10
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-20（M1 + M2 收尾）
-- 测试：**Rust 173 项全过**（markdown 79 / app 64 / desktop 16 / support 7 / core 5），无编译告警；desktop 那一组里 7 项是前端守门（`node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`、`outline.js`、`theme.js`）+ 六套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项、`outline` 10 项、`theme` 7 项，共 71 项）
+- 日期：2026-11-20（M1 + M2 + 表格子工程收尾）
+- 测试：**Rust 194 项全过**（app 76 / markdown 89 / desktop bin 10 + 前端守门 7 / core 5 / support 7），无编译告警；前端守门 7 项是 `node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`、`outline.js`、`theme.js`）+ 六套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项、`outline` 10 项、`theme` 7 项，共 71 项
 - 桌面端已能起窗：`cargo run -p mdview-desktop -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`cargo run -p mdview-desktop -- crates/mdview-desktop/tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 39/39」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 5 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+- 自检：`cargo run -p mdview-desktop -- crates/mdview-desktop/tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 45/45」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 5 项**、**表格 6 项**：真实网格 / 首格停靠点 / 行列工具条 / Tab 跨格 / 插行事务经 IPC 到内核 / 插行可撤销）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
 - 最近提交（Angular 规范）：
@@ -237,6 +237,8 @@ byte   0  2  5  8  10
   - `fix(markdown): 有序列表显示序号，松散列表不再退化成段落`
   - `feat(app): 保存改为内核级原子替换并接入文件监听，补齐 M1`
   - `feat(desktop): 加入主题系统与大纲侧栏，完成 M2 收尾`
+  - `test(desktop): 新增标准 Markdown 语法全覆盖测试样张`
+  - `feat: 表格子工程落地真实网格渲染与行列编辑`
 - 分支：全部特性/修复分支已按线性顺序快进并入 `main`（`3110c20`），`origin/main` 只差在 `feat: 初始化内核…`，普通 `git push origin main` 即可，不需要 force
 
 ---
@@ -246,7 +248,7 @@ byte   0  2  5  8  10
 按影响排序，接手时不要误以为是新 bug：
 
 1. ~~**删字后留下空标记**~~ **已修（M3）**：删除区间会把「内容被吃空的容器」连标记一起收起。关键是**必须在删的当下做**——`**粗**` 删掉 `粗` 之后源码是 `****`，pulldown 已不把它当容器，事后再看就没有配对了。同一函数还负责「选区切进标记一半时扩到整对」。
-2. **表格没有网格**：markdown 层把 `|` 与 `---` 折叠后，表格退化成普通文本流。当前只做到「行分行、单元格加间隙」。
+2. ~~**表格没有网格**~~ **已修（M4 表格子工程，2026-11-20）**：表格仍是源码块，但解析层抽出 `TableGrid / TableRow / TableCell / ColumnAlign`（行列、单元格 byte、对齐）；WYSIWYG 把同一组停靠点铺进 `<table class="md-table">`，保留全部 `data-b`/`data-a`；支持 Tab 跨格、行列增删，阅读态输出 `<tr>/<th>/<td>` 与对齐。剩余缺口：单元格内换行与多段落、跨格选区复制、表格排序。
 3. **每字符一个 DOM 元素**：`preview.rs` 为了让停靠点可寻址，把每个字符渲染成独立 `<span>`。副作用是英文单词任意处可断行，DOM 节点数也偏高。生产实现应改为「每片段一个元素 + 内核 `align` 换算 char↔byte」。
 4. ~~**Windows 原子写窗口期**~~ **已修（M1，2026-11-20）**：见 M1，`atomic_replace` 内核级单步替换。
 5. **无虚拟化**：全文档一次性建 DOM。5 万字以上会卡，但暂无此需求。
@@ -275,7 +277,7 @@ byte   0  2  5  8  10
 3. ~~**`Watcher` 落地**（`notify`）~~ **已完成（M1，2026-11-20）**：`NotifyWatcher` + 父目录监听 + 指纹二次确认 + `external-change` 事件 + 前端 toast。
 4. ~~**M2 收尾**~~ **已完成（2026-11-20）**：主题系统、大纲侧栏、同步滚动（锚点插值）——见第 6 节 M2。
 5. **词尾重合停靠点的退格语义**：词首已经收敛为一处（不可见的那端不再产生停靠点），词尾仍保留两个（见第 8 节第 9 条），需要按实际手感定方向。
-6. **表格子工程**：`<table>` 渲染 + 单元格内停靠点，替代当前的文本流占位。这是剩余最大的一块。
+6. ~~**表格子工程**~~ **已完成（2026-11-20）**：`<table>` 网格渲染 + 单元格内停靠点 + Tab 跨格 + 行列增删 + IPC/工具条 + 端到端自检 6 项——见第 6 节 M4。
 7. **引用 / 分隔线的成形判定**：见第 8 节第 17 条，与标题同源，可复用判定函数。
 
 每完成一项，更新第 6 节状态、第 7 节快照，并用 Angular 规范提交。
@@ -319,16 +321,18 @@ node crates/mdview-desktop/web/dragscroll.test.js # 边缘自动滚动几何单�
 | 文本与撤销 | `crates/mdview-core/src/document.rs`、`transaction.rs` |
 | 块切分（含末尾空段落） | `crates/mdview-markdown/src/split.rs` |
 | 片段模型、`align`、HTML、**标记配对表**（`Block::markers`） | `crates/mdview-markdown/src/block.rs` |
-| 投影（差集、图片原子化、内联代码内缩、标记配对推导） | `crates/mdview-markdown/src/project.rs` |
+| 投影（差集、图片原子化、内联代码内缩、标记配对推导、**表格结构抽出**） | `crates/mdview-markdown/src/project.rs` |
+| **表格结构化模型**（`TableGrid` / 单元格 byte / 对齐 / 跨格导航 / 阅读态 `<tr>/<th>/<td>`） | `crates/mdview-markdown/src/block.rs` |
 | **视觉布局与停靠点** | `crates/mdview-markdown/src/layout.rs` |
-| **分块帧与增量 patch**（`block_frames` / `diff_frames`）+ 验证页 | `crates/mdview-markdown/src/preview.rs` |
-| **编辑闭环**（输入 → 事务 → 光标回填 → patch） | `crates/mdview-app/src/state.rs` |
+| **分块帧与增量 patch**（`block_frames` / `diff_frames`）+ 验证页 + **表格网格渲染** | `crates/mdview-markdown/src/preview.rs` |
+| **编辑闭环**（输入 → 事务 → 光标回填 → patch）+ **表格跨格 / 行列增删** | `crates/mdview-app/src/state.rs` |
 | 端口（FileStore 原子写 / RenderSink / **NotifyWatcher**） | `crates/mdview-app/src/ports.rs` |
 | 外部修改监听线程 + `external-change` emit | `crates/mdview-desktop/src/main.rs`（setup 钩子） |
 | 外部修改提示（前端 listen + toast） | `crates/mdview-desktop/web/app.js`（boot） |
 | 日志滚动 | `crates/mdview-support/src/logging.rs` |
 | 命令行入口（含 `demo edit` 回放） | `crates/mdview-cli/src/main.rs` |
-| **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包、大纲下发） | `crates/mdview-desktop/src/session.rs` |
+| **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包、大纲下发、**表格操作**） | `crates/mdview-desktop/src/session.rs` |
+| **表格交互**（Tab 跨格、状态栏行列工具条、自检 6 项） | `crates/mdview-desktop/web/app.js`、`app.css` |
 | **大纲侧栏**（锚点判定 + 跳转，不碰 DOM，Node 可测） | `crates/mdview-desktop/web/outline.js`、`outline.test.js`、`app.js`（侧栏渲染/联动） |
 | **主题系统**（跟随系统 + 手动切换 + localStorage，不碰 DOM，Node 可测） | `crates/mdview-desktop/web/theme.js`、`theme.test.js`、`app.css`（CSS 变量） |
 | **编辑页**（停靠点 → 像素、按键 → 消息、增量应用、自检入口） | `crates/mdview-desktop/web/app.js` |

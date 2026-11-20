@@ -289,6 +289,13 @@ document.addEventListener('selectionchange', () => {
   clearingSelection = false;
 });
 
+/** 光标是否落在表格单元格里。工具条与 Tab 行为都据此切换。 */
+function inTable() {
+  if (!caret) return false;
+  const el = byBefore.get(caret.stop) || byAfter.get(caret.stop);
+  return !!(el && el.closest('.md-table'));
+}
+
 function renderStatus() {
   const blocks = docEl.children.length;
   const block = caret && caret.block !== null && caret.block !== undefined ? caret.block + 1 : '-';
@@ -301,8 +308,16 @@ function renderStatus() {
     '<span>停靠点 <b>' + (caret ? caret.stop : '-') + '</b></span>' +
     '<span>列 <b>' + (caret && caret.visual !== null ? caret.visual : '-') + '</b></span>' +
     '<span>r<b>' + meta.revision + '</b></span>' +
+    (inTable()
+      ? '<span class="table-tools">' +
+        '<button data-table="row+" title="在下方插入行">行+</button>' +
+        '<button data-table="row-" title="删除当前行">行−</button>' +
+        '<button data-table="col+" title="在右侧插入列">列+</button>' +
+        '<button data-table="col-" title="删除当前列">列−</button>' +
+        '</span>'
+      : '') +
     '<button id="theme-btn" title="切换浅色/深色主题">' + themeLabel + '</button>' +
-    '<span class="hint">← → 移动 · Shift 扩选 · Enter 分段 · Ctrl+S 保存 · Ctrl+Z 撤销</span>';
+    '<span class="hint">← → 移动 · Shift 扩选 · Enter 分段 · Tab 跨格 · Ctrl+S 保存</span>';
 }
 
 let toastTimer = 0;
@@ -492,7 +507,12 @@ window.addEventListener('keydown', (event) => {
     case 'Backspace': event.preventDefault(); send({ kind: 'backspace' }); return;
     case 'Delete': event.preventDefault(); send({ kind: 'deleteForward' }); return;
     case 'Enter': event.preventDefault(); send({ kind: event.shiftKey ? 'hardBreak' : 'newline' }); return;
-    case 'Tab': event.preventDefault(); send({ kind: 'insertText', text: '  ' }); return;
+    case 'Tab':
+      event.preventDefault();
+      // 表格内 Tab 跨一格，行末自动接到下一行；非表格保持插入两个空格
+      if (inTable()) send({ kind: 'tableMoveCell', delta: event.shiftKey ? -1 : 1 });
+      else send({ kind: 'insertText', text: '  ' });
+      return;
     case 'ArrowLeft':
       event.preventDefault();
       send({ kind: 'moveCaret', delta: -1, extend: event.shiftKey });
@@ -738,13 +758,25 @@ outlineEl.addEventListener('click', (event) => {
   jumpToOutline(Number(link.dataset.idx));
 });
 
-// 主题按钮（事件委托：状态栏每次 renderStatus 都会重建 innerHTML）
+// 状态栏按钮（事件委托：renderStatus 每次都会重建 innerHTML）
 barEl.addEventListener('click', (event) => {
   const btn = event.target.closest('#theme-btn');
-  if (!btn) return;
-  const theme = mdviewTheme.toggle();
-  btn.textContent = theme === 'dark' ? '☾ 深色' : '☀ 浅色';
-  if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+  if (btn) {
+    const theme = mdviewTheme.toggle();
+    btn.textContent = theme === 'dark' ? '☾ 深色' : '☀ 浅色';
+    if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+    return;
+  }
+  const tableBtn = event.target.closest('[data-table]');
+  if (!tableBtn) return;
+  const ops = {
+    'row+': { kind: 'tableInsertRow', after: true },
+    'row-': { kind: 'tableDeleteRow' },
+    'col+': { kind: 'tableInsertColumn', after: true },
+    'col-': { kind: 'tableDeleteColumn' },
+  };
+  const message = ops[tableBtn.dataset.table];
+  if (message) send(message);
 });
 
 // ---- 自检 ------------------------------------------------------------
@@ -1062,6 +1094,36 @@ window.__mdviewSelfTest = async function () {
       else localStorage.setItem('mdview-theme', savedPref);
     } catch (_) {}
     mdviewTheme.init(); // 按恢复后的偏好重新应用
+
+    // 表格：网格渲染 + Tab 跨格 + 行增删，整条 IPC 链路都要走到
+    const table = docEl.querySelector('.md-table');
+    check('表格渲染成真实网格', !!table && !!table.querySelector('[data-cell="0,0"]'));
+    if (table) {
+      const head = table.querySelector('[data-cell="0,0"] [data-b]');
+      const firstStop = head ? Number(head.dataset.b) : -1;
+      check('表格首格有停靠点', firstStop >= 0, String(firstStop));
+      if (firstStop >= 0) {
+        send({ kind: 'setCaret', stop: firstStop, extend: false });
+        await queue;
+        check('表格内显示行列工具条',
+          inTable() && !!barEl.querySelector('[data-table="row+"]'));
+        const beforeTab = caret ? caret.stop : -1;
+        send({ kind: 'tableMoveCell', delta: 1 });
+        await queue;
+        check('Tab 跨到下一格', !!caret && caret.stop !== beforeTab,
+          beforeTab + ' → ' + (caret ? caret.stop : 'null'));
+        // 行列增删的几何正确性由 Rust 单测覆盖；这里只验证浏览器 → IPC → 内核
+        // 的事务链路确实通了（revision 前进）。
+        const revBefore = meta.revision;
+        send({ kind: 'tableInsertRow', after: true });
+        await queue;
+        check('插行事务经 IPC 到达内核', meta.revision > revBefore,
+          revBefore + ' → ' + meta.revision);
+        send({ kind: 'undo' });
+        await queue;
+        check('插行后可撤销', meta.revision > revBefore);
+      }
+    }
   } catch (err) {
     check('自检未抛异常', false, String(err));
   }

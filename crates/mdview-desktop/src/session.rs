@@ -57,6 +57,18 @@ pub enum Wire {
     SetMode {
         mode: String,
     },
+    /// 表格内跨格。delta 为 1 / -1
+    TableMoveCell {
+        delta: i32,
+    },
+    TableInsertRow {
+        after: bool,
+    },
+    TableDeleteRow,
+    TableInsertColumn {
+        after: bool,
+    },
+    TableDeleteColumn,
 }
 
 impl Wire {
@@ -87,6 +99,11 @@ impl Wire {
                 "source" => ViewMode::Source,
                 _ => ViewMode::Wysiwyg,
             }),
+            Wire::TableMoveCell { delta } => Message::TableMoveCell { delta },
+            Wire::TableInsertRow { after } => Message::TableInsertRow { after },
+            Wire::TableDeleteRow => Message::TableDeleteRow,
+            Wire::TableInsertColumn { after } => Message::TableInsertColumn { after },
+            Wire::TableDeleteColumn => Message::TableDeleteColumn,
         }
     }
 }
@@ -349,6 +366,32 @@ mod tests {
         assert!(matches!(wire, Wire::Copy));
         let wire: Wire = serde_json::from_str(r#"{"kind":"cut"}"#).unwrap();
         assert!(matches!(wire, Wire::Cut));
+
+        // 表格操作：前端用 camelCase 的 kind，内核收到的是同一组语义
+        let wire: Wire = serde_json::from_str(r#"{"kind":"tableMoveCell","delta":1}"#).unwrap();
+        assert!(matches!(wire, Wire::TableMoveCell { delta: 1 }));
+        let wire: Wire =
+            serde_json::from_str(r#"{"kind":"tableInsertRow","after":true}"#).unwrap();
+        assert!(matches!(wire, Wire::TableInsertRow { after: true }));
+        assert!(serde_json::from_str::<Wire>(r#"{"kind":"tableDeleteRow"}"#).is_ok());
+        let wire: Wire =
+            serde_json::from_str(r#"{"kind":"tableInsertColumn","after":false}"#).unwrap();
+        assert!(matches!(wire, Wire::TableInsertColumn { after: false }));
+        assert!(serde_json::from_str::<Wire>(r#"{"kind":"tableDeleteColumn"}"#).is_ok());
+    }
+
+    #[test]
+    fn table_ops_flow_through_dispatch() {
+        let table = "| 甲 | 乙 |\n| --- | --- |\n| 丙 | 丁 |\n";
+        let session = session(table);
+        // 光标停在第一格，Tab 应跨到第二格并回报新位置
+        let first = session.dispatch(Wire::SetCaret {
+            stop: 0,
+            extend: false,
+        });
+        let reply = session.dispatch(Wire::TableMoveCell { delta: 1 });
+        assert!(reply.caret.is_some(), "跨格必须回报新光标");
+        assert_ne!(first.caret.map(|c| c.stop), reply.caret.map(|c| c.stop));
     }
 
     #[test]

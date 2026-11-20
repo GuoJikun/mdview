@@ -18,7 +18,8 @@ mod sourcemap;
 mod split;
 
 pub use block::{
-    align, Block, BlockId, BlockKind, OutlineItem, ParseResult, Span, SpanKind, Style,
+    align, Block, BlockId, BlockKind, ColumnAlign, OutlineItem, ParseResult, Span, SpanKind,
+    Style, TableCell, TableGrid, TableRow,
 };
 pub use layout::{Caret, DocumentLayout, Gravity, Layout, Selection, Stop};
 pub use preview::{preview_html, BlockFrame, Patch, block_frames, diff_frames};

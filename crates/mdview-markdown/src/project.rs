@@ -12,10 +12,11 @@
 
 use std::ops::Range;
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::block::{
-    Block, BlockId, BlockKind, MarkerPair, OutlineItem, ParseResult, Span, SpanKind, Style,
+    Block, BlockId, BlockKind, ColumnAlign, MarkerPair, OutlineItem, ParseResult, Span, SpanKind,
+    Style, TableCell, TableGrid, TableRow,
 };
 use crate::split::split_blocks;
 
@@ -63,6 +64,73 @@ struct Acc {
     /// 需要成对删除的容器区间（Strong / Emphasis / Strikethrough / Link）
     containers: Vec<Range<usize>>,
     kind: Option<BlockKind>,
+    /// 表格构建状态。 pulldown 的表格事件不直接给出「内容区间」，
+    /// 必须在单元格结束时用该格累积的可见片段反推。
+    table: Option<TableBuild>,
+}
+
+#[derive(Default)]
+struct TableBuild {
+    alignment: Vec<ColumnAlign>,
+    rows: Vec<BuildRow>,
+}
+
+struct BuildRow {
+    head: bool,
+    cells: Vec<BuildCell>,
+}
+
+struct BuildCell {
+    /// 单元格竖线之间的源码区间（含填充空格）
+    byte: Range<usize>,
+    /// 进入该格时 spans 的长度，用来切出属于它的可见片段
+    span_start: usize,
+}
+
+fn column_align(a: Alignment) -> ColumnAlign {
+    match a {
+        Alignment::Left => ColumnAlign::Left,
+        Alignment::Center => ColumnAlign::Center,
+        Alignment::Right => ColumnAlign::Right,
+        _ => ColumnAlign::None,
+    }
+}
+
+/// 把事件流累积出的表格状态定型。每格的 `content` 取该格可见片段的并集，
+/// 空单元格留一个空区间，由 `TableGrid::caret_byte` 按源码填充处理。
+fn finish_table(build: TableBuild, spans: &[Span]) -> TableGrid {
+    let rows = build
+        .rows
+        .into_iter()
+        .map(|row| {
+            let cells = row
+                .cells
+                .into_iter()
+                .map(|cell| {
+                    let owned: Vec<&Span> = spans[cell.span_start..]
+                        .iter()
+                        .take_while(|s| s.byte.start < cell.byte.end)
+                        .collect();
+                    let content = match (owned.first(), owned.last()) {
+                        (Some(first), Some(last)) => first.byte.start..last.byte.end,
+                        _ => cell.byte.start..cell.byte.start,
+                    };
+                    TableCell {
+                        byte: cell.byte,
+                        content,
+                    }
+                })
+                .collect();
+            TableRow {
+                head: row.head,
+                cells,
+            }
+        })
+        .collect();
+    TableGrid {
+        alignment: build.alignment,
+        rows,
+    }
 }
 
 /// 把容器区间翻译成「标记对」。
@@ -174,6 +242,46 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
                 }
                 if let Tag::List(start) = &tag {
                     list_stack.push(start.is_some());
+                }
+                // 表格：pulldown 的事件流里表格是一串 Table/TableHead/TableRow/TableCell
+                // 容器事件，单元格区间直接取事件 range（竖线之间的原文，含填充空格）。
+                if let Some(owner) = owner_of(&ranges, range.start) {
+                    let span_start = accs[owner].spans.len();
+                    match &tag {
+                        Tag::Table(alignments) => {
+                            accs[owner].table = Some(TableBuild {
+                                alignment: alignments.iter().copied().map(column_align).collect(),
+                                rows: Vec::new(),
+                            });
+                        }
+                        Tag::TableHead => {
+                            if let Some(t) = accs[owner].table.as_mut() {
+                                t.rows.push(BuildRow {
+                                    head: true,
+                                    cells: Vec::new(),
+                                });
+                            }
+                        }
+                        Tag::TableRow => {
+                            if let Some(t) = accs[owner].table.as_mut() {
+                                t.rows.push(BuildRow {
+                                    head: false,
+                                    cells: Vec::new(),
+                                });
+                            }
+                        }
+                        Tag::TableCell => {
+                            if let Some(t) = accs[owner].table.as_mut() {
+                                if let Some(row) = t.rows.last_mut() {
+                                    row.cells.push(BuildCell {
+                                        byte: range.clone(),
+                                        span_start,
+                                    });
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 // 列表项与表格行之间的换行必须显式保留：切块按空行进行，
                 // 这些换行落在块内、又不在任何片段里，会被差集当成标记折叠掉，
@@ -315,6 +423,7 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
             covered,
             containers,
             kind,
+            table,
         } = acc;
         let byte = ranges[index].clone();
         let kind = kind.unwrap_or_else(|| {
@@ -326,6 +435,7 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
         });
         let hidden = subtract(byte.clone(), &merge(covered));
         let markers = collect_markers(&hidden, &containers, &spans);
+        let table = table.map(|build| finish_table(build, &spans));
         let block = Block {
             id: BlockId(index),
             kind,
@@ -333,6 +443,7 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
             spans,
             hidden,
             markers,
+            table,
         };
         let block = if heading_is_bare(src, &block) {
             demote_to_paragraph(src, block)
@@ -395,6 +506,7 @@ fn demote_to_paragraph(src: &str, block: Block) -> Block {
         spans,
         hidden: Vec::new(),
         markers: Vec::new(),
+        table: None,
     }
 }
 
@@ -542,6 +654,78 @@ mod tests {
             .into_iter()
             .next()
             .expect("至少一个块")
+    }
+
+    const TABLE: &str =
+        "| 左 | 中 | 右 |\n| :-- | :-: | --: |\n| a | **b** | c |\n| d | e | f |\n";
+
+    #[test]
+    fn table_is_one_block_with_grid() {
+        let parsed = parse(TABLE, MarkdownParser::gfm().options());
+        assert_eq!(parsed.blocks.len(), 1);
+        let block = &parsed.blocks[0];
+        assert_eq!(block.kind, BlockKind::Table);
+        let grid = block.table.as_ref().expect("表格应带结构化投影");
+        assert_eq!(grid.rows.len(), 3, "一行表头 + 两行正文");
+        assert!(grid.rows[0].head);
+        assert!(!grid.rows[1].head);
+        assert!(grid.rows.iter().all(|r| r.cells.len() == 3));
+    }
+
+    #[test]
+    fn table_cell_ranges_come_from_events() {
+        let block = first_block(TABLE);
+        let grid = block.table.as_ref().unwrap();
+        // 单元格 byte 含两侧填充空格；content 只含可见文本
+        assert_eq!(grid.rows[0].cells[0].byte, 1..6);
+        assert_eq!(grid.rows[0].cells[0].content, 2..5);
+        assert_eq!(grid.rows[0].cells[2].content, 14..17);
+        // `**b**` 的可见内容只有 b，两个星号仍留给差集去折叠
+        assert_eq!(grid.rows[1].cells[1].byte, 45..52);
+        assert_eq!(grid.rows[1].cells[1].content, 48..49);
+    }
+
+    #[test]
+    fn table_alignment_is_preserved() {
+        let grid = first_block(TABLE).table.unwrap();
+        assert_eq!(
+            grid.alignment,
+            vec![ColumnAlign::Left, ColumnAlign::Center, ColumnAlign::Right]
+        );
+    }
+
+    #[test]
+    fn table_locate_and_caret_byte() {
+        let grid = first_block(TABLE).table.unwrap();
+        assert_eq!(grid.locate(3), Some((0, 0)));
+        assert_eq!(grid.locate(48), Some((1, 1)));
+        assert_eq!(grid.locate(0), None, "竖线不属于任何单元格");
+        assert_eq!(grid.locate(42), Some((1, 0)));
+        assert_eq!(grid.caret_byte(TABLE, 1, 1), Some(48));
+    }
+
+    #[test]
+    fn table_empty_cell_caret_skips_padding() {
+        let src = "| a |  | c |\n| --- | --- | --- |\n| d | e | f |\n";
+        let grid = first_block(src).table.unwrap();
+        let cell = &grid.rows[0].cells[1];
+        assert_eq!(cell.content, cell.byte.start..cell.byte.start);
+        // 左侧两个空格被跳过，落点仍在格内
+        assert_eq!(grid.caret_byte(src, 0, 1), Some(cell.byte.end - 1));
+    }
+
+    #[test]
+    fn table_cell_navigation_wraps_rows() {
+        let grid = first_block(TABLE).table.unwrap();
+        assert_eq!(grid.next_cell(0, 2), Some((1, 0)));
+        assert_eq!(grid.prev_cell(1, 0), Some((0, 2)));
+        assert_eq!(grid.next_cell(2, 2), None);
+        assert_eq!(grid.prev_cell(0, 0), None);
+    }
+
+    #[test]
+    fn paragraph_has_no_table_grid() {
+        assert!(first_block("普通段落").table.is_none());
     }
 
     #[test]

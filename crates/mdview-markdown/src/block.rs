@@ -95,6 +95,118 @@ pub struct MarkerPair {
     pub close: Range<usize>,
 }
 
+/// 表格列对齐方式。来自 pulldown 的 `Alignment`，重导出成公共类型供渲染层用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColumnAlign {
+    #[default]
+    None,
+    Left,
+    Center,
+    Right,
+}
+
+/// 表格的一个单元格。
+///
+/// 源码仍是唯一真值，这里只记录「第几行第几格在源码哪一段」，供网格渲染与
+/// 单元格内导航使用。`byte` 是两根竖线之间的原文（含两侧填充空格），
+/// `content` 是其中真正可见的部分（可见片段的并集）；空单元格两个区间可能相等。
+#[derive(Debug, Clone)]
+pub struct TableCell {
+    pub byte: Range<usize>,
+    pub content: Range<usize>,
+}
+
+/// 表格的一行。`head` 为真表示表头（`| --- |` 之前那一行）。
+#[derive(Debug, Clone)]
+pub struct TableRow {
+    pub head: bool,
+    pub cells: Vec<TableCell>,
+}
+
+/// 表格的结构化投影：列对齐 + 逐行逐格的源码区间。
+///
+/// 不参与文本编辑本身，编辑永远只改源码字节；它让前端能把线性停靠点表
+/// 铺成真正的 `<table>` 网格，并让内核支持 Tab 跨格、行列增删。
+#[derive(Debug, Clone)]
+pub struct TableGrid {
+    pub alignment: Vec<ColumnAlign>,
+    pub rows: Vec<TableRow>,
+}
+
+impl TableGrid {
+    /// 某个 byte 落在哪个单元格里，返回 (行, 列)。竖线 / 分隔行 / 换行不属于任何格。
+    pub fn locate(&self, byte: usize) -> Option<(usize, usize)> {
+        self.rows.iter().enumerate().find_map(|(r, row)| {
+            row.cells
+                .iter()
+                .position(|c| c.byte.start <= byte && byte < c.byte.end)
+                .map(|c| (r, c))
+        })
+    }
+
+    /// 光标落在竖线 / 分隔行 / 换行上时，归到最靠近的单元格。
+    /// `locate` 只认格内 byte，Tab 跨格必须有个稳定的起点。
+    pub fn locate_nearest(&self, byte: usize) -> Option<(usize, usize)> {
+        if let Some(hit) = self.locate(byte) {
+            return Some(hit);
+        }
+        for (r, row) in self.rows.iter().enumerate() {
+            let (first, last) = (row.cells.first()?, row.cells.last()?);
+            if byte < first.byte.start {
+                return Some((r, 0));
+            }
+            if byte < last.byte.end {
+                let col = row
+                    .cells
+                    .iter()
+                    .position(|c| byte < c.byte.end)
+                    .unwrap_or(row.cells.len() - 1);
+                return Some((r, col));
+            }
+        }
+        let last = self.rows.len() - 1;
+        Some((last, self.rows[last].cells.len().saturating_sub(1)))
+    }
+
+    /// 单元格的光标落点：优先落在可见内容起点，空则跳过左侧填充空格。
+    pub fn caret_byte(&self, src: &str, row: usize, col: usize) -> Option<usize> {
+        let cell = self.rows.get(row)?.cells.get(col)?;
+        if cell.content.start < cell.content.end {
+            return Some(cell.content.start);
+        }
+        // 空单元格：左侧的填充空格不属于可见内容，光标应落在它们之后
+        let raw = src.get(cell.byte.clone()).unwrap_or("");
+        let lead = raw.len() - raw.trim_start_matches([' ', '\t']).len();
+        Some(
+            (cell.byte.start + lead)
+                .min(cell.byte.end.saturating_sub(1))
+                .max(cell.byte.start),
+        )
+    }
+
+    /// 线性顺序的下一格 / 上一格，越界返回 None。
+    pub fn next_cell(&self, row: usize, col: usize) -> Option<(usize, usize)> {
+        if col + 1 < self.rows.get(row)?.cells.len() {
+            Some((row, col + 1))
+        } else if row + 1 < self.rows.len() {
+            Some((row + 1, 0))
+        } else {
+            None
+        }
+    }
+
+    pub fn prev_cell(&self, row: usize, col: usize) -> Option<(usize, usize)> {
+        if col > 0 {
+            Some((row, col - 1))
+        } else if row > 0 {
+            let prev = row - 1;
+            Some((prev, self.rows.get(prev)?.cells.len().saturating_sub(1)))
+        } else {
+            None
+        }
+    }
+}
+
 /// 一个块：完整源码区间 + 可见片段序列 + 折叠掉的标记区间。
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -107,6 +219,8 @@ pub struct Block {
     pub hidden: Vec<Range<usize>>,
     /// 成对标记的配对表，按 `open.start` 升序。
     pub markers: Vec<MarkerPair>,
+    /// 表格的结构化投影。只有 `BlockKind::Table` 才有值。
+    pub table: Option<TableGrid>,
 }
 
 impl Block {
@@ -205,6 +319,41 @@ impl Block {
             self.byte.start,
             self.byte.end
         ));
+        // 表格按结构化网格输出。阅读态此前只有 `<table>` 外壳没有 `<tr>/<td>`，
+        // 浏览器会把一格格文本全塞进同一个隐式单元格，对齐也丢了。
+        // 注意 `<table>` 外壳已由上方 `open` 按 BlockKind::Table 输出，这里只铺行与格，
+        // 不能再 push 一层 `<table>`，否则得到嵌套表且只有一个闭合标签。
+        if let Some(grid) = &self.table {
+            for row in &grid.rows {
+                out.push_str("<tr>");
+                let tag = if row.head { "th" } else { "td" };
+                for (col, cell) in row.cells.iter().enumerate() {
+                    let align = match grid.alignment.get(col).copied().unwrap_or_default() {
+                        ColumnAlign::Left => "left",
+                        ColumnAlign::Center => "center",
+                        ColumnAlign::Right => "right",
+                        ColumnAlign::None => "",
+                    };
+                    let style = if align.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" style=\"text-align:{align}\"")
+                    };
+                    out.push_str(&format!("<{tag}{style}>"));
+                    for span in self
+                        .spans
+                        .iter()
+                        .filter(|s| s.byte.start >= cell.byte.start && s.byte.end <= cell.byte.end)
+                    {
+                        self.push_span(&mut out, span);
+                    }
+                    out.push_str(&format!("</{tag}>"));
+                }
+                out.push_str("</tr>");
+            }
+            out.push_str("</table></section>");
+            return out;
+        }
         // 列表项之间的换行在本模型里是 Break 片段，`<li>` 边界由它切出来。
         // 不切的话整份列表只有一个 `<li>`，浏览器只肯给一个序号。
         if is_list {
@@ -465,5 +614,20 @@ mod tests {
         // 源码 "&amp;x"（6 字节），文本 "&x"（2 字符）
         assert_eq!(align("&amp;x", "&x", 1), 5);
         assert_eq!(align("&amp;x", "&x", 2), 6);
+    }
+
+    #[test]
+    fn reading_html_table_has_single_wrapper_and_cells() {
+        let src = "| 左 | 中 | 右 |\n| :--- | :---: | ---: |\n| a | b | c |\n";
+        let parsed = crate::parse(src, crate::MarkdownParser::gfm().options());
+        let html = parsed.to_html(src);
+        assert_eq!(html.matches("<table>").count(), 1, "表格外壳只应有一层: {html}");
+        assert_eq!(html.matches("</table>").count(), 1);
+        assert_eq!(html.matches("<tr>").count(), 2, "表头 + 一行正文: {html}");
+        assert_eq!(html.matches("<th").count(), 3);
+        assert_eq!(html.matches("<td").count(), 3);
+        assert!(html.contains("text-align:left"), "左对齐丢失: {html}");
+        assert!(html.contains("text-align:center"), "居中丢失: {html}");
+        assert!(html.contains("text-align:right"), "右对齐丢失: {html}");
     }
 }

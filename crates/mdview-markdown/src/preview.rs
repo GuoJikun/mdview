@@ -16,7 +16,7 @@
 
 use std::{fmt::Write as _, ops::Range};
 
-use crate::block::{escape, item_marker, Block, BlockKind, ParseResult, SpanKind};
+use crate::block::{escape, item_marker, Block, BlockKind, ColumnAlign, ParseResult, SpanKind};
 use crate::layout::DocumentLayout;
 use crate::project::MarkdownParser;
 
@@ -95,6 +95,104 @@ pub fn block_frames(src: &str, parsed: &ParseResult, doc: &DocumentLayout) -> Ve
     frames
 }
 
+/// 表格网格渲染。
+///
+/// 关键：**不改变停靠点集合**。每个 `<th>/<td>` 里塞进去的仍是原来那一串
+/// `write_segment` 输出，`data-b` / `data-a` 原样保留，只是按单元格重新分组。
+/// 竖线、分隔行与行尾换行不属于任何单元格，它们的零宽停靠点就近挂在格子内，
+/// 否则 `<span>` 会挂在 `<tr>` 下被浏览器搬走，光标就找不到像素位置了。
+fn table_html(
+    src: &str,
+    block: &Block,
+    grid: &crate::block::TableGrid,
+    stops: &[crate::layout::Stop],
+    first: usize,
+) -> String {
+    if grid.rows.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push_str("<table class=\"md-table\">");
+    let mut open_row: Option<usize> = None;
+    let mut open_cell: Option<(usize, usize)> = None;
+
+    for (index, stop) in stops.iter().enumerate() {
+        // 孤立停靠点归到当前格；表格开头的归第一格
+        let (row, col) = grid.locate(stop.byte).or(open_cell).unwrap_or((0, 0));
+        if open_row != Some(row) {
+            if let Some(prev) = open_row {
+                out.push_str(if grid.rows[prev].head { "</th>" } else { "</td>" });
+                out.push_str("</tr>");
+                if prev == 0 {
+                    out.push_str("</thead><tbody>");
+                }
+            } else {
+                out.push_str("<thead>");
+            }
+            out.push_str("<tr>");
+            open_row = Some(row);
+            open_cell = None;
+        }
+        if open_cell != Some((row, col)) {
+            if open_cell.is_some() {
+                out.push_str(if grid.rows[row].head { "</th>" } else { "</td>" });
+            }
+            let table_row = &grid.rows[row];
+            let tag = if table_row.head { "th" } else { "td" };
+            let align = match grid.alignment.get(col).copied().unwrap_or_default() {
+                ColumnAlign::Left => " al",
+                ColumnAlign::Center => " ac",
+                ColumnAlign::Right => " ar",
+                ColumnAlign::None => "",
+            };
+            if let Some(cell) = table_row.cells.get(col) {
+                let _ = write!(
+                    out,
+                    "<{tag} class=\"cell{align}\" data-cell=\"{row},{col}\" \
+                     data-byte=\"{}\" data-cend=\"{}\" data-block=\"{}\">",
+                    cell.byte.start, cell.byte.end, block.id.0
+                );
+            }
+            open_cell = Some((row, col));
+        }
+        // 块尾锚点：最后一个停靠点没有后继，write_segment 用不到它
+        if index + 1 == stops.len() {
+            let _ = write!(
+                out,
+                "<span class=\"eob\" data-b=\"{}\" data-byte=\"{}\" data-block=\"{}\">&#8203;</span>",
+                first + index,
+                block.byte.end,
+                block.id.0
+            );
+            continue;
+        }
+        // 行尾换行在网格里不是可见字符。改成零宽标记，既保住停靠点的像素位置，
+        // 又不会在单元格里多顶出一行。
+        if block
+            .span_at(stop.byte)
+            .is_some_and(|i| matches!(block.spans[i].kind, SpanKind::Break { .. }))
+        {
+            let _ = write!(
+                out,
+                "<span class=\"mk\" data-b=\"{}\" data-byte=\"{}\" data-block=\"{}\">&#8203;</span>",
+                first + index,
+                stop.byte,
+                block.id.0
+            );
+            continue;
+        }
+        write_segment(&mut out, src, block, stops, index, first + index);
+    }
+
+    if let Some(row) = open_row {
+        out.push_str(if grid.rows[row].head { "</th>" } else { "</td>" });
+        out.push_str("</tr>");
+        out.push_str(if row == 0 { "</thead>" } else { "</tbody>" });
+    }
+    out.push_str("</table>");
+    out
+}
+
 /// 最长公共前缀 / 后缀求差集：只替换中间真正变化的那一段块。
 ///
 /// 不能用块 id 做 diff：一次编辑会让其后所有块的 byte 起点与停靠点序号整体平移，
@@ -150,6 +248,14 @@ fn block_html(src: &str, block: &Block, doc: &DocumentLayout) -> Option<String> 
              data-byte=\"{}\" data-block=\"{}\">────────</span>",
             block.byte.start, block.id.0
         );
+        out.push_str("</section>\n");
+        return Some(out);
+    }
+
+    // 表格走专用网格渲染：把同一组线性停靠点铺进 <table> 的单元格，
+    // 每格仍是原来的 data-b/data-a，光标与选区完全不变。
+    if let Some(grid) = &block.table {
+        out.push_str(&table_html(src, block, grid, stops, first));
         out.push_str("</section>\n");
         return Some(out);
     }
@@ -342,6 +448,50 @@ fn wrapper(kind: &BlockKind) -> (&'static str, &'static str) {
     }
 }
 
+#[cfg(test)]
+mod grid_tests {
+    use super::*;
+
+    const TABLE: &str =
+        "| 左 | 中 | 右 |\n| :-- | :-: | --: |\n| a | **b** | c |\n| d | e | f |\n";
+
+    #[test]
+    fn table_renders_as_grid_with_every_stop() {
+        let parsed = MarkdownParser::gfm().parse(TABLE);
+        let doc = DocumentLayout::build(TABLE, &parsed);
+        let frames = block_frames(TABLE, &parsed, &doc);
+        assert_eq!(frames.len(), 1);
+        let frame = &frames[0];
+        let html = &frame.html;
+
+        assert!(html.contains("<table class=\"md-table\">"));
+        assert!(html.contains("<thead>"));
+        assert!(html.contains("</thead><tbody>"));
+        assert_eq!(html.matches("<th ").count(), 3, "表头三格");
+        assert_eq!(html.matches("<td ").count(), 6, "正文两行各三格");
+        assert!(html.contains("class=\"cell al\""), "左对齐");
+        assert!(html.contains("class=\"cell ac\""), "居中");
+        assert!(html.contains("class=\"cell ar\""), "右对齐");
+
+        // 渲染前是线性停靠点表，渲染后一个都不能丢，否则前端定位不到光标
+        for stop in frame.base..=frame.end {
+            assert!(
+                html.contains(&format!("data-b=\"{stop}\"")),
+                "表格 HTML 缺少停靠点 {stop}"
+            );
+        }
+    }
+
+    #[test]
+    fn table_frame_bounds_match_layout() {
+        let parsed = MarkdownParser::gfm().parse(TABLE);
+        let doc = DocumentLayout::build(TABLE, &parsed);
+        let frame = &block_frames(TABLE, &parsed, &doc)[0];
+        let end = frame.base + doc.layout(parsed.blocks[0].id).unwrap().len() - 1;
+        assert_eq!(frame.end, end);
+    }
+}
+
 const STYLE: &str = r#"
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -377,6 +527,17 @@ blockquote {
 .li:has(.atom.task)::before { content: none; }
 .li:has(.atom.task) { padding-left: .1em; }
 .sep { display: inline-block; width: .55em; }
+/* 表格已经有单元格边框，竖线折叠后补的装饰间隙不要再占位 */
+.md-table { border-collapse: collapse; margin: .2em 0; }
+.md-table th, .md-table td {
+  border: 1px solid #d0d7de; padding: .35em .7em; vertical-align: top;
+  min-width: 3em; white-space: pre-wrap;
+}
+.md-table th { background: #f6f8fa; font-weight: 650; }
+.md-table .al { text-align: left; }
+.md-table .ac { text-align: center; }
+.md-table .ar { text-align: right; }
+.md-table .sep { display: none; }
 .atom.rule { display: block; color: #d0d7de; letter-spacing: .1em; }
 .ch { }
 .b { font-weight: 650; }

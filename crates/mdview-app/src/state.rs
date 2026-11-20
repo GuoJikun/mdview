@@ -64,6 +64,16 @@ pub enum Message {
     Copy,
     /// 剪切：一次事务里删掉选区，再把删掉的文本交出去
     Cut,
+    /// 表格内跨一格。`delta` 为 1 / -1，行末自动接到下一行行首。
+    TableMoveCell { delta: i32 },
+    /// 在当前行前 / 后插入一行
+    TableInsertRow { after: bool },
+    /// 删除当前行（至少保留表头）
+    TableDeleteRow,
+    /// 在当前列前 / 后插入一列
+    TableInsertColumn { after: bool },
+    /// 删除当前列（至少保留一列）
+    TableDeleteColumn,
     Reload { content: String },
 }
 
@@ -330,6 +340,11 @@ impl AppState {
                 .map(|text| vec![Effect::Clipboard { text }])
                 .unwrap_or_default(),
             Message::Cut => self.cut(),
+            Message::TableMoveCell { delta } => self.table_move_cell(delta),
+            Message::TableInsertRow { after } => self.table_insert_row(after),
+            Message::TableDeleteRow => self.table_delete_row(),
+            Message::TableInsertColumn { after } => self.table_insert_column(after),
+            Message::TableDeleteColumn => self.table_delete_column(),
             Message::Reload { content } => {
                 self.document = Document::new(content);
                 self.reparse();
@@ -376,6 +391,224 @@ impl AppState {
             },
             self.cursor_effect(),
         ]
+    }
+
+    // ---- 表格编辑 -------------------------------------------------------
+
+    /// 光标所在表格的 (块索引, 当前 byte, 行, 列)。不在表格里返回 None。
+    fn caret_table_cell(&self) -> Option<(usize, usize, usize, usize)> {
+        let (id, local) = self.layout.locate(self.selection.head)?;
+        let byte = self.layout.byte(local)?;
+        let block = self.parsed.blocks.get(id.0)?;
+        if !matches!(block.kind, BlockKind::Table) {
+            return None;
+        }
+        let (row, col) = block.table.as_ref()?.locate_nearest(byte)?;
+        Some((id.0, byte, row, col))
+    }
+
+    /// 把一段 byte 区间整体替换，光标落在指定 byte（都换成 char index 再进内核）。
+    fn replace_bytes(
+        &mut self,
+        range: Range<usize>,
+        insert: &str,
+        caret: Option<usize>,
+    ) -> Vec<Effect> {
+        let span = self.document.byte_to_char(range.start)..self.document.byte_to_char(range.end);
+        let caret = caret.map(|b| self.document.byte_to_char(b));
+        self.apply_with_caret(span, insert, caret)
+    }
+
+    /// Tab / Shift+Tab：在当前表格里跨一格。
+    fn table_move_cell(&mut self, delta: i32) -> Vec<Effect> {
+        let Some((id, _, row, col)) = self.caret_table_cell() else {
+            return Vec::new();
+        };
+        let src = self.document.text();
+        let grid = self.parsed.blocks[id].table.as_ref().unwrap();
+        let target = if delta > 0 {
+            grid.next_cell(row, col)
+        } else {
+            grid.prev_cell(row, col)
+        };
+        let Some((row, col)) = target else {
+            return Vec::new();
+        };
+        let Some(byte) = grid.caret_byte(&src, row, col) else {
+            return Vec::new();
+        };
+        let Some(global) = self.layout.stop_at_byte(byte, Gravity::Upstream) else {
+            return Vec::new();
+        };
+        self.selection = Selection::caret(global);
+        vec![self.cursor_effect()]
+    }
+
+    /// 表格源码按行切开。块区间已去掉尾部换行，所以最后一行不带 `\n`。
+    fn table_lines(src: &str, range: &Range<usize>) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut start = range.start;
+        for index in range.start..range.end {
+            if src.as_bytes().get(index) == Some(&b'\n') {
+                out.push(src[start..index].to_owned());
+                start = index + 1;
+            }
+        }
+        if start < range.end {
+            out.push(src[start..range.end].to_owned());
+        }
+        out
+    }
+
+    /// 逻辑行号 → 源码行号。表格第 0 行是表头，第 1 行是 `---` 分隔行。
+    fn table_source_row(row: usize) -> usize {
+        if row == 0 {
+            0
+        } else {
+            row + 1
+        }
+    }
+
+    /// 整块替换表格源码，并把光标放到新表格第 `line` 行的第 `col` 格。
+    fn replace_table(
+        &mut self,
+        block: usize,
+        range: Range<usize>,
+        lines: &[String],
+        line: usize,
+        col: usize,
+    ) -> Vec<Effect> {
+        let src = self.document.text();
+        let block_range = self.parsed.blocks[block].byte.clone();
+        let new_text = lines.join("\n");
+        // 目标行在**新**文本里的起点；光标落在第 col 个 `|` 之后、跳过填充空格
+        let line_start = block_range.start
+            + lines.iter().take(line).map(|l| l.len() + 1).sum::<usize>();
+        let line_text = lines.get(line).map(String::as_str).unwrap_or("");
+        let mut cell_byte = line_start;
+        let mut relative = 0usize;
+        let mut pipes = 0usize;
+        for (offset, ch) in line_text.char_indices() {
+            if ch == '|' {
+                pipes += 1;
+                if pipes == col + 1 {
+                    cell_byte = line_start + offset + 1;
+                    relative = offset + 1;
+                    break;
+                }
+            }
+        }
+        while line_text.as_bytes().get(relative) == Some(&b' ') {
+            cell_byte += 1;
+            relative += 1;
+        }
+        let _ = (range, src);
+        self.replace_bytes(block_range, &new_text, Some(cell_byte))
+    }
+
+    fn table_insert_row(&mut self, after: bool) -> Vec<Effect> {
+        let Some((id, _, row, _)) = self.caret_table_cell() else {
+            return Vec::new();
+        };
+        let src = self.document.text();
+        let block = &self.parsed.blocks[id];
+        let cols = block.table.as_ref().unwrap().rows[0].cells.len();
+        let mut lines = Self::table_lines(&src, &block.byte);
+        // 表头后面必须紧接分隔行，新行只能插到分隔行之后（源码第 2 行）
+        let at = if row == 0 {
+            2
+        } else {
+            Self::table_source_row(row) + usize::from(after)
+        };
+        if at > lines.len() {
+            return Vec::new();
+        }
+        let blank = format!("|{}|", "  |".repeat(cols));
+        let target_line = if row == 0 { at } else if after { at - 1 } else { at };
+        lines.insert(at, blank);
+        self.replace_table(id, block.byte.clone(), &lines, target_line, 0)
+    }
+
+    fn table_delete_row(&mut self) -> Vec<Effect> {
+        let Some((id, _, row, _)) = self.caret_table_cell() else {
+            return Vec::new();
+        };
+        let src = self.document.text();
+        let block = &self.parsed.blocks[id];
+        let line = Self::table_source_row(row);
+        // 表头与分隔行不能删，否则整张表就废了
+        if line < 2 {
+            return Vec::new();
+        }
+        let mut lines = Self::table_lines(&src, &block.byte);
+        if line >= lines.len() {
+            return Vec::new();
+        }
+        lines.remove(line);
+        let target = (line - 1).min(lines.len() - 1);
+        self.replace_table(id, block.byte.clone(), &lines, target, 0)
+    }
+
+    /// 在源码某一行的第 `col` 个单元格处插入/删除一格，返回新行。
+    fn table_line_cell(line: &str, col: usize, insert: Option<&str>) -> String {
+        let mut parts: Vec<&str> = line.split('|').collect();
+        let leading = parts.first() == Some(&"");
+        let index = col + usize::from(leading);
+        match insert {
+            Some(fill) => {
+                if index <= parts.len() {
+                    parts.insert(index, fill);
+                }
+            }
+            None => {
+                // 尾部空串是结尾竖线造成的，最后一格是 parts[len-2]
+                let last = parts.len().saturating_sub(1 + usize::from(leading));
+                if col <= last && index < parts.len() {
+                    parts.remove(index);
+                }
+            }
+        }
+        parts.join("|")
+    }
+
+    fn table_insert_column(&mut self, after: bool) -> Vec<Effect> {
+        let Some((id, _, row, col)) = self.caret_table_cell() else {
+            return Vec::new();
+        };
+        let src = self.document.text();
+        let block = &self.parsed.blocks[id];
+        let mut lines = Self::table_lines(&src, &block.byte);
+        if lines.is_empty() {
+            return Vec::new();
+        }
+        let at = col + usize::from(after);
+        // 分隔行按列对齐补 `---`，其余行补两个空格
+        for (index, line) in lines.iter_mut().enumerate() {
+            let fill = if index == 1 { "---" } else { "  " };
+            *line = Self::table_line_cell(line, at, Some(fill));
+        }
+        let target_row = Self::table_source_row(row);
+        self.replace_table(id, block.byte.clone(), &lines, target_row, at)
+    }
+
+    fn table_delete_column(&mut self) -> Vec<Effect> {
+        let Some((id, _, row, col)) = self.caret_table_cell() else {
+            return Vec::new();
+        };
+        let src = self.document.text();
+        let block = &self.parsed.blocks[id];
+        let cols = block.table.as_ref().unwrap().rows[0].cells.len();
+        if cols <= 1 {
+            return Vec::new();
+        }
+        let mut lines = Self::table_lines(&src, &block.byte);
+        for line in &mut lines {
+            *line = Self::table_line_cell(line, col, None);
+        }
+        let target_col = col.saturating_sub(1);
+        let target_row = Self::table_source_row(row);
+        let _ = cols;
+        self.replace_table(id, block.byte.clone(), &lines, target_row, target_col)
     }
 
     fn insert_text(&mut self, text: &str) -> Vec<Effect> {
@@ -930,6 +1163,224 @@ mod tests {
             },
             files,
         );
+    }
+
+    const TABLE: &str =
+        "| 左 | 中 | 右 |\n| :-- | :-: | --: |\n| a | **b** | c |\n| d | e | f |\n";
+
+    fn table_app(files: &mut InMemoryFileStore) -> AppState {
+        open(files, TABLE)
+    }
+
+    #[test]
+    fn table_tab_moves_to_next_cell() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        click(&mut app, &files, 3);
+        assert!(!app
+            .update(Message::TableMoveCell { delta: 1 }, &files)
+            .is_empty());
+        assert_eq!(caret_byte(&app), 8, "应落在中列内容起点");
+    }
+
+    #[test]
+    fn table_tab_wraps_to_next_row() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        click(&mut app, &files, 15);
+        app.update(Message::TableMoveCell { delta: 1 }, &files);
+        assert_eq!(caret_byte(&app), 42, "行末 Tab 应接到下一行行首");
+    }
+
+    #[test]
+    fn table_shift_tab_wraps_to_prev_row() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        click(&mut app, &files, 42);
+        app.update(Message::TableMoveCell { delta: -1 }, &files);
+        assert_eq!(caret_byte(&app), 14, "行首 Shift+Tab 应回到上一行行末");
+    }
+
+    #[test]
+    fn table_insert_row_adds_a_row() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        click(&mut app, &files, 3);
+        app.update(Message::TableInsertRow { after: true }, &files);
+        let src = app.document.text();
+        assert_eq!(src.lines().count(), 5);
+        let parsed = MarkdownParser::gfm().parse(&src);
+        let grid = parsed.blocks[0].table.as_ref().unwrap();
+        assert_eq!(grid.rows.len(), 4);
+        assert!(grid.rows.iter().all(|r| r.cells.len() == 3));
+        assert!(app.dirty);
+    }
+
+    #[test]
+    fn table_tab_then_insert_row() {
+        let src = "# 甲\r\n\r\n正文\r\n\r\n| 甲 | 乙 |\r\n| --- | --- |\r\n| 丙 | 丁 |\r\n";
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        let block_id = app
+            .parsed
+            .blocks
+            .iter()
+            .find(|b| b.table.is_some())
+            .unwrap()
+            .id;
+        let byte = app.parsed.blocks[block_id.0]
+            .table
+            .as_ref()
+            .unwrap()
+            .caret_byte(&app.document.text(), 0, 0)
+            .unwrap();
+        click(&mut app, &files, byte);
+        app.update(Message::TableMoveCell { delta: 1 }, &files);
+        let effects = app.update(Message::TableInsertRow { after: true }, &files);
+        assert!(!effects.is_empty(), "Tab 后插行不应是空操作");
+        let grid = app
+            .parsed
+            .blocks
+            .iter()
+            .find(|b| b.table.is_some())
+            .unwrap()
+            .table
+            .as_ref()
+            .unwrap();
+        assert_eq!(grid.rows.len(), 3, "{:?}", app.document.text());
+    }
+
+    #[test]
+    fn table_ops_on_selftest_fixture() {
+        let src = std::fs::read_to_string("../mdview-desktop/tests/fixtures/selftest.md").unwrap();
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, &src);
+        // 模拟自检前序：编辑 → 全选剪切 → 撤销，之后再做表格操作
+        app.update(
+            Message::InsertText {
+                text: "丙i".into(),
+            },
+            &files,
+        );
+        app.update(Message::SelectAll, &files);
+        app.update(Message::Cut, &files);
+        app.update(Message::Undo, &files);
+        let block_id = app
+            .parsed
+            .blocks
+            .iter()
+            .find(|b| b.table.is_some())
+            .unwrap()
+            .id;
+        let byte = app.parsed.blocks[block_id.0]
+            .table
+            .as_ref()
+            .unwrap()
+            .caret_byte(&app.document.text(), 0, 0)
+            .unwrap();
+        click(&mut app, &files, byte);
+        app.update(Message::TableMoveCell { delta: 1 }, &files);
+        app.update(Message::TableInsertRow { after: true }, &files);
+        let grid = app
+            .parsed
+            .blocks
+            .iter()
+            .find(|b| b.table.is_some())
+            .unwrap()
+            .table
+            .as_ref()
+            .unwrap();
+        assert_eq!(grid.rows.len(), 3, "{:?}", app.document.text());
+    }
+
+    #[test]
+    fn table_insert_row_with_crlf() {
+        let src = "# 标题\r\n\r\n| 甲 | 乙 |\r\n| --- | --- |\r\n| 丙 | 丁 |\r\n";
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        let block_id = app
+            .parsed
+            .blocks
+            .iter()
+            .find(|b| b.table.is_some())
+            .unwrap()
+            .id;
+        let byte = app.parsed.blocks[block_id.0]
+            .table
+            .as_ref()
+            .unwrap()
+            .caret_byte(&app.document.text(), 0, 0)
+            .unwrap();
+        click(&mut app, &files, byte);
+        app.update(Message::TableInsertRow { after: true }, &files);
+        let new_src = app.document.text();
+        assert!(new_src.contains("|  |  |"), "{:?}", new_src);
+    }
+
+    #[test]
+    fn table_delete_row_removes_a_body_row() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        click(&mut app, &files, 60);
+        app.update(Message::TableDeleteRow, &files);
+        let src = app.document.text();
+        assert!(!src.contains("| d | e | f |"));
+        assert!(src.contains("| a | **b** | c |"));
+        assert_eq!(src.lines().count(), 3);
+    }
+
+    #[test]
+    fn table_delete_row_keeps_header_and_delimiter() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        click(&mut app, &files, 3);
+        let before = app.document.text().to_owned();
+        assert!(app.update(Message::TableDeleteRow, &files).is_empty());
+        assert_eq!(app.document.text().to_owned(), before);
+    }
+
+    #[test]
+    fn table_insert_column_updates_every_row() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        click(&mut app, &files, 3);
+        app.update(Message::TableInsertColumn { after: true }, &files);
+        let src = app.document.text();
+        let parsed = MarkdownParser::gfm().parse(&src);
+        let grid = parsed.blocks[0].table.as_ref().unwrap();
+        assert!(grid.rows.iter().all(|r| r.cells.len() == 4));
+        // 分隔行也要多一格，否则 pulldown 不认这张表
+        assert!(src.lines().nth(1).unwrap().matches('|').count() >= 5, "{src}");
+    }
+
+    #[test]
+    fn table_delete_column_updates_every_row() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        click(&mut app, &files, 3);
+        app.update(Message::TableDeleteColumn, &files);
+        let src = app.document.text();
+        let parsed = MarkdownParser::gfm().parse(&src);
+        let grid = parsed.blocks[0].table.as_ref().unwrap();
+        assert!(grid.rows.iter().all(|r| r.cells.len() == 2), "{src}");
+        assert!(!src.contains("左"));
+    }
+
+    #[test]
+    fn table_ops_outside_table_are_noop() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "普通段落\n");
+        let before = app.document.text().to_owned();
+        for msg in [
+            Message::TableMoveCell { delta: 1 },
+            Message::TableInsertRow { after: true },
+            Message::TableDeleteRow,
+            Message::TableInsertColumn { after: true },
+            Message::TableDeleteColumn,
+        ] {
+            assert!(app.update(msg, &files).is_empty());
+        }
+        assert_eq!(app.document.text().to_owned(), before);
     }
 
     #[test]
