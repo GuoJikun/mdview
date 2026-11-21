@@ -460,10 +460,9 @@ mod tests {
         let wire: Wire = serde_json::from_str(r#"{"kind":"cut"}"#).unwrap();
         assert!(matches!(wire, Wire::Cut));
         // 源码视图整篇替换：camelCase 的 kind，带原始 Markdown 文本
-        let wire: Wire = serde_json::from_str(
-            "{\"kind\":\"replaceSource\",\"text\":\"# 标题\\n\\n正文\"}",
-        )
-        .unwrap();
+        let wire: Wire =
+            serde_json::from_str("{\"kind\":\"replaceSource\",\"text\":\"# 标题\\n\\n正文\"}")
+                .unwrap();
         assert!(matches!(wire, Wire::ReplaceSource { ref text } if text == "# 标题\n\n正文"));
 
         // 表格操作：前端用 camelCase 的 kind，内核收到的是同一组语义
@@ -482,7 +481,10 @@ mod tests {
     fn snapshot_carries_raw_markdown_source() {
         let src = "# 标题\n\n**粗体** 与 `代码`";
         let snap = session(src).snapshot();
-        assert_eq!(snap.source, src, "快照必须带原始 Markdown，不是渲染后的 HTML");
+        assert_eq!(
+            snap.source, src,
+            "快照必须带原始 Markdown，不是渲染后的 HTML"
+        );
         assert!(!snap.source.contains("<h1"), "下发的不能是 to_html 产物");
     }
 
@@ -510,8 +512,14 @@ mod tests {
         });
         let after = session.snapshot().blocks;
         assert_eq!(before.len(), after.len());
-        assert_eq!(before[0].html, after[0].html, "同一块在不同模式下 HTML 应一致");
-        assert!(reply.source.is_some(), "切到源码视图的回包要带 source 供前端同步");
+        assert_eq!(
+            before[0].html, after[0].html,
+            "同一块在不同模式下 HTML 应一致"
+        );
+        assert!(
+            reply.source.is_some(),
+            "切到源码视图的回包要带 source 供前端同步"
+        );
     }
 
     #[test]

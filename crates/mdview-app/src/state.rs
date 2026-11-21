@@ -811,11 +811,15 @@ impl AppState {
     /// 三种情况：成对标记（`**`、`` ` ``、`[]()`）、独占的折叠区间（标题/列表前缀）、
     /// 原子控件（图片、分隔线）。删掉其中任意一个字节都会把语法写坏。
     fn marker_edit_at(&self, byte: usize) -> Option<MarkerEdit> {
-        let block = self
-            .parsed
-            .blocks
-            .iter()
-            .find(|b| b.byte.start <= byte && byte < b.byte.end)?;
+        let block = self.parsed.blocks.iter().find(|b| {
+            (b.byte.start <= byte && byte < b.byte.end)
+                    // 原子控件的 span 可能越过块尾：split_blocks 用 trim_eol 剔掉
+                    // 块尾换行，pulldown 的 span 却保留它（分隔线 `---\n` 的 span
+                    // 是 5..9、块却是 5..8）。光标停在控件右端停靠点、退格取到的
+                    // prev 正是这个换行；只按 block.byte 找块会漏掉它，退化成
+                    // 删换行、把分隔线并进后一段。按 span 一起判定即可命中整块。
+                    || b.spans.iter().any(|s| s.byte.start <= byte && byte < s.byte.end)
+        })?;
         if let Some(pair) = block.marker_pair_at(byte) {
             return Some(MarkerEdit::Pair {
                 open: pair.open.clone(),
@@ -1226,6 +1230,33 @@ mod tests {
     fn open(files: &mut InMemoryFileStore, src: &str) -> AppState {
         files.insert("t.md", src);
         AppState::open(src, Some(PathBuf::from("t.md")), files)
+    }
+
+    /// 光标停在分隔线右端停靠点（pt 的 end stop）时退格，必须整块删掉 `---`，
+    /// 而不是删掉它后面的换行、把分隔线和后一段并成一个段落（那样视觉上分隔线
+    /// 没消失、只是"挪下去了")。根因是 rule 的 span 含块尾换行（5..9）、块范围
+    /// 却不含（5..8），marker_edit_at 只按 block.byte 找块就漏掉了原子控件。
+    #[test]
+    fn backspace_at_rule_end_stop_removes_whole_rule() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\n\n---\n\n乙");
+        click(&mut app, &files, 6); // 点在 --- 中间，吸附到 rule 的 start stop
+        app.update(
+            Message::MoveCaret {
+                delta: 1,
+                extend: false,
+            },
+            &files,
+        );
+        assert_eq!(caret_byte(&app), 9, "右移一步应到 rule 的 end stop");
+        app.update(Message::Backspace, &files);
+        assert!(!app.document.text().contains("---"), "分隔线应整块消失");
+        // 不能把 --- 当作行内原子并进后一段：解析结果里不应再有 rule 块
+        assert!(
+            app.parsed.blocks.iter().all(|b| b.kind != BlockKind::Rule),
+            "分隔线不应被并进段落"
+        );
+        assert_eq!(app.parsed.blocks.len(), 2, "应回到前后两个段落");
     }
 
     fn caret_byte(app: &AppState) -> usize {
