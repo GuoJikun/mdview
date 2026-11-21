@@ -1,18 +1,30 @@
 // 编辑内核：把「停靠点」映射成像素，把用户操作翻译成消息。
 // 文本真值与解析结果都在 Rust 侧，这里不留任何文档状态。
 //
-// @ts-nocheck —— 本文件由 app.js 原样改名而来（PLAN-VUE 里一直写作 editor.ts，
-// 这次把代码与文档对齐）。它此前不在 tsconfig 的 include 里，也就从未被类型
-// 检查过；改名后为了让「行为零变化」这一条先落地，先显式豁免，避免用一次性
-// 的大规模类型改写混进这次纯结构重构。
-// 待办：补齐 IPC 契约类型（Reply / Patch / Caret / 停靠点）后再摘掉这一行。
-// 当前守门靠 `--self-test` 的 61 项不变量 + `editor/*.test.js` 六套用例。
+// 类型分两层：IPC 契约在 `ipc.ts`（逐一对应 `src-tauri/src/session.rs`），
+// 本文件只写「DOM 与几何」的类型。七个纯逻辑模块仍是带 JSDoc 的 .js，
+// 由 TS 从注释里推断签名——它们要能被 `node --test` 直接跑，不引入编译期语法。
+// 守门：`vue-tsc --noEmit` 管类型，`--self-test` 的 61 项不变量管真实 DOM 行为。
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import type { ThemeMode } from '../bridge';
 import { createLineMotion, scrollDelta } from './caretline.js';
 import { copyText } from './clipboard.js';
 import { clampToBox, createDragAutoScroll, edgeSpeed } from './dragscroll.js';
 import { createIme } from './ime.js';
+import type {
+  BlockDto,
+  Box,
+  CaretDto,
+  CaretPos,
+  Check,
+  OutlineDto,
+  PatchDto,
+  Point,
+  Reply,
+  Snapshot,
+  Wire,
+} from './ipc';
 import {
   activeIndex as outlineActiveIndex,
   scrollToAnchor as outlineScrollToAnchor,
@@ -20,32 +32,42 @@ import {
 import { shouldClearSelection } from './selection.js';
 import * as mdviewTheme from './theme.js';
 
-const docEl = document.getElementById('doc');
-const caretEl = document.getElementById('caret');
-const preeditEl = document.getElementById('preedit');
-const imeEl = document.getElementById('ime');
-const barEl = document.getElementById('bar');
-const outlineEl = document.getElementById('outline');
+// 这几个节点在 index.html 里是写死的骨架，缺任何一个后续都会立刻炸。
+// 断言只影响类型，不改运行时行为（真拿不到时，仍是首次调用处的 TypeError）。
+const docEl = document.getElementById('doc') as HTMLElement;
+const caretEl = document.getElementById('caret') as HTMLElement;
+const preeditEl = document.getElementById('preedit') as HTMLElement;
+const imeEl = document.getElementById('ime') as HTMLTextAreaElement;
+const barEl = document.getElementById('bar') as HTMLElement;
+const outlineEl = document.getElementById('outline') as HTMLElement;
 
-let byBefore = new Map();   // 停靠点 → 从它开始的元素
-let byAfter = new Map();    // 停靠点 → 在它结束的元素
-let marks = [];             // 全部带 data-b 的元素
-let maxStop = -1;           // 最大停靠点序号，供上下移动取上界
-let caret = null;           // 最近一次内核回报的光标
-let pendingStop = null;     // 已发出、尚未回包的垂直移动落点
-let meta = { revision: 0, dirty: false, path: null, stops: 0 };
+/** 与整篇文档有关的标量。前端只读，写入点只有 applySnapshot / applyReply。 */
+interface Meta {
+  revision: number;
+  dirty: boolean;
+  path: string | null;
+  stops: number;
+}
+
+let byBefore: Map<number, HTMLElement> = new Map(); // 停靠点 → 从它开始的元素
+let byAfter: Map<number, HTMLElement> = new Map(); // 停靠点 → 在它结束的元素
+let marks: HTMLElement[] = [];                      // 全部带 data-b 的元素
+let maxStop = -1;                                   // 最大停靠点序号，供上下移动取上界
+let caret: CaretDto | null = null;                  // 最近一次内核回报的光标
+let pendingStop: number | null = null;              // 已发出、尚未回包的垂直移动落点
+let meta: Meta = { revision: 0, dirty: false, path: null, stops: 0 };
 // 当前视图模式：内核快照不带这个字段，前端记住菜单点选的结果供自绘菜单画单选圆点。
 // 与内核默认值（wysiwyg）一致；macOS 原生菜单切模式也走 runAction，会同步更新。
 window.__mdviewMode = 'wysiwyg';
 let dragging = false;
-let dragPoint = null;       // 拖动期间指针的视口坐标（自动滚动要按它反复求落点）
-let dragStop = null;        // 拖动中已发出的落点，避免同一落点每帧都过一趟 IPC
-let imeAnchorEl = null;     // preedit 复制字号用的参照元素（光标所在的字）
-let revealedStop = null;    // 上一次把光标滚进视口时的停靠点
-let outline = [];           // 大纲项 [{ level, title, block }]
-let outlineAnchors = [];    // 与 outline 同序的锚点 [{ top }]，文档坐标系
-let activeOutlineIdx = -1;  // 当前高亮的大纲项
-let lastTitleKey = null;    // 标题栏去重：path + 脏标记
+let dragPoint: Point | null = null;  // 拖动期间指针的视口坐标（自动滚动要按它反复求落点）
+let dragStop: number | null = null;  // 拖动中已发出的落点，避免同一落点每帧都过一趟 IPC
+let imeAnchorEl: HTMLElement | null = null; // preedit 复制字号用的参照元素（光标所在的字）
+let revealedStop: number | null = null;     // 上一次把光标滚进视口时的停靠点
+let outline: OutlineDto[] = [];             // 大纲项 [{ level, title, block }]
+let outlineAnchors: { top: number }[] = []; // 与 outline 同序的锚点，文档坐标系
+let activeOutlineIdx = -1;                  // 当前高亮的大纲项
+let lastTitleKey: string | null = null;     // 标题栏去重：path + 脏标记
 
 /** 光标进出视口时上下各留的余量，避免贴着边缘打字。 */
 const REVEAL_MARGIN = 32;
@@ -55,7 +77,7 @@ const DRAG_MAX_SPEED = 24;
 
 // ---- 渲染 ------------------------------------------------------------
 
-function fragments(html) {
+function fragments(html: string): Element[] {
   const tpl = document.createElement('template');
   tpl.innerHTML = html;
   return Array.from(tpl.content.children);
@@ -67,7 +89,7 @@ function reindex() {
   byAfter = new Map();
   marks = [];
   maxStop = -1;
-  for (const el of docEl.querySelectorAll('[data-b]')) {
+  for (const el of docEl.querySelectorAll<HTMLElement>('[data-b]')) {
     const before = Number(el.dataset.b);
     if (!byBefore.has(before)) byBefore.set(before, el);
     const after = el.hasAttribute('data-a') ? Number(el.dataset.a) : before;
@@ -78,7 +100,7 @@ function reindex() {
   }
 }
 
-function renderAll(blocks) {
+function renderAll(blocks: BlockDto[]) {
   docEl.replaceChildren(...fragments(blocks.map((b) => b.html).join('')));
   reindex();
   hydrateImages();
@@ -88,7 +110,7 @@ function renderAll(blocks) {
  * 增量重绘。前后缀比对保证 [0,start) 与尾部原样不动，
  * 只有 [start,end) 是新的块，需要换掉的旧块数由 old_len - new_len 推出。
  */
-function applyPatch(patch) {
+function applyPatch(patch: PatchDto) {
   const children = Array.from(docEl.children);
   const incoming = patch.end - patch.start;
   const outgoing = patch.old_len - patch.new_len + incoming;
@@ -113,9 +135,9 @@ function applyPatch(patch) {
  * 失败就退回「图」占位符，不打断编辑与光标定位。
  */
 function hydrateImages() {
-  docEl.querySelectorAll('.atom.img[data-asset]').forEach((holder) => {
+  docEl.querySelectorAll<HTMLElement>('.atom.img[data-asset]').forEach((holder) => {
     if (holder.dataset.imgState) return;
-    const img = holder.querySelector('img');
+    const img = holder.querySelector<HTMLImageElement>('img');
     if (!img) return;
 
     const url = holder.dataset.asset || '';
@@ -139,7 +161,7 @@ function hydrateImages() {
       else fail();
       return;
     }
-    invoke('load_image', { url })
+    invoke<string | null>('load_image', { url })
       .then((dataUrl) => {
         if (!holder.isConnected) return;
         if (!dataUrl) fail();
@@ -161,7 +183,7 @@ const OUTLINE_LINE = 80;
  * 同序。判定当前节时用「最后一个越过基准线的锚点」，按真实位置而非滚动
  * 百分比（PLAN 硬约束 10）——标题疏密不均时才对得上。
  */
-function rebuildOutline(items) {
+function rebuildOutline(items: OutlineDto[]) {
   outline = items || [];
   if (!outline.length) {
     outlineEl.innerHTML = '<div class="oc-title">大纲</div><div class="oc-empty">（无标题）</div>';
@@ -204,7 +226,7 @@ function updateActiveOutline() {
   const idx = outlineActiveIndex(outlineAnchors, line);
   if (idx === activeOutlineIdx) return;
   activeOutlineIdx = idx;
-  const links = outlineEl.querySelectorAll('a[data-idx]');
+  const links = outlineEl.querySelectorAll<HTMLElement>('a[data-idx]');
   links.forEach((a) => a.classList.toggle('active', Number(a.dataset.idx) === idx));
   // 让高亮项在侧栏里保持可见（侧栏自己滚动）
   const active = links[idx];
@@ -218,7 +240,7 @@ function updateActiveOutline() {
 }
 
 /** 点击大纲项：按锚点实际位置把该标题滚到阅读基准线处。 */
-function jumpToOutline(idx) {
+function jumpToOutline(idx: number) {
   const anchor = outlineAnchors[idx];
   if (!anchor || !isFinite(anchor.top)) return;
   const target = outlineScrollToAnchor(anchor.top, OUTLINE_LINE);
@@ -234,8 +256,8 @@ function jumpToOutline(idx) {
  * `mk` 用于上下移动时的并列判决：折叠标记零宽，它的右端与相邻文字共享同一列，
  * 落到标记里会让下一次退格先碰标记。`self-test` 里对这一点有断言。
  */
-function rectOf(stop) {
-  const probes = [
+function rectOf(stop: number): CaretPos | null {
+  const probes: [HTMLElement | undefined, 'right' | 'left'][] = [
     [byAfter.get(stop), 'right'],
     [byBefore.get(stop), 'left'],
   ];
@@ -269,7 +291,7 @@ const lines = createLineMotion({
  * 元素可能是一个 600px 高的代码块，也可能是零宽的折叠标记；
  * 我们要的是**光标那一行**的位置。`margin` 同时是上下留白。
  */
-function revealCaret(pos) {
+function revealCaret(pos: CaretPos) {
   const delta = scrollDelta(
     { top: pos.top, height: Math.max(pos.height, 18) },
     window.innerHeight,
@@ -288,7 +310,7 @@ function revealCaret(pos) {
  *
  * `force` 用于视口本身变了（窗口缩放）：那时光标没动，但仍要重新露出来。
  */
-function applyCaret(next, reveal = true, force = false) {
+function applyCaret(next: CaretDto | null, reveal = true, force = false) {
   caret = next;
   // 只有回包落点与预期一致才作废：连按时可能还在路上（见 moveVertical）
   if (pendingStop !== null && next && next.stop === pendingStop) pendingStop = null;
@@ -322,7 +344,7 @@ function applyCaret(next, reveal = true, force = false) {
   renderStatus();
 }
 
-function paintSelection(range) {
+function paintSelection(range: [number, number] | null) {
   for (const el of marks) el.classList.remove('sel');
   if (!range) return;
   const [lo, hi] = range;
@@ -348,7 +370,7 @@ let clearingSelection = false;
 document.addEventListener('selectionchange', () => {
   if (clearingSelection) return;
   const sel = document.getSelection();
-  if (!shouldClearSelection(sel, imeEl)) return;
+  if (!sel || !shouldClearSelection(sel, imeEl)) return;
   clearingSelection = true;
   sel.removeAllRanges();
   clearingSelection = false;
@@ -387,8 +409,8 @@ function pushShellState() {
     column: caret && caret.visual !== null ? caret.visual : null,
     revision: meta.revision,
     inTable: inTable(),
-    mode: window.__mdviewMode,
-    themeMode: mdviewTheme.mode(),
+    mode: window.__mdviewMode ?? 'wysiwyg',
+    themeMode: mdviewTheme.mode() as ThemeMode,
     theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
     outline,
     activeOutlineIdx,
@@ -397,18 +419,18 @@ function pushShellState() {
 window.__mdviewPushShellState = pushShellState;
 
 /** toast 的 DOM 与计时都归 Vue（Toast.vue / bridge.notify），这里只投递文案。 */
-function toast(text) {
+function toast(text: string) {
   if (window.__mdviewBridge) window.__mdviewBridge.notify(text);
 }
 
 /** 菜单动作统一入口：Windows/Linux 的自绘菜单、macOS 的原生菜单栏共用。 */
-function runAction(action) {
+function runAction(action: string) {
   switch (action) {
     case 'open-file':
       // 先等在途 dispatch 回包，否则旧 revision 的 reply 会盖掉刚打开的文档。
       // 对话框由 Rust 侧弹；用户取消返回 null，什么都不动。
       queue = queue.then(async () => {
-        const snap = await invoke('open_file');
+        const snap = await invoke<Snapshot | null>('open_file');
         if (!snap) return;
         applySnapshot(snap);
         window.scrollTo(0, 0);
@@ -469,10 +491,10 @@ window.__mdviewRunAction = runAction;
 // ---- IPC -------------------------------------------------------------
 
 // 所有消息串行发出：内核虽然有锁，但 DOM 的 patch 必须按顺序应用
-let queue = Promise.resolve();
+let queue: Promise<void> = Promise.resolve();
 
 /** 只入队，不动状态。上下移动专用，否则期望列每步都被清掉。 */
-function enqueue(message) {
+function enqueue(message: Wire) {
   queue = queue.then(() => dispatchOne(message)).catch((err) => {
     console.error(err);
     toast('内核报错：' + err);
@@ -484,7 +506,7 @@ function enqueue(message) {
  * 普通消息。任何非上下移动的操作都要清掉「期望列」——
  * 否则按过上下键之后再点击、输入，列还会被上一次的方向键带跑。
  */
-function send(message) {
+function send(message: Wire) {
   lines.reset();
   pendingStop = null;
   return enqueue(message);
@@ -496,7 +518,7 @@ function send(message) {
  * 按住不放时按键比 IPC 回包快，`caret` 会落后一步，于是每一下都从同一个位置
  * 起算、原地不动。这里用 `pendingStop` 记住「还没回包但已发出」的落点。
  */
-function moveVertical(dir, extend) {
+function moveVertical(dir: number, extend: boolean) {
   if (!caret) return;
   const from = pendingStop === null ? caret.stop : pendingStop;
   const target = lines.step(from, dir);
@@ -506,12 +528,12 @@ function moveVertical(dir, extend) {
   enqueue({ kind: 'setCaret', stop: target, extend });
 }
 
-async function dispatchOne(message) {
-  const reply = await invoke('dispatch', { message });
+async function dispatchOne(message: Wire) {
+  const reply = await invoke<Reply>('dispatch', { message });
   applyReply(reply);
 }
 
-function applyReply(reply) {
+function applyReply(reply: Reply) {
   if (reply.full) {
     renderAll(reply.full);
   } else if (reply.patch) {
@@ -520,7 +542,7 @@ function applyReply(reply) {
   if (reply.outline) rebuildOutline(reply.outline);
   else refreshOutlineAnchors();
   if (reply.caret) applyCaret(reply.caret);
-  paintSelection(reply.selection);
+  paintSelection(reply.selection ?? null);
   meta.revision = reply.revision;
   meta.dirty = reply.dirty;
   if (typeof reply.clipboard === 'string') writeClipboard(reply.clipboard);
@@ -536,9 +558,9 @@ function applyReply(reply) {
  * 写入是异步的（还要退回到 execCommand），所以**不 await**：剪贴板失败不该
  * 拖住编辑循环，最多弹一条提示。退回路径会抢走输入框焦点，写完要还回去。
  */
-let lastClipboard = null;   // 最近一次交出去的文本，自检用它核对整条链路
+let lastClipboard: string | null = null;   // 最近一次交出去的文本，自检用它核对整条链路
 
-function writeClipboard(text) {
+function writeClipboard(text: string) {
   lastClipboard = text;
   copyText(text)
     .then((ok) => {
@@ -551,7 +573,7 @@ function writeClipboard(text) {
 }
 
 /** 用一份内核快照全量重绘。boot 与「打开文件」共用，避免两处渲染逻辑漂移。 */
-function applySnapshot(snap) {
+function applySnapshot(snap: Snapshot) {
   meta = { revision: snap.revision, dirty: snap.dirty, path: snap.path, stops: snap.stops };
   renderAll(snap.blocks);
   rebuildOutline(snap.outline || []);
@@ -561,10 +583,23 @@ function applySnapshot(snap) {
   if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
 }
 
+/**
+ * 事件负载里取动作名。Rust 侧既可能 emit 纯字符串，也可能 emit `{ action }`，
+ * 两种都在用（原生菜单 / 单例插件），所以统一在这里收口。
+ */
+function actionOf(payload: unknown): string | null {
+  if (typeof payload === 'string') return payload;
+  if (payload && typeof payload === 'object' && 'action' in payload) {
+    const action = (payload as { action?: unknown }).action;
+    return typeof action === 'string' ? action : null;
+  }
+  return null;
+}
+
 async function boot() {
   // 主题必须在渲染前定下来，避免浅色闪一下再切深色
   mdviewTheme.init();
-  applySnapshot(await invoke('snapshot'));
+  applySnapshot(await invoke<Snapshot>('snapshot'));
   // 焦点必须落在透明输入框上：输入法只认真正的可编辑元素
   imeEl.focus({ preventScroll: true });
   // 给内核一个「页面已接管」的信号，日志里能对上游标是否真的画出来了
@@ -576,17 +611,17 @@ async function boot() {
       toast('文件已被外部修改，请重新打开以载入最新内容');
     }).catch(() => {});
     // macOS 原生菜单栏点选后，Rust 侧把动作名 emit 过来，和自绘菜单走同一条路
-    listen('menu-action', (event) => {
-      const action = typeof event.payload === 'string' ? event.payload : event.payload?.action;
+    listen<unknown>('menu-action', (event) => {
+      const action = actionOf(event.payload);
       if (action) runAction(action);
     }).catch(() => {});
     // 二次启动的实例被单例插件拦下后，把命令行里的文档路径转到这里。
     // 复用 open_file 的注入路径分支，不弹对话框；走 queue 避免覆盖在途编辑。
-    listen('single-instance-open', (event) => {
+    listen<unknown>('single-instance-open', (event) => {
       const path = typeof event.payload === 'string' ? event.payload : null;
       if (!path) return;
       queue = queue.then(async () => {
-        const snap = await invoke('open_file', { path });
+        const snap = await invoke<Snapshot | null>('open_file', { path });
         if (!snap) return;
         applySnapshot(snap);
         window.scrollTo(0, 0);
@@ -611,7 +646,7 @@ function placeIme() {
 }
 
 /** preedit 的字体必须跟光标所在的块一致，否则标题里组合会明显偏小。 */
-function setPreedit(text) {
+function setPreedit(text: string) {
   if (!text) {
     preeditEl.style.display = 'none';
     preeditEl.textContent = '';
@@ -640,12 +675,13 @@ function setPreedit(text) {
   preeditEl.style.display = 'block';
 }
 
-const ime = createIme({ send: (message) => send(message), setPreedit });
+// ime.js 的 JSDoc 把消息标成 object（它不认识 IPC 契约），这里收窄回 Wire
+const ime = createIme({ send: (message) => send(message as Wire), setPreedit });
 
-function blockBounds() {
+function blockBounds(): { start: number; end: number } | null {
   if (!caret) return null;
   const el = byBefore.get(caret.stop) || byAfter.get(caret.stop);
-  const blk = el && el.closest('.blk');
+  const blk = el && el.closest<HTMLElement>('.blk');
   if (!blk) return null;
   return { start: Number(blk.dataset.bb), end: Number(blk.dataset.be) };
 }
@@ -705,7 +741,7 @@ window.addEventListener('keydown', (event) => {
       event.preventDefault();
       // 行首而不是块首：软换行段落里这两个位置不一样
       const stop = lines.edge(caret.stop, -1);
-      const target = stop !== null ? stop : (blockBounds() || {}).start;
+      const target = stop !== null ? stop : blockBounds()?.start;
       if (target !== undefined) send({ kind: 'setCaret', stop: target, extend: event.shiftKey });
       return;
     }
@@ -713,7 +749,7 @@ window.addEventListener('keydown', (event) => {
       if (!caret) return;
       event.preventDefault();
       const stop = lines.edge(caret.stop, 1);
-      const target = stop !== null ? stop : (blockBounds() || {}).end;
+      const target = stop !== null ? stop : blockBounds()?.end;
       if (target !== undefined) send({ kind: 'setCaret', stop: target, extend: event.shiftKey });
       return;
     }
@@ -729,8 +765,16 @@ window.addEventListener('keydown', (event) => {
   }
 });
 
+/**
+ * 老 WebView 的 `paste` 事件把数据挂在 window 上（标准版本挂在 event 上）。
+ * 这条兜底路径保留着，类型只在这里补一个形状。
+ */
+type WindowWithClipboard = Window & { clipboardData?: DataTransfer };
+
 window.addEventListener('paste', (event) => {
-  const text = (event.clipboardData || window.clipboardData).getData('text/plain');
+  // Windows 上 `clipboardData` 一定在；老 WebView 才有 window 兜底，故一并保留
+  const data = event.clipboardData ?? (window as WindowWithClipboard).clipboardData;
+  const text = data?.getData('text/plain') ?? '';
   if (!text) return;
   event.preventDefault();
   send({ kind: 'insertText', text });
@@ -763,10 +807,10 @@ imeEl.addEventListener('blur', () => {
 // ---- 鼠标 ------------------------------------------------------------
 
 /** 点击点 → 停靠点：命中元素左半取左边界，右半取右边界。 */
-function stopFromPoint(x, y) {
+function stopFromPoint(x: number, y: number): number | null {
   const hit = document.elementFromPoint(x, y);
   if (!hit) return null;
-  const el = hit.closest('[data-b]');
+  const el = hit.closest<HTMLElement>('[data-b]');
   // 没命中任何字符说明点在空白处（行尾右侧、行间、块内留白）。
   // 这里不能直接放弃：编辑器的惯例是「点哪儿光标就落在那一行」。
   if (!el) return stopFromBlank(x, y);
@@ -784,7 +828,7 @@ function stopFromPoint(x, y) {
  * 不能按 y 遍历所有停靠点自己找行——那在长文档里拖拽时会退化成全表扫描。
  * `caretRangeFromPoint` 是浏览器自己实现的命中测试，代价与排版一致。
  */
-function stopFromBlank(x, y) {
+function stopFromBlank(x: number, y: number): number | null {
   const seed = nearestStopFromBrowser(x, y);
   if (seed === null) return null;
   const stop = lines.nearestInLine(seed, x);
@@ -792,8 +836,8 @@ function stopFromBlank(x, y) {
 }
 
 /** 浏览器认为离这一点最近的文本位置，换算成停靠点序号。 */
-function nearestStopFromBrowser(x, y) {
-  let node = null;
+function nearestStopFromBrowser(x: number, y: number): number | null {
+  let node: Node | null = null;
   if (document.caretRangeFromPoint) {
     const range = document.caretRangeFromPoint(x, y);
     node = range ? range.startContainer : null;
@@ -802,8 +846,9 @@ function nearestStopFromBrowser(x, y) {
     node = pos ? pos.offsetNode : null;
   }
   if (!node) return null;
-  const host = node.nodeType === 1 ? node : node.parentElement;
-  const holder = host && host.closest('[data-b]');
+  // 文本节点落在字符里，元素节点就是宿主自己；两者都要能往上找到 [data-b]
+  const host = (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement) as HTMLElement | null;
+  const holder = host && host.closest<HTMLElement>('[data-b]');
   if (!holder) return null;
   // 只用来定位行，方向由 nearestInLine 按 x 重选；给右端是为了让
   // 「点在字与字之间的空隙」也落到靠右的位置，与系统 caret 的习惯一致。
@@ -818,7 +863,7 @@ function nearestStopFromBrowser(x, y) {
  * 视口最下面那几十像素归它。若把探针压到视口下沿，`elementFromPoint` 命中
  * 状态栏，落点一路返回 null：页面自己在滚、选区却一动不动（自检正是这么抓到的）。
  */
-function probeBox() {
+function probeBox(): Box {
   const doc = docEl.getBoundingClientRect();
   const bar = barEl.getBoundingClientRect();
   const top = Math.max(doc.top, 0);
@@ -924,7 +969,7 @@ window.addEventListener('resize', () => {
 
 // 大纲点击（事件委托：侧栏会被整块重建）
 outlineEl.addEventListener('click', (event) => {
-  const link = event.target.closest('a[data-idx]');
+  const link = (event.target as Element | null)?.closest<HTMLElement>('a[data-idx]');
   if (!link) return;
   event.preventDefault();
   jumpToOutline(Number(link.dataset.idx));
@@ -932,15 +977,15 @@ outlineEl.addEventListener('click', (event) => {
 
 // 状态栏按钮（事件委托：renderStatus 每次都会重建 innerHTML）
 barEl.addEventListener('click', (event) => {
-  const tableBtn = event.target.closest('[data-table]');
+  const tableBtn = (event.target as Element | null)?.closest<HTMLElement>('[data-table]');
   if (!tableBtn) return;
-  const ops = {
+  const ops: Record<string, Wire> = {
     'row+': { kind: 'tableInsertRow', after: true },
     'row-': { kind: 'tableDeleteRow' },
     'col+': { kind: 'tableInsertColumn', after: true },
     'col-': { kind: 'tableDeleteColumn' },
   };
-  const message = ops[tableBtn.dataset.table];
+  const message = ops[tableBtn.dataset.table ?? ''];
   if (message) send(message);
 });
 
@@ -954,9 +999,10 @@ barEl.addEventListener('click', (event) => {
  * 但除 IME 本身之外，这条链路上跑的就是生产代码。
  */
 window.__mdviewSelfTest = async function () {
-  const checks = [];
-  const check = (name, ok, detail) => checks.push({ name, ok: !!ok, detail: detail || '' });
-  const fire = (type, data) =>
+  const checks: Check[] = [];
+  const check = (name: string, ok: unknown, detail: unknown = '') =>
+    checks.push({ name, ok: !!ok, detail: detail ? String(detail) : '' });
+  const fire = (type: string, data?: string) =>
     imeEl.dispatchEvent(new CompositionEvent(type, { data: data || '', bubbles: true }));
   // 外壳组件已 Vue 化，点菜单后 DOM 在下一个微任务才更新。
   const nextTick = window.__mdviewNextTick || (() => Promise.resolve());
@@ -981,7 +1027,8 @@ window.__mdviewSelfTest = async function () {
     check('提交后文档出现该词', docEl.textContent.indexOf('自检词') >= 0);
     check('一次提交只走一次事务', meta.revision === rev0 + 1, meta.revision + ' vs ' + (rev0 + 1));
     check('提交后镜像隐藏', preeditEl.style.display === 'none');
-    check('提交后光标仍在', !!caret && caret.stop > 0, caret && caret.stop);
+    check('提交后光标仍在', caret !== null && caret.stop > 0,
+      caret ? caret.stop : '');
 
     send({ kind: 'undo' });
     await queue;
@@ -998,37 +1045,39 @@ window.__mdviewSelfTest = async function () {
 
     // ---- 上下移动 ----
     // 软换行只有浏览器算得出来，所以这一段的判据只能在这里跑。
-    const press = (key, shift) => window.dispatchEvent(
+    // 下面几条断言里的 `caret!` 是刻意的：boot 之后内核必报光标。真拿到 null 时，
+    // 读属性会直接抛到外层 catch（报成「自检未抛异常」），比让断言悄悄判否更醒目。
+    const press = (key: string, shift?: boolean) => window.dispatchEvent(
       new KeyboardEvent('keydown', { key, shiftKey: !!shift, bubbles: true, cancelable: true })
     );
     const caretX = () => {
-      const pos = caret && rectOf(caret.stop);
+      const pos = caret ? rectOf(caret.stop) : null;
       return pos ? Math.round(pos.x) : -1;
     };
 
     send({ kind: 'setCaret', stop: 0, extend: false });
     await queue;
-    const firstBlock = caret.block;
+    const firstBlock = caret!.block ?? -1;
     const firstX = caretX();
     press('ArrowDown');
     await queue;
-    check('↓ 从标题进到下一块', caret.block === firstBlock + 1, caret.block + ' vs ' + (firstBlock + 1));
+    check('↓ 从标题进到下一块', caret!.block === firstBlock + 1, caret!.block + ' vs ' + (firstBlock + 1));
     check('↓ 之后 x 仍对齐同一列', Math.abs(caretX() - firstX) <= 3, caretX() + ' vs ' + firstX);
 
     press('ArrowDown');
     await queue;
-    check('↓ 继续进到列表块', caret.block === firstBlock + 2, String(caret.block));
+    check('↓ 继续进到列表块', caret!.block === firstBlock + 2, String(caret!.block));
 
     press('ArrowUp');
     await queue;
     press('ArrowUp');
     await queue;
-    check('↑ 两次回到标题块', caret.block === firstBlock, String(caret.block));
+    check('↑ 两次回到标题块', caret!.block === firstBlock, String(caret!.block));
 
     press('ArrowUp');
     await queue;
-    check('首行再按 ↑ 不动', caret.block === firstBlock, String(caret.block));
-    check('首行按 ↑ 后停在停靠点 0', caret.stop === 0, String(caret.stop));
+    check('首行再按 ↑ 不动', caret!.block === firstBlock, String(caret!.block));
+    check('首行按 ↑ 后停在停靠点 0', caret!.stop === 0, String(caret!.stop));
 
     // 按键连发：两下都还没回包就发出了，落点必须依次推进而不是原地打转
     send({ kind: 'setCaret', stop: 0, extend: false });
@@ -1036,20 +1085,20 @@ window.__mdviewSelfTest = async function () {
     press('ArrowDown');
     press('ArrowDown');
     await queue;
-    check('连发 ↓ 两次跨两块', caret.block === firstBlock + 2, String(caret.block));
+    check('连发 ↓ 两次跨两块', caret!.block === firstBlock + 2, String(caret!.block));
 
     // Home / End：单行段落里就等于块首块尾（软换行的分支由 caretline.test.js 覆盖）
-    const body = docEl.children[firstBlock + 1];
+    const body = docEl.children[firstBlock + 1] as HTMLElement;
     const bodyStart = Number(body.dataset.bb);
     const bodyEnd = Number(body.dataset.be);
     send({ kind: 'setCaret', stop: bodyStart + 2, extend: false });
     await queue;
     press('Home');
     await queue;
-    check('Home 落到段落首', caret.stop === bodyStart, caret.stop + ' vs ' + bodyStart);
+    check('Home 落到段落首', caret!.stop === bodyStart, caret!.stop + ' vs ' + bodyStart);
     press('End');
     await queue;
-    check('End 落到段落尾', caret.stop === bodyEnd, caret.stop + ' vs ' + bodyEnd);
+    check('End 落到段落尾', caret!.stop === bodyEnd, caret!.stop + ' vs ' + bodyEnd);
 
     // 点行尾右侧空白：那个位置没有命中任何字符，光标必须落到这一行的末尾。
     // 只靠 elementFromPoint 会直接放弃，用户看到的是「点了没反应」。
@@ -1069,7 +1118,7 @@ window.__mdviewSelfTest = async function () {
       }));
       await queue;
       window.dispatchEvent(new MouseEvent('mouseup'));
-      check('点行尾空白落到行尾', caret.stop === tailStop, caret.stop + ' vs ' + tailStop);
+      check('点行尾空白落到行尾', caret!.stop === tailStop, caret!.stop + ' vs ' + tailStop);
     } else {
       check('点行尾空白落到行尾', false, '取不到行尾矩形');
     }
@@ -1111,7 +1160,7 @@ window.__mdviewSelfTest = async function () {
         }));
         await new Promise((r) => setTimeout(r, 260));
         const scrolledBy = window.scrollY - scrolledFrom;
-        const dragged = await invoke('snapshot');
+        const dragged = await invoke<Snapshot>('snapshot');
         // 拖动中的锚点就是按下时的那个停靠点；head 必须已经跑到它下面几十行
         const anchor = dragged.selection ? dragged.selection[0] : -1;
         check('拖到边缘会自动向下滚', scrolledBy > 0, '+' + Math.round(scrolledBy) + 'px');
@@ -1157,7 +1206,7 @@ window.__mdviewSelfTest = async function () {
     // ---- 全选 / 复制 / 剪切 ----
     // 原生选区已被清掉（见 selection.js），Ctrl+A 只能由内核算，
     // 复制出去的也必须是源码：视图里 `**`、`# ` 是折叠的，照 DOM 拼会丢格式。
-    const pressCtrl = (key) => window.dispatchEvent(
+    const pressCtrl = (key: string) => window.dispatchEvent(
       new KeyboardEvent('keydown', {
         key, ctrlKey: true, bubbles: true, cancelable: true,
       })
@@ -1167,7 +1216,7 @@ window.__mdviewSelfTest = async function () {
     await queue;
     pressCtrl('a');
     await queue;
-    const all = await invoke('snapshot');
+    const all = await invoke<Snapshot>('snapshot');
     check('Ctrl+A 选到整篇',
       !!all.selection && all.selection[0] === 0 && all.selection[1] === all.stops - 1,
       JSON.stringify(all.selection) + ' / stops=' + all.stops);
@@ -1209,9 +1258,12 @@ window.__mdviewSelfTest = async function () {
       lastClipboard = null;
       pressCtrl('x');
       await queue;
+      // 上面刚赋成 null，TS 会把类型收窄成 null，而真正写入发生在 writeClipboard 里；
+      // 读一次显式拓宽，别让类型收窄把断言变成「never」。
+      const cut = lastClipboard as string | null;
       check('Ctrl+X 带走了选中的文本',
-        typeof lastClipboard === 'string' && lastClipboard.length > 0,
-        JSON.stringify((lastClipboard || '').slice(0, 12)));
+        typeof cut === 'string' && cut.length > 0,
+        JSON.stringify((cut || '').slice(0, 12)));
       check('剪切后文档确实变短', docEl.textContent.length < beforeCut.length,
         docEl.textContent.length + ' vs ' + beforeCut.length);
       send({ kind: 'undo' });
@@ -1227,7 +1279,7 @@ window.__mdviewSelfTest = async function () {
     // 那种断言只会给假绿。判据由 `selection.test.js` 覆盖。
 
     // ---- M2：大纲侧栏 / 同步滚动 / 主题 ----
-    const fresh = await invoke('snapshot');
+    const fresh = await invoke<Snapshot>('snapshot');
     check('大纲渲染出标题项',
       (fresh.outline || []).length > 0 && outlineEl.querySelectorAll('a[data-idx]').length === fresh.outline.length,
       'outline=' + (fresh.outline || []).length + ' links=' + outlineEl.querySelectorAll('a[data-idx]').length);
@@ -1251,8 +1303,8 @@ window.__mdviewSelfTest = async function () {
     const docTrack = document.getElementById('vscroll');
     const docThumb = document.getElementById('vscroll-thumb');
     check('大纲与正文共用自绘滚动条样式',
-      !!oTrack && !!oThumb && oTrack.className === docTrack.className &&
-        oThumb.className === docThumb.className,
+      !!oTrack && !!oThumb && !!docTrack && !!docThumb &&
+        oTrack.className === docTrack.className && oThumb.className === docThumb.className,
       oTrack ? oTrack.className : '无大纲滚动条');
     check('大纲原生滚动条已让位',
       getComputedStyle(outlineEl).scrollbarWidth === 'none',
@@ -1261,19 +1313,19 @@ window.__mdviewSelfTest = async function () {
       const probe = document.createElement('div');
       probe.style.height = '5000px';
       outlineEl.appendChild(probe);
-      window.__mdviewRefreshScrollbar();
+      window.__mdviewRefreshScrollbar?.();
       check('大纲溢出时自绘滑块出现',
         oThumb.style.display !== 'none' && parseFloat(oThumb.style.height) >= 28,
         'display=' + oThumb.style.display + ' height=' + oThumb.style.height);
       probe.remove();
-      window.__mdviewRefreshScrollbar();
+      window.__mdviewRefreshScrollbar?.();
     }
     // 主题：data-theme 已被 init 定下，切换按钮能翻到另一档
     const themeBefore = document.documentElement.getAttribute('data-theme');
     check('主题属性已初始化', themeBefore === 'light' || themeBefore === 'dark',
       String(themeBefore));
     // 记下原始偏好，测完原样恢复，不把「跟随系统」改成固定值
-    let savedPref = null;
+    let savedPref: string | null = null;
     try { savedPref = localStorage.getItem('mdview-theme'); } catch (_) {}
     const themeAfter = mdviewTheme.toggle();
     check('主题切换生效',
@@ -1287,26 +1339,28 @@ window.__mdviewSelfTest = async function () {
     mdviewTheme.init(); // 按恢复后的偏好重新应用
 
     // 视图 → 主题 是三档子菜单，当前档带圆点；三个动作都要真正落地
-    const viewBtn = document.querySelector('#tb-menus [data-menu="view"]');
+    const viewBtn = document.querySelector<HTMLElement>('#tb-menus [data-menu="view"]');
     if (viewBtn) {
       viewBtn.click();
       await nextTick();
       const popup = document.getElementById('tb-menu-popup');
-      const trigger = popup && popup.querySelector('.submenu-trigger');
+      const trigger = popup ? popup.querySelector('.submenu-trigger') : null;
       check('视图菜单有主题子菜单', !!trigger &&
-        trigger.querySelector('.label').textContent === '主题',
+        trigger.querySelector('.label')?.textContent === '主题',
         trigger ? trigger.textContent : '无子菜单触发器');
-      if (trigger) {
+      if (trigger && popup) {
         trigger.dispatchEvent(new Event('pointerenter'));
         await nextTick();
-        const subBtns = Array.from(popup.querySelectorAll('.tb-submenu button[data-action]'));
+        const subBtns = Array.from(
+          popup.querySelectorAll<HTMLElement>('.tb-submenu button[data-action]')
+        );
         const actions = subBtns.map((b) => b.dataset.action).join(',');
         check('主题子菜单是三档',
           actions === 'theme-system,theme-light,theme-dark', actions);
         const active = 'theme-' + mdviewTheme.mode();
         check('当前档位带圆点',
           subBtns.some((b) => b.dataset.action === active &&
-            b.querySelector('.gutter').textContent === '•'), active);
+            b.querySelector('.gutter')?.textContent === '•'), active);
         // 回归：鼠标移到子菜单项上不能让面板消失。普通菜单项的 pointerenter
         // 会收起子菜单，但子菜单内部的项必须豁免，否则永远点不到这些项。
         if (subBtns.length) {
@@ -1318,15 +1372,15 @@ window.__mdviewSelfTest = async function () {
       viewBtn.click(); // 收起菜单，后面的按键测试不受影响
     }
     const themePref = mdviewTheme.mode();
-    window.__mdviewRunAction('theme-light');
+    window.__mdviewRunAction?.('theme-light');
     check('主题菜单选亮色生效',
       mdviewTheme.mode() === 'light' &&
         document.documentElement.getAttribute('data-theme') === 'light', mdviewTheme.mode());
-    window.__mdviewRunAction('theme-dark');
+    window.__mdviewRunAction?.('theme-dark');
     check('主题菜单选暗色生效',
       mdviewTheme.mode() === 'dark' &&
         document.documentElement.getAttribute('data-theme') === 'dark', mdviewTheme.mode());
-    window.__mdviewRunAction('theme-system');
+    window.__mdviewRunAction?.('theme-system');
     check('主题菜单跟随系统生效',
       mdviewTheme.mode() === 'system' &&
         document.documentElement.getAttribute('data-theme') ===
@@ -1334,7 +1388,7 @@ window.__mdviewSelfTest = async function () {
     mdviewTheme.set(themePref); // 恢复原始偏好
 
     // 表格：网格渲染 + Tab 跨格 + 行增删，整条 IPC 链路都要走到
-    const table = docEl.querySelector('.md-table');
+    const table = docEl.querySelector<HTMLElement>('.md-table');
     check('表格渲染成真实网格', !!table && !!table.querySelector('[data-cell="0,0"]'));
     if (table) {
       // 边框/圆角是纯 CSS，只有真实 WebView2 的计算样式能证明样式表确实嵌进来了
@@ -1347,7 +1401,7 @@ window.__mdviewSelfTest = async function () {
         cs.borderTopLeftRadius === '4px' && cs.borderTopRightRadius === '4px' &&
           cs.borderBottomLeftRadius === '4px' && cs.borderBottomRightRadius === '4px',
         cs.borderTopLeftRadius);
-      const head = table.querySelector('[data-cell="0,0"] [data-b]');
+      const head = table.querySelector<HTMLElement>('[data-cell="0,0"] [data-b]');
       const firstStop = head ? Number(head.dataset.b) : -1;
       check('表格首格有停靠点', firstStop >= 0, String(firstStop));
       if (firstStop >= 0) {
@@ -1358,7 +1412,7 @@ window.__mdviewSelfTest = async function () {
         const beforeTab = caret ? caret.stop : -1;
         send({ kind: 'tableMoveCell', delta: 1 });
         await queue;
-        check('Tab 跨到下一格', !!caret && caret.stop !== beforeTab,
+        check('Tab 跨到下一格', caret !== null && caret.stop !== beforeTab,
           beforeTab + ' → ' + (caret ? caret.stop : 'null'));
         // 行列增删的几何正确性由 Rust 单测覆盖；这里只验证浏览器 → IPC → 内核
         // 的事务链路确实通了（revision 前进）。
@@ -1375,7 +1429,7 @@ window.__mdviewSelfTest = async function () {
 
     // 文件 → 打开文件：菜单项接线 + 按路径注入走完整 IPC → 内核 → 全量重绘链路。
     // 用临时文件，验证完打开回原样张，避免影响可能的后续断言。
-    const fileMenu = document.querySelector('#tb-menus [data-menu="file"]');
+    const fileMenu = document.querySelector<HTMLElement>('#tb-menus [data-menu="file"]');
     if (fileMenu) {
       fileMenu.click();
       await nextTick();
@@ -1390,7 +1444,7 @@ window.__mdviewSelfTest = async function () {
     try {
       // 用注入路径打开已知存在的样张自身（不弹对话框），验证 open_file 返回
       // 完整快照、前端能全量重绘、光标归零。Rust 单测另覆盖了「换成不同文件」。
-      const snap = await invoke('open_file', { path: originalPath });
+      const snap = await invoke<Snapshot | null>('open_file', { path: originalPath });
       check('open_file 返回完整快照',
         !!snap && Array.isArray(snap.blocks) && snap.blocks.length > 0 && snap.path === originalPath,
         snap ? 'blocks=' + snap.blocks.length + ' path=' + snap.path : 'null');
@@ -1399,7 +1453,7 @@ window.__mdviewSelfTest = async function () {
         check('打开文件后正文全量重绘',
           docEl.children.length === snap.blocks.length,
           docEl.children.length + ' vs ' + snap.blocks.length);
-        check('打开文件后回到文档开头', caret && caret.stop === 0,
+        check('打开文件后回到文档开头', caret !== null && caret.stop === 0,
           caret ? String(caret.stop) : 'null');
       }
     } catch (err) {

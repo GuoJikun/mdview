@@ -77,7 +77,7 @@ crates/
 ```
 
 前端工程根 = 仓库根：`src/`（Vite + Vue 3 + TypeScript）、`index.html`、`dist/`（构建产物，不入库）。
-`src/editor/editor.ts` 是编辑内核投影层；七个纯逻辑模块（`ime/caretline/selection/dragscroll/clipboard/outline/theme`）保持 `.js` 原样，与它同放 `src/editor/`；
+`src/editor/editor.ts` 是编辑内核投影层（全量 TS，无 `@ts-nocheck`），契约类型在 `src/editor/ipc.ts`；七个纯逻辑模块（`ime/caretline/selection/dragscroll/clipboard/outline/theme`）保持 `.js` 原样（`node --test` 要能直接跑），与它同放 `src/editor/`；
 外壳（标题栏 / 菜单 / 状态栏 / toast）由 `src/components/*.vue` 渲染，经 `src/bridge.ts` 与内核单向通信。
 大纲与正文区是 Vue 覆盖层上的「洞」，不进任何组件模板。
 
@@ -365,6 +365,7 @@ node src/dragscroll.test.js # 边缘自动滚动几何单测（cargo test 已含
 | 日志滚动 | `crates/mdview-support/src/logging.rs` |
 | 命令行入口（含 `demo edit` 回放） | `crates/mdview-cli/src/main.rs` |
 | **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包、大纲下发、**表格操作**） | `src-tauri/src/session.rs` |
+| **IPC 契约的前端类型**（`Wire` / `Reply` / `Snapshot` / `CaretDto`，字段名与 serde 输出逐一对齐） | `src/editor/ipc.ts` |
 | **表格交互**（Tab 跨格、状态栏行列工具条、自检 6 项） | `src/editor/editor.ts`、`app.css` |
 | **大纲侧栏**（锚点判定 + 跳转，不碰 DOM，Node 可测） | `src/editor/outline.js`、`outline.test.js`、`editor.ts`（侧栏渲染/联动） |
 | **主题系统**（跟随系统 + 手动切换 + localStorage，不碰 DOM，Node 可测） | `src/editor/theme.js`、`theme.test.js`、`app.css`（CSS 变量） |
