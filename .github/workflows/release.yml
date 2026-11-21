@@ -1,0 +1,178 @@
+name: Release
+
+# 只有推送 v* 标签才构建并发布。版本号只在 Cargo.toml 的 [workspace.package] 写一处：
+# 标签、package.json、tauri.conf.json 都必须与它对齐（tauri.conf.json 不写 version，
+# 让 Tauri 从 Cargo 里取），否则打出来的安装包和 latest.json 会对不上。
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate tag and version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    outputs:
+      release_body: ${{ steps.changelog.outputs.body }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate tag matches versions
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v[0-9] ]]; then
+            echo "::error::Release tag must start with 'v' followed by a number (got '$TAG')."
+            exit 1
+          fi
+
+          WS_VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          PKG_VERSION=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
+
+          if [[ "$TAG" != "v$WS_VERSION" ]]; then
+            echo "::error::Tag '$TAG' does not match workspace version '$WS_VERSION' (expected 'v$WS_VERSION')."
+            exit 1
+          fi
+
+          if [[ "$PKG_VERSION" != "$WS_VERSION" ]]; then
+            echo "::error::package.json version '$PKG_VERSION' does not match workspace version '$WS_VERSION'."
+            exit 1
+          fi
+
+          # tauri.conf.json 不写 version 是刻意的：写了就有第二个版本来源，容易忘改。
+          if python3 -c "import json,sys; sys.exit(0 if 'version' in json.load(open('src-tauri/tauri.conf.json')) else 1)"; then
+            echo "::error::src-tauri/tauri.conf.json 不应写 version，版本统一由 Cargo.toml 的 workspace version 决定。"
+            exit 1
+          fi
+
+          echo "Releasing mdview v$WS_VERSION"
+
+      # Release 正文取自 CHANGELOG.md 的对应版本段，保持单一来源。
+      - name: Extract release notes from CHANGELOG
+        id: changelog
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+
+          SECTION=$(awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 { inside = 1; next }
+            inside && index($0, "## [") == 1 { inside = 0 }
+            inside { print }
+          ' CHANGELOG.md)
+
+          if [[ -z "${SECTION//[[:space:]]/}" ]]; then
+            echo "::error::CHANGELOG.md 缺少 '## [$VERSION]' 段落，补齐后再打 tag。"
+            exit 1
+          fi
+
+          {
+            echo 'body<<RELEASE_BODY_EOF_7c1f'
+            echo "$SECTION"
+            echo ''
+            echo '### 下载'
+            echo ''
+            echo '- Windows：`*-setup.exe`（普通电脑选 x64，ARM 设备选 arm64）'
+            echo '- macOS：Apple 芯片选 `aarch64.dmg`，Intel 选 `x64.dmg`'
+            echo '- Linux：`.deb`、`.rpm` 或 `.AppImage`'
+            echo ''
+            echo '安装后可通过「帮助 → 检查更新…」升级。'
+            echo 'RELEASE_BODY_EOF_7c1f'
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Extracted $(printf '%s\n' "$SECTION" | wc -l) lines of release notes."
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: validate
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+          # windows-11-arm 的本机目标就是 aarch64，rustup 无需额外加 target。
+          - platform: windows-11-arm
+            args: '--target aarch64-pc-windows-msvc'
+          # macOS 的更新产物是 *.app.tar.gz，只在构建 app 包时才生成（dmg 不算）；
+          # 少了它 latest.json 里就没有 darwin-* 条目，应用内更新失效。
+          - platform: macos-latest
+            args: '--target aarch64-apple-darwin --bundles app,dmg'
+          - platform: macos-latest
+            args: '--target x86_64-apple-darwin --bundles app,dmg'
+          - platform: ubuntu-22.04
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 与 package.json 的 packageManager 和 mise.toml 对齐：锁死的 12.18.0 写过
+      # lockfile，用 12 这类浮动范围会让新补丁版重写格式、--frozen-lockfile 直接失败。
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.18.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and upload bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'mdview ${{ github.ref_name }}'
+          releaseBody: ${{ needs.validate.outputs.release_body }}
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }}
