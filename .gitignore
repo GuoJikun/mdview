@@ -6,5 +6,7 @@
 /src-tauri/gen
 /dist
 node_modules
+# 更新签名私钥（生成一次后离线保管；公钥在 tauri.conf.json 里）
+/.tauri
 # vitest 浏览器模式失败时自动截的图
 .vitest

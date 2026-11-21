@@ -1,0 +1,89 @@
+/* 弹窗外壳。
+   「关于」与「检查更新」共用这一份骨架：遮罩、卡片、标题、正文、按钮排。
+   内容样式留在各自组件的 scoped 里，这里只管不能各写一套的东西。 */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  /* 高于标题栏(30)、菜单(31)、自绘滚动条(25)，低于不了，弹窗必须在最上层。 */
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, .32);
+  /* 覆盖层整层 pointer-events:none，弹窗必须自己打开才能点。 */
+  pointer-events: auto;
+  font-family: var(--font-ui);
+}
+
+.dialog {
+  width: 460px;
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--control);
+  color: var(--text);
+  border-radius: 10px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .28), 0 0 0 1px var(--tile-border);
+  outline: none;
+}
+
+.dialog-header {
+  padding: 16px 16px 0;
+}
+
+.dialog-header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* 内容过长时在卡片内部滚动，不把弹窗撑到视口之外。 */
+.dialog-body {
+  padding: 12px 16px 16px;
+  overflow-y: auto;
+  font-size: 13px;
+  color: var(--text2);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 16px 16px;
+}
+
+.btn {
+  height: 28px;
+  padding: 0 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--control);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: default;
+}
+
+.btn:hover {
+  background: var(--hover);
+}
+
+.btn.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn.primary:hover {
+  background: var(--accent);
+  filter: brightness(1.06);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

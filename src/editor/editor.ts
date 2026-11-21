@@ -519,7 +519,7 @@ function runAction(action: string) {
       jumpToOutline(Math.max(0, Math.min(outline.length - 1, from + step)));
       break;
     }
-    case 'about': toast('mdview v0.1.0 · Rust 内核 + Tauri'); break;
+    // 「关于」是纯外壳动作，由 bridge 直接开弹窗，不再落到内核里弹 toast。
     default: break;
   }
   pushShellState();
@@ -677,10 +677,14 @@ async function boot() {
         })
         .catch((err) => toast('关闭确认失败：' + err));
     }).catch(() => {});
-    // macOS 原生菜单栏点选后，Rust 侧把动作名 emit 过来，和自绘菜单走同一条路
+    // macOS 原生菜单栏点选后，Rust 侧把动作名 emit 过来。
+    // 走外壳动作桥而不是直接 runAction：「检查更新」这类纯外壳动作只有桥接得住，
+    // 其余动作由桥原样转回 runAction。
     listen<unknown>('menu-action', (event) => {
       const action = actionOf(event.payload);
-      if (action) runAction(action);
+      if (!action) return;
+      if (window.__mdviewBridge) window.__mdviewBridge.dispatch(action);
+      else runAction(action);
     }).catch(() => {});
     // 二次启动的实例被单例插件拦下后，把命令行里的文档路径转到这里。
     // 复用 open_file 的注入路径分支，不弹对话框；走 queue 避免覆盖在途编辑。

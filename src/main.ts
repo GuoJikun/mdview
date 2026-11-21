@@ -7,9 +7,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { createApp, nextTick } from 'vue';
 import App from './App.vue';
 import './vue-overlay.css';
+// 弹窗外壳（关于 / 检查更新）的共用骨架。
+import './dialog.css';
 
 // bridge.ts 在模块求值时就把 window.__mdviewBridge 挂好，并主动拉一次快照。
-import './bridge';
+import { notify } from './bridge';
+// 「检查更新」的外壳状态：版本号、下载进度与启动时自动检查。
+import { checkSilently, initUpdate, update } from './update';
 // 自绘滚动条从原 titlebar.js 抽出；它惰性读取 Vue 渲染的标题栏/状态栏。
 import './scrollbars';
 
@@ -17,6 +21,14 @@ import './scrollbars';
 import './editor/editor';
 
 createApp(App).mount('#vue-app');
+
+// 启动时自动检查：默认关闭，只有用户勾选过「帮助 → 启动时检查更新」才会联网。
+// 静默失败；发现新版本只提示一句，下不下载由用户决定。
+void initUpdate().then(async () => {
+  if (!update.autoUpdate) return;
+  const info = await checkSilently();
+  if (info) notify(`发现新版本 ${info.version}：帮助 → 检查更新`);
+});
 
 // 平台判据以 Rust 为准（与窗口 decorations 一致）；platform.ts 的 UA 只负责首帧。
 invoke<boolean>('use_custom_titlebar').then((custom) => {

@@ -314,6 +314,8 @@ byte   0  2  5  8  10
 - ✅ **编辑内核收敛**（P3.5）：`src/app.js` → `src/editor/editor.ts`，七个纯逻辑模块与用例一起挪进 `src/editor/`，`web_ime.rs` 的守门清单与 `cwd` 同步
 - ✅ **`editor.ts` 全量类型化**（P3.6）：新增 `src/editor/ipc.ts` 承载 `Wire`（23 种 `kind`，与 `session.rs` 逐条对应）/ `Reply` / `Snapshot` / `BlockDto` / `PatchDto` / `CaretDto`（保留 `char_offset` 等 Rust 字段名，不做 camelCase），摘掉 `@ts-nocheck`
 - ✅ **用例迁 vitest**（P3.7）：`.test.js` → `.test.ts`，`unit`（75 项）+ `dom`（10 项）两个 project；`web_ime.rs` 守门从 7 项合并为 2 项（`node --check` 七个 `.js` + 跑 unit project）
+- ✅ **检查更新**（2026-11-21）：`tauri-plugin-updater` 负责清单拉取与签名校验，桌面端只暴露四个自定义命令（`check_update` / `download_update` / `cancel_update_download` / `install_update`）。`src/update.ts` 管弹窗状态机（检查 / 可下载 / 下载中 / 就绪 / 失败），`UpdateDialog.vue` 只管展示与按钮；帮助菜单加「检查更新…」与「启动时检查更新」（默认关闭，开关存 localStorage，与 image-view 一样不主动联网）。启动检查静默失败，发现新版本只 toast 一句；下载中关窗等同取消。签名公钥写在 `tauri.conf.json`，私钥在 `.tauri/mdview.key`（已 gitignore，发布机用 `TAURI_SIGNING_PRIVATE_KEY` 注入）
+- ✅ **关于弹窗**（2026-11-21）：原先「帮助 → 关于」只弹一句 toast，现改成与检查更新同款的模态弹窗。`src/dialog.css` 抽出两份弹窗共用的骨架（遮罩 / 卡片 / 标题 / 正文 / 按钮排），`src/dialog-modal.ts` 收拢锁滚动、吞 Esc、聚焦关闭按钮这三件事，两处不再各写一套；`src/about.ts` 只存 `open` 与版本号（`getVersion`，浏览器里回落到 `package.json`），`AboutDialog.vue` 展示图标、版本、一句话简介与内核/外壳/许可/项目四行元信息。关闭同样只认底部按钮；菜单动作名 `about` 由 `bridge.dispatch` 直接接管，内核里那句 toast 已删
 - ✅ **红线保持**：`editor.ts` 的投影/光标/坐标内核与七个纯逻辑模块零逻辑改动；大纲与正文仍是覆盖层上的洞
 
 迁移分阶段（记录在案，方便回溯是哪一步引入的结构变化）：
@@ -324,16 +326,16 @@ byte   0  2  5  8  10
 | P0-b | 搭 Vite、`web/` → `src/`、`dist/` + 端口 1450、路径切最终值 | 行为不变、自检 57/57 |
 | P0-c | 桌面 crate 从 `crates/mdview-desktop/` 上提到仓库根 | 自检 61/61 |
 | P1–P2 | 铺状态桥与动作桥，按 StatusBar → Toast → TitleBar/MenuPopup 逐组件迁移 | 每步自检全绿，模板复刻原 `id`/`class` |
-| P3 / P3.5–P3.7 | 单入口、内核收敛、TS 类型化、测试迁 vitest | 见上；最终 **Rust 205 项 + 前端 85 项 + 自检 65/65** |
+| P3 / P3.5–P3.7 | 单入口、内核收敛、TS 类型化、测试迁 vitest | 见上；最终 **Rust 205 项 + 前端 91 项 + 自检 65/65** |
 
-- 验证：`pnpm build` 通过、`cargo test --workspace` **205 项全绿**、`pnpm test` **85 项全过**、端到端自检 **OK 65/65**（2026-11-21 11:55 实跑）、真实窗口截图复核标题栏/菜单/状态栏/滚动条与正文让位
+- 验证：`pnpm build` 通过、`cargo test --workspace` **205 项全绿**、`pnpm test` **91 项全过**、端到端自检 **OK 65/65**（2026-11-21 11:55 实跑）、真实窗口截图复核标题栏/菜单/状态栏/滚动条与正文让位
 
 ---
 
 ## 7. 当前进度快照
 
 - 日期：2026-11-21（数据安全闭环 + 前端测试迁到 vitest；自检 65/65 已复跑）
-- 测试：**Rust 205 项全过**（app 80 / markdown 96 / desktop bin 15 + 前端守门 2 / core 5 / support 7），无编译告警。前端守门那 2 项是：`node --check` 七个 `.js` 模块 + 跑 vitest 的 unit project（6 文件 75 项：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11）。另有 **dom project 10 项**（真实 Chromium 里的内核启动与浏览器能力自检），由 `pnpm test:dom` 单独跑——它要拉一个浏览器实例，塞进 `cargo test` 会让 Rust 流水线变慢且依赖本机装没装 Chrome
+- 测试：**Rust 205 项全过**（app 80 / markdown 96 / desktop bin 15 + 前端守门 2 / core 5 / support 7），无编译告警。前端守门那 2 项是：`node --check` 七个 `.js` 模块 + 跑 vitest 的 unit project（7 文件 81 项：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6）。另有 **dom project 10 项**（真实 Chromium 里的内核启动与浏览器能力自检），由 `pnpm test:dom` 单独跑——它要拉一个浏览器实例，塞进 `cargo test` 会让 Rust 流水线变慢且依赖本机装没装 Chrome
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
 - 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 65/65」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 8 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个

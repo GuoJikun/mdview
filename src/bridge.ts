@@ -5,6 +5,8 @@
 // 文档内容、DOM 节点、编辑器坐标一概不过桥。
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { nextTick, reactive, readonly } from 'vue';
+import { openAbout } from './about';
+import { openUpdateDialog, toggleAutoUpdate } from './update';
 
 export interface OutlineItem {
   level: number;
@@ -103,6 +105,20 @@ export function dispatch(action: string): void {
   // 关闭窗口原先由 titlebar.js 的 run() 拦截，现在收进桥里。
   if (action === 'close-window') {
     tauriWindow()?.close();
+    return;
+  }
+  // 纯外壳动作：编辑内核不关心更新与关于，也不该为了弹窗去 import UI 模块。
+  if (action === 'about') {
+    openAbout();
+    return;
+  }
+  if (action === 'update') {
+    openUpdateDialog();
+    return;
+  }
+  if (action === 'auto-update') {
+    const enabled = toggleAutoUpdate();
+    notify(enabled ? '已开启启动时检查更新' : '已关闭启动时检查更新');
     return;
   }
   const run = window.__mdviewRunAction;

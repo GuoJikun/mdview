@@ -67,6 +67,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { dispatch, state } from '../bridge';
 import { MENUS, anchorOf, closeMenu, menuState, switchMenu, type MenuEntry } from '../menu';
+import { update } from '../update';
 
 const popupEl = ref<HTMLElement | null>(null);
 const openSubIndex = ref<number | null>(null);
@@ -78,7 +79,13 @@ const entries = computed<MenuEntry[]>(() =>
 );
 
 function isChecked(entry: MenuEntry): boolean {
-  return entry.checked ? !!entry.checked(state) : false;
+  if (!entry.checked) return false;
+  // 勾选态来自两处：编辑内核推上来的主题/模式，以及纯外壳的自动检查开关。
+  return !!entry.checked({
+    themeMode: state.themeMode,
+    mode: state.mode,
+    autoUpdate: update.autoUpdate,
+  });
 }
 
 function toggleSub(index: number): void {

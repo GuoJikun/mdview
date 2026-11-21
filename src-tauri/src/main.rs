@@ -12,6 +12,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod session;
+mod update;
 
 use std::{
     path::{Path, PathBuf},
@@ -260,6 +261,7 @@ fn menu_action(id: &str) -> Option<&'static str> {
         "outline-next" => "outline-next",
         "doc-start" => "doc-start",
         "doc-end" => "doc-end",
+        "update" => "update",
         "about" => "about",
         _ => return None,
     })
@@ -333,7 +335,9 @@ fn build_native_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<
         .build()?;
 
     let help_menu = SubmenuBuilder::new(app, "帮助")
-        .item(&item("about", "关于 mdview")?)
+        .item(&item("update", "检查更新…")?)
+        .separator()
+        .item(&item("about", "关于")?)
         .build()?;
 
     MenuBuilder::new(app)
@@ -413,9 +417,12 @@ fn main() {
         // 自动记住窗口的位置、尺寸与最大化状态，下次启动恢复。
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
+        // 更新：清单拉取与签名校验都在 Rust 侧，前端只调自定义命令。
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(session)
         .manage(RunMode { self_test })
         .manage(CloseGuard::default())
+        .manage(update::UpdateState::new())
         // 关窗守卫：有未保存改动就拦住，让前端问一句再放行。
         // 标题栏的 ×、Alt+F4、菜单里的「关闭窗口」最后都走这里，一处拦全部。
         .on_window_event(|window, event| {
@@ -445,7 +452,11 @@ fn main() {
             confirm_discard,
             force_close,
             pick_save_path,
-            use_custom_titlebar
+            use_custom_titlebar,
+            update::check_update,
+            update::download_update,
+            update::cancel_update_download,
+            update::install_update
         ])
         .setup(move |app| {
             // macOS：标题栏用系统装饰，菜单也用原生菜单栏；点击项转发给前端执行。

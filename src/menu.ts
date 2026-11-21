@@ -3,10 +3,11 @@ import { shallowReactive } from 'vue';
 
 export type MenuKey = 'file' | 'edit' | 'selection' | 'view' | 'go' | 'help';
 
-/** 勾选态只依赖这两个字段，避免把整个只读快照类型带进菜单数据。 */
+/** 勾选态只依赖这几个字段，避免把整个只读快照类型带进菜单数据。 */
 export interface MenuCheckState {
   themeMode: string;
   mode: string;
+  autoUpdate: boolean;
 }
 
 export interface MenuEntry {
@@ -98,7 +99,13 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
     { action: 'doc-end', label: '文档结尾', acc: 'Ctrl+End' },
   ],
   help: [
-    { action: 'about', label: '关于 mdview' },
+    { action: 'update', label: '检查更新…' },
+    {
+      action: 'auto-update', label: '启动时检查更新', mark: 'check',
+      checked: (s) => s.autoUpdate,
+    },
+    { sep: true },
+    { action: 'about', label: '关于' },
   ],
 };
 
