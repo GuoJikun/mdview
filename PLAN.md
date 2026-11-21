@@ -1,8 +1,9 @@
 # PLAN.md — mdview 开发计划与执行进度
 
-> 最后更新：2026-11-20 19:30（前端工程化：Vite + Vue 外壳）
+> 最后更新：2026-11-21（前端外壳专项计划并入本文，全仓只保留这一份计划）
 > 适用对象：接手本项目的 AI 或开发者。**本文自包含**，读完即可继续，不需要任何历史对话。
 > 每次有实质进展请同步更新第 6 节的状态和第 7 节的快照。
+> `ui-vue` 专项分支已并入 `main`，其计划内容（留洞式覆盖层、构建链、状态桥、迁移阶段的踩坑）已收进第 4 节与 M5，**不再单独维护分支计划文档**。
 
 ---
 
@@ -63,7 +64,9 @@
 
 ---
 
-## 4. Crate 结构
+## 4. 工程结构
+
+### 4.1 Rust crate
 
 ```
 crates/
@@ -73,13 +76,9 @@ crates/
   mdview-support/   运行期基础设施：logging（滚动落盘）/ error（AppError）
   mdview-app/       状态机：State / Message / update / Effect + ports trait
   mdview-cli/       无头入口，所有验证都从这里跑
-  mdview-desktop/   已上提为仓库根的 src-tauri/：session.rs（IPC 契约，可单测）
+src-tauri/          桌面端壳（原 crates/mdview-desktop 整体上提到仓库根）
+                    main.rs（窗口/菜单/文件对话框）/ session.rs（IPC 契约，可单测）
 ```
-
-前端工程根 = 仓库根：`src/`（Vite + Vue 3 + TypeScript）、`index.html`、`dist/`（构建产物，不入库）。
-`src/editor/editor.ts` 是编辑内核投影层（全量 TS，无 `@ts-nocheck`），契约类型在 `src/editor/ipc.ts`；七个纯逻辑模块（`ime/caretline/selection/dragscroll/clipboard/outline/theme`）保持 `.js` 原样（要用例在 vitest 的 node project 里直接加载），与它同放 `src/editor/`；
-外壳（标题栏 / 菜单 / 状态栏 / toast）由 `src/components/*.vue` 渲染，经 `src/bridge.ts` 与内核单向通信。
-大纲与正文区是 Vue 覆盖层上的「洞」，不进任何组件模板。
 
 依赖方向：`cli → app → markdown → core`，`support` 被 app 与 cli 共用。**core 不得依赖 markdown**。
 
@@ -90,6 +89,93 @@ crates/
 - `sourcemap.rs`：byte ↔ 块
 - `layout.rs`：**视觉布局**，产停靠点表（见下节）
 - `preview.rs`：生成可交互 HTML，标定用
+
+### 4.2 前端目录（标准 Tauri 布局）
+
+前端工程根 = 仓库根：`src-tauri/` 放 Rust，`src/` 是前端源码，`dist/` 是 Vite 产物（不入库）。与 `create-tauri-app` 的标准形态一致，不再有「Rust 占了 `src/` 所以前端只能叫 `web/`」的妥协。
+
+```
+<repo-root>/
+├─ index.html                 Vite 入口（#vue-app 覆盖层 + 洞）
+├─ package.json / vite.config.ts / tsconfig.json / vitest.config.ts / mise.toml
+├─ src/
+│  ├─ main.ts                 单入口：按序 import 全部脚本 + mount('#vue-app')
+│  ├─ platform.ts             首帧 UA 判定（原 index.html 内联脚本，为满足 CSP 挪出）
+│  ├─ App.vue / bridge.ts / menu.ts / scrollbars.ts
+│  ├─ app.css / vue-overlay.css
+│  ├─ components/             TitleBar / MenuPopup / StatusBar / Toast
+│  └─ editor/                 编辑内核，与外壳分家
+│     ├─ editor.ts            停靠点 → 像素、按键 → 消息、增量应用、自检入口
+│     ├─ ipc.ts               IPC 契约类型（与 session.rs 逐条对齐）
+│     ├─ ime / caretline / selection / dragscroll / clipboard / outline / theme（七个 .js）
+│     └─ __tests__/           八套用例（六 unit + 两 dom），与实现靠子目录分开
+├─ dist/                      Vite 产物（gitignore）
+└─ src-tauri/                 Rust 桌面端 + tauri.conf.json + capabilities + icons + tests/fixtures
+```
+
+`src/editor/editor.ts` 是编辑内核投影层（全量 TS，无 `@ts-nocheck`），契约类型在 `src/editor/ipc.ts`；七个纯逻辑模块保持 `.js` 原样（vitest 的 node project 直接加载，守门测试用 `node --check` 过一遍语法）。
+外壳（标题栏 / 菜单 / 状态栏 / toast）由 `src/components/*.vue` 渲染，经 `src/bridge.ts` 与内核单向通信。大纲与正文区是覆盖层上的「洞」，不进任何组件模板。
+
+### 4.3 前端外壳：留洞式 Vue 覆盖层
+
+**范围**：Vue 3 + Vite（TS）只接管外壳——标题栏、菜单弹层、状态栏、toast。动机是原 `titlebar.js` 464 行菜单树 + 递归渲染 + 子菜单 + 勾选态难维护，组件化能显著收敛。
+
+**红线**：编辑内核一行都不迁、一行都不改——`editor.ts` 的投影 / `reindex` / `applyPatch` / 光标定位 / 点击拖选落点 / `revealCaret` / 视口坐标，七个纯逻辑模块，Rust 侧 `session.rs` 契约与 `main.rs` 窗口逻辑，全部原地保留（只挪目录、改注释）。
+
+```
+视口 100vh；window 仍是滚动容器（window.scrollY 必须保持有效）
+┌─ #vue-app  position:fixed; inset:0; pointer-events:none ─────────┐
+│  TitleBar.vue        AUTO（菜单按钮 / 居中标题 / 窗口按钮 / 拖拽区）│
+│  ├─ MenuPopup.vue    AUTO（动态弹层）                             │
+│  ├── 洞 1：大纲  #outline #outline-scroll   无 Vue 节点 → 穿透    │
+│  ├── 洞 2：正文  #doc #caret #ime #preedit #vscroll → 穿透        │
+│  StatusBar.vue       AUTO（统计 / 脏标记 / 主题 / 表格工具条）     │
+│  Toast.vue           NONE                                        │
+└──────────────────────────────────────────────────────────────────┘
+        │ 洞里没有 Vue 节点，鼠标与事件直接落到原有 DOM
+        ▼
+  原有层全部原地保留：#titlebar / #bar / #toast（占位供 edges() 读几何）
+```
+
+**核心**：大纲和正文不是「Vue 画的镜像」，而是**真正的洞**——Vue 层在那两处不放任何节点。所以没有第二套大纲/正文 DOM，「同一状态两套 DOM」的同步难题整块消失。
+
+**命门判据**：`pointer-events:none` 只解决「鼠标命中谁」，不改变「谁在滚动」。`editor.ts` 那套坐标能否零改动，唯一取决于 `window.scrollY` 是否仍有效——所以 `#doc` 必须留在文档流、`min-height:100vh` 撑高 body。
+
+方案演进（别重复踩）：
+
+| 方案 | 结论 | 原因 |
+|---|---|---|
+| `v-pre` 跳过 `#doc` 子树 | 否决 | 依赖编译器 hoist 行为；`#doc` 误绑 `:class`/`v-if` 即失效 |
+| Vue 挂载点物理隔离（只 mount `#ui`） | 采纳为地基 | 边界在 DOM 结构上硬隔离，不依赖编译器 |
+| `#doc-placeholder` + `#doc` 绝对定位叠加 | 否决 | `#doc` 脱离文档流后不撑高 body，`scrollY` 恒 0，坐标全要重写 |
+| `#doc` 自带滚动的 fixed 工作区 | 否决 | 滚动容器换了，坐标来源整体要换 |
+| Vue 整层叠在现有实现上 | 否决 | 同一状态两套 DOM，同步机制别扭 |
+| **只穿透大纲和正文（留洞）** | **最终采纳** | 无镜像、滚动不变、坐标零改动，外壳真正由 Vue 接管 |
+
+双层重叠的代价：Vue 的标题栏/状态栏/toast 与同名 DOM 短暂共存，靠「严格像素级复刻尺寸（标题栏 30px、状态栏 29px、大纲 232px）+ 不透明背景 + 上层接管命中」规避，下层按钮收不到点击。macOS 原生标题栏下 `html.native-titlebar` 要同时隐藏 `#titlebar` 与 Vue 的 `TitleBar`，否则多画一条假标题栏。
+
+### 4.4 构建链与路径
+
+- **Vite**：`outDir = 'dist'`、`emptyOutDir = true`（每次清空，防旧脚本残留导致全局符号双份加载——历史上两个脚本顶层 `const` 撞名，`app.js` 整个不执行）、`port = 1450`、`strictPort = true`。`pnpm build` 同时跑 `vue-tsc --noEmit`。
+- **Tauri**：`tauri.conf.json` 的 `frontendDist` 相对 conf 所在目录解析，所以是 `../dist`（写成 `./dist` 会指向不存在的 `src-tauri/dist`）；`beforeDevCommand: pnpm dev` / `devUrl: http://localhost:1450` / `beforeBuildCommand: pnpm build` 由 Tauri 在前端根执行。`build.rs` 的 `tauri_build::build()` 自动读同目录 conf，只需保证 `rerun-if-changed=../dist` **加上整目录内容指纹**（`MDVIEW_WEB_STAMP`）：`rerun-if-changed` 只让 build script 重跑，脚本输出没变时目标 crate 仍不重编，「改了 JS 窗口行为不变」就是这么来的（见 §2 第 9 条）。
+- **CSP** 保持 `default-src 'self'`，**不开 `unsafe-eval`**：走 runtime-only 构建（`@vitejs/plugin-vue` 预编译模板），运行时不拼 template 字符串。首帧 UA 判定因此从内联 `<script>` 挪进 `platform.ts`。
+- **`dist/` 不提交**：`generate_context!()` 编译期就要读产物，所以**自 clone 起、或清空 `dist/` 后必须先 `pnpm build` 再 `cargo`**，`cargo test --workspace` 同样会编译 desktop bin。`tauri dev/build` 有 before 命令兜底，不受此限。
+- **相对路径基准**：conf、`build.rs`、守门测试的 CWD 都是 `src-tauri/`；`tauri.conf.json` 的 `../dist`、`build.rs` 的 `../dist`、`web_ime.rs` 的 `../src`、`vite.config.ts` 的 `outDir`、根 `package.json` 的 scripts 互相咬合，改一个就要核对其余。**易漏**：`crates/mdview-app/src/state.rs` 里还有一个跨 crate 读样张的路径（`../../src-tauri/tests/fixtures/selftest.md`），grep `tests/fixtures` 才找得到。
+- **根 `Cargo.toml`**：`members` 里 desktop 写 `"src-tauri"`（不能用 `crates/*`，会匹配到已无 manifest 的旧目录），另设 `default-members = ["src-tauri"]`，裸 `cargo run` 默认跑桌面端。
+- **脚本必须是 `type="module"`**：`index.html` 现在只留 `<script type="module" src="/src/main.ts">`；漏写会被 Vite 原样输出 `/src/xxx.js`，而 dist 里没有 `src/` 目录，运行时全部 404。旧脚本的顺序依赖与 `window` 全局已由 `main.ts` 的显式 import 取代。
+- **全仓 ESM**：根 `package.json` 是 `type: module`，七个 `.js` 模块与用例都按 ESM 写。早期用例用 `require('assert')`，靠 `src/package.json` 的 `{"type":"commonjs"}` 兜住；迁 vitest 后该文件已删除，不要再加回来。
+- **vitest 两 project**：`unit`（node 环境，纯逻辑）+ `dom`（真实 Chromium）。三个坑：① `launchOptions` 是 **provider 级**选项（`playwright({ launchOptions })`），写进 `browser.instances[].launch` 会被静默忽略，随后去下载 Playwright 自带 Chromium——本机 `cdn.playwright.dev` 经代理零字节，表现为「卡住不动」，用 `channel: 'chrome'` 复用系统浏览器；② `optimizeDeps.include` 必须显式列 `@tauri-apps/api/core` 与 `@tauri-apps/api/event`，否则首次 import 触发 Vite 中途 reload（`Vite unexpectedly reloaded a test`）；③ `vi.mock` 的工厂会被提升，要引用的数据须放进 `vi.hoisted`。另：`boot()` 末尾会 `invoke('ready')`，断言 IPC 序列时别漏这条。
+
+### 4.5 状态桥契约
+
+`bridge.ts` 是外壳与内核之间唯一通道，**只传状态快照和动作名，不传文档内容、不传 DOM 节点**。
+
+- **状态进 Vue（单向）**：reactive store 字段 `path / title / dirty / blocks / stop / column / revision / inTable / themeMode / theme / mode / outline / activeOutlineIdx / toast`。写入点只有三处：`pushShellState()`（`editor.ts`，每次状态变化推一份快照）、`bridge.setTitle`（标题）、`bridge.notify`（toast 文案与计时）。主题不往 `theme.js` 里塞桥接代码，由 `bridge.ts` 用 `MutationObserver` 跟随 `<html data-theme>`。
+- **动作出 Vue（单向）**：菜单项与状态栏按钮 `emit('action', name)` → `bridge.dispatch(name)` → 复用 `window.__mdviewRunAction(name)`，**动作逻辑一行不重写**。窗口最小化/最大化/关闭由 `TitleBar.vue` 直接调 Tauri 窗口 API。
+- **全局钩子保留**：`window.__mdviewSelfTest` / `__mdviewRunAction` / `__mdviewSetTitle` / `__mdviewRefreshScrollbar` 继续挂着，Rust 侧 `window.eval` 与自检断言不用动；菜单迁移后自检要多一句 `await window.__mdviewNextTick()`（bridge 暴露 Vue 的 `nextTick`）。
+- **异步 DOM 红线**：Vue 渲染是异步的。自检里「派发事件后同步查 DOM」的写法要改成 `nextTick` 之后；尺寸相关测量要 `nextTick` + `requestAnimationFrame` 之后再算，否则 caret / 锚点会在布局稳定前测错。
+- **穿透例外**：菜单按钮、`#tb-min/max/close`、`[data-tauri-drag-region]`、状态栏表格工具按钮必须显式 `pointer-events:auto`，漏了拖拽区就拖不动窗口。大纲与自绘滚动条在洞里，天然不受穿透规则影响。
+- **组件模板保留原有 `id`/`class`**，让自检断言零改动；确需改断言时同步改 `editor.ts` 的 `__mdviewSelfTest` 与 `tests/` 下的用例，不允许只改一边。
 
 ---
 
@@ -225,19 +311,34 @@ byte   0  2  5  8  10
   - `Toast.vue` 接管 `#toast`，显隐与计时统一由 `bridge.notify` 管
   - `TitleBar.vue` + `MenuPopup.vue` + `menu.ts` 接管标题、菜单、窗口按钮、拖拽区与最大化图标；滚动条抽到 `scrollbars.ts`；删除 `titlebar.js`
 - ✅ **单入口**：`index.html` 只留 `<script type="module" src="/src/main.ts">`，九个旧脚本按序在 `main.ts` 里 `import`；首帧 UA 判定挪到 `platform.ts`，满足 CSP（不再需要内联脚本）
+- ✅ **编辑内核收敛**（P3.5）：`src/app.js` → `src/editor/editor.ts`，七个纯逻辑模块与用例一起挪进 `src/editor/`，`web_ime.rs` 的守门清单与 `cwd` 同步
+- ✅ **`editor.ts` 全量类型化**（P3.6）：新增 `src/editor/ipc.ts` 承载 `Wire`（23 种 `kind`，与 `session.rs` 逐条对应）/ `Reply` / `Snapshot` / `BlockDto` / `PatchDto` / `CaretDto`（保留 `char_offset` 等 Rust 字段名，不做 camelCase），摘掉 `@ts-nocheck`
+- ✅ **用例迁 vitest**（P3.7）：`.test.js` → `.test.ts`，`unit`（75 项）+ `dom`（10 项）两个 project；`web_ime.rs` 守门从 7 项合并为 2 项（`node --check` 七个 `.js` + 跑 unit project）
 - ✅ **红线保持**：`editor.ts` 的投影/光标/坐标内核与七个纯逻辑模块零逻辑改动；大纲与正文仍是覆盖层上的洞
-- 验证：`pnpm build` 通过、`cargo test --workspace` **204 项全绿**、端到端自检 **OK 61/61**
+
+迁移分阶段（记录在案，方便回溯是哪一步引入的结构变化）：
+
+| 阶段 | 内容 | 过关线（均已达成） |
+|---|---|---|
+| P0-a | Rust crate 整体挪进 `src-tauri/`，路径临时指向 `../web` | 纯搬家：全量测试绿 + 自检 57/57 |
+| P0-b | 搭 Vite、`web/` → `src/`、`dist/` + 端口 1450、路径切最终值 | 行为不变、自检 57/57 |
+| P0-c | 桌面 crate 从 `crates/mdview-desktop/` 上提到仓库根 | 自检 61/61 |
+| P1–P2 | 铺状态桥与动作桥，按 StatusBar → Toast → TitleBar/MenuPopup 逐组件迁移 | 每步自检全绿，模板复刻原 `id`/`class` |
+| P3 / P3.5–P3.7 | 单入口、内核收敛、TS 类型化、测试迁 vitest | 见上；最终 **Rust 205 项 + 前端 85 项 + 自检 65/65** |
+
+- 验证：`pnpm build` 通过、`cargo test --workspace` **205 项全绿**、`pnpm test` **85 项全过**、端到端自检 **OK 65/65**（2026-11-21 11:55 实跑）、真实窗口截图复核标题栏/菜单/状态栏/滚动条与正文让位
 
 ---
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-21（数据安全闭环 + 前端测试迁到 vitest）
+- 日期：2026-11-21（数据安全闭环 + 前端测试迁到 vitest；自检 65/65 已复跑）
 - 测试：**Rust 205 项全过**（app 80 / markdown 96 / desktop bin 15 + 前端守门 2 / core 5 / support 7），无编译告警。前端守门那 2 项是：`node --check` 七个 `.js` 模块 + 跑 vitest 的 unit project（6 文件 75 项：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11）。另有 **dom project 10 项**（真实 Chromium 里的内核启动与浏览器能力自检），由 `pnpm test:dom` 单独跑——它要拉一个浏览器实例，塞进 `cargo test` 会让 Rust 流水线变慢且依赖本机装没装 Chrome
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 61/61」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 13 项**、**表格 8 项**、**打开文件 4 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 65/65」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 8 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
+  - **判定以 `tauri dev` 链路为准**：同参数走 `cargo run` 会稳定少 1 项，失败项固定是「系统剪贴板可写」——该链路窗口拿不到焦点时 `navigator.clipboard.writeText` 被拒。属链路差异，不是回归
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
 - 最近提交（Angular 规范）：
   - `feat: 初始化内核、解析投影与日志`
@@ -269,7 +370,15 @@ byte   0  2  5  8  10
   - `feat(desktop): Toast 改由 Vue 渲染`
   - `feat(desktop): 标题栏与菜单改由 Vue 渲染`
   - `refactor(desktop): 前端合并为单一入口`
-- 分支：`main` 已快进到表格子工程（`3110c20`）；前端工程化在 `ui-vue` 分支（基于 `defbbf7`），完成后快进并入 `main`
+  - `refactor(frontend): 非 Vue 前端改为 ESM 并接入 Tauri API 包`
+  - `refactor(frontend): 编辑内核收敛到 src/editor 并改名 editor.ts`
+  - `refactor(editor): editor.ts 全量类型化，抽出 IPC 契约类型`
+  - `fix(app): 未命名文档保存不再谎称已保存，补另存为`
+  - `fix(app): 关窗与换文档前检查未保存改动，并补「新建」`
+  - `test(frontend): 前端用例统一迁到 vitest，按是否需要真实布局分环境`
+  - `chore(tooling): 提交 mise.toml，锁定 node 与 pnpm 版本`
+  - `test(editor): 用例收进 src/editor/__tests__，与实现按目录分开`
+- 分支：`ui-vue`（基于 `defbbf7`）已完成并快进并入 `main`，前端工程化无遗留分支；当前 `main` 含表格子工程、Vue 外壳、vitest 迁移
 
 ---
 
@@ -322,6 +431,7 @@ byte   0  2  5  8  10
 mise install                                # 首次：按 mise.toml 拉齐 node 26.13.0 / pnpm 12.18.0
 pnpm install                                # 首次
 pnpm build                                  # 构建前端（含 vue-tsc --noEmit）；dist/ 不入库
+pnpm exec vue-tsc --noEmit                  # 只做类型检查
 cargo test --workspace                      # 全量测试（依赖上面的 dist）
 cargo run -p mdview-cli -- demo             # 端到端演示（edit/click/undo/save）
 cargo run -p mdview-cli -- demo edit        # 键盘脚本回放：输入 → 光标 → 增量帧
@@ -335,12 +445,17 @@ cargo run -p mdview-cli -- <file> html      # 阅读态 HTML
 pnpm tauri dev -- -- <file>                 # 起窗（Tauri 2 + Vite devUrl）
 pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test
                                             # 端到端自检（CWD=src-tauri/），跑完自动退出
+cargo run -- src-tauri/tests/fixtures/selftest.md --self-test
+                                            # 备选链路（裸 cargo run 即桌面端，default-members 兜底）
 pnpm test                                   # 前端全部用例（unit + dom 两个 project）
 pnpm test:unit                              # 七个纯逻辑模块（node 环境，cargo test 已含这一支）
 pnpm test:dom                               # 真实浏览器里的内核启动用例（需本机有 Chrome/Edge）
+pnpm test:watch                             # 改代码时盯着
 ```
 
 `--self-test` 会在真实 WebView2 里合成 composition 事件与方向键，把结果写进日志并以 0/1 退出，是唯一不需要人打字的端到端验证。它仍然是唯一跑在**真实 WebView2**里的验证——vitest 的 dom project 用的是系统 Chrome，能测真实布局（光标像素、点击落点、视口滚动），但内核最终要跑的那个 WebView2 环境只有自检覆盖得到。
+
+**别念外层退出码**：`pnpm tauri dev -- ... --self-test` 有时会以 `exit code -1` 结束并在终端打一条 `Failed to unregister class Chrome_WidgetWin_0`，但 `mdview.log` 里已经是「自检通过：OK 65/65」（应用侧走的是 `app.exit(0)`）。判定只看日志那一行。
 
 日志落在可执行文件同级 `logs/`：`mdview.log`（5×1MB 滚动）、`error.log`（error 独占，5×1MB）。只读目录自动回落到 `%LOCALAPPDATA%/mdview/logs`。
 
@@ -382,7 +497,7 @@ pnpm test:dom                               # 真实浏览器里的内核启动�
 | **剪贴板写入**（内核给文本、前端写系统剪贴板，`execCommand` 兜底） | `src/editor/clipboard.js` |
 | **键位契约**（`Ctrl+A/C/X` → `selectAll`/`copy`/`cut`，见 `editor.ts` 的 keydown） | `src/editor/editor.ts`、`src-tauri/src/session.rs` |
 | 前端守门测试（语法检查七个 `.js` + 跑 vitest 的 unit project；dom project 不进 cargo test） | `src-tauri/tests/web_ime.rs`、`vitest.config.ts` |
-| **Vue 外壳入口**（挂载、单入口 import、UA 首帧判定、平台复核） | `src/main.ts`、`src/platform.ts` |
+| **Vue 外壳入口**（挂载、单入口 import、UA 首帧判定、平台复核） | `src/main.ts`、`src/platform.ts`、`src/App.vue` |
 | **状态桥**（只读快照 / `set` / `notify` / `dispatch` / `setTitle` / `nextTick`） | `src/bridge.ts` |
 | **标题栏 / 菜单 / 状态栏 / Toast**（模板复刻原 `id`/`class`） | `src/components/TitleBar.vue`、`MenuPopup.vue`、`StatusBar.vue`、`Toast.vue` |
 | **菜单数据与展开状态**（六档菜单树、勾选态、键盘切换） | `src/menu.ts` |
@@ -395,6 +510,7 @@ pnpm test:dom                               # 真实浏览器里的内核启动�
 
 - 提交信息用 **Angular 规范**（`type(scope): subject`），subject 简洁中文。类型用 `feat` / `fix` / `refactor` / `test` / `docs` / `chore`。
 - 分支名不含 `/`。
+- **计划只有一份 `PLAN.md`**：专项工作（如前端框架化）的架构决策、分阶段记录与踩坑直接并进本文对应章节，不再新开 `PLAN-*.md`，避免两处状态漂移。
 - 改动解析或布局层时，必须同时补测试；`layout` 的停靠点行为是回归高发区。
 - 不引入非纯 Rust 依赖到 `mdview-markdown`。
 - 每次实证结论（尤其是与直觉相反的）写进本文或 `.workbuddy/memory/`，避免下一轮重复调研。
