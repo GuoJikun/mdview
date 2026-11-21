@@ -1,6 +1,6 @@
 // 上下移动几何：判据全是矩形坐标，不碰真实 DOM，跑 node 环境。
 import { describe, expect, it } from 'vitest';
-import { createLineMotion, sameLine, scrollDelta } from './caretline.js';
+import { createLineMotion, sameLine, scrollDelta } from '../caretline.js';
 
 type Rect = { x: number; top: number; height: number; mk: boolean };
 

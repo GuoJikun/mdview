@@ -192,7 +192,7 @@ byte   0  2  5  8  10
   - 空段落里再按回车只往下走一行（`split_paragraph` 在零长块里只插一个换行）：否则一次多出两行空行，像在跳行
 - ✅ **标题必须「成形」才升格**：ATX 标题要求 `#` 后有空格。pulldown 把行尾裸 `#` 也当合法标题（内容为空），于是逐字输入会出现两次跳变：敲 `#` 整行先变成一级标题（`#` 被折叠、字号变大），再输入文字又掉回段落（`#` 重新可见）。现在 `heading_is_bare` 把「只有 `#`、后面没空格」的块降级成段落——标记始终可见，敲下空格那一刻才升格，之后不会再变回来
 - ✅ **选区拖动到窗口边缘时的自动滚动**（`src/dragscroll.js`）
-  - 纯几何不碰 DOM，Node 直接测（`dragscroll.test.js` 16 项）；帧循环、滚动、落点回写全部由 hooks 注入
+  - 纯几何不碰 DOM，Node 直接测（`src/editor/__tests__/dragscroll.test.ts` 16 项）；帧循环、滚动、落点回写全部由 hooks 注入
   - **必须自走帧循环**：拖选靠 `mousemove` 驱动，而指针停在边缘时浏览器不再发新事件，选区就冻结在那一屏。这里每帧「滚一点 + 重新求指针下的落点」，指针不动、页面在动，落点自然一路延伸
   - 速度与「陷进边缘多深」成正比（48px 边缘带，满速 24px/帧），拖出窗口后封顶；视口极矮时边缘带压到高度的一半，免得上下两条带互相吃掉、滚动永远停不下来
   - 探针点先压进 `probeBox()`（正文 ∩ 视口 ∩ 状态栏上沿）。踩过的坑：直接压到视口下沿会命中固定状态栏，`elementFromPoint` 拿不到正文 → 落点全是 null，页面在滚而选区不动（自检抓到的就是这条）
@@ -294,7 +294,7 @@ byte   0  2  5  8  10
 12. **上下移动依赖当前视口的矩形**：`desiredX` 是视口坐标，窗口缩放或正文容器宽度变化会让它失效，因此 `resize` 时重置。若将来支持水平滚动或分栏，需要一并重置。
 13. **空标题显示为字面 `#`**：这是「标题必须成形」的刻意取舍（见第 6 节 M3）。代价是文件里真有 `#` 独自成行的空标题时，打开后会显示成段落文本 `#`。要区分「用户正在输入」与「文件本来如此」，得把光标位置引到投影层；目前不做。
 14. **空段落 = 三行空行**：文档中间的空段落（退出列表后等待输入的那一行）只能靠「分隔 + 空段落 + 分隔」三行空行表达（见第 2 节硬约束 14）。代价有两条：① 手写的文件里本来就有三行以上空行时，中间那几行会渲染成空段落，视觉上比之前多一行；② 空段落没被使用时，文件里就留着三行空行。敲下第一个字之后会自动收敛成正常的两段（`- 甲` + 空行 + `X` + 空行 + `正文`），所以只有「退出列表但没写字」的瞬间才看得到。
-15. **滚动与光标跟随的边界**：页面滚动时只重画光标像素、不再「保证可见」；落点没变也不追视口（不然任何一次重绘回包都会抵消用户的滚动）。这条无法用 `--self-test` 回归：合成出来的滚动是程序化滚动，Chromium 会抑制滚动期间的脚本滚动，有没有这层修复都测不出差别；能测的只有 `scrollDelta` 的几何（`caretline.test.js`）与「按键后光标重新可见」。
+15. **滚动与光标跟随的边界**：页面滚动时只重画光标像素、不再「保证可见」；落点没变也不追视口（不然任何一次重绘回包都会抵消用户的滚动）。这条无法用 `--self-test` 回归：合成出来的滚动是程序化滚动，Chromium 会抑制滚动期间的脚本滚动，有没有这层修复都测不出差别；能测的只有 `scrollDelta` 的几何（`src/editor/__tests__/caretline.test.ts`）与「按键后光标重新可见」。
 16. **剪贴板写入可能在无焦点窗口里挂起**：`navigator.clipboard.writeText` 在窗口没拿到焦点时，Chromium 会把请求挂住等一个不会来的授权，Promise 永远不 settle。生产里只影响「复制好像没反应」，但**自检会整条卡死**——所以自检里对它的等待必须自带 `Promise.race` 超时。另外 `execCommand('copy')` 兜底会短暂抢走 `#ime` 的焦点，调用方要还回去，否则输入法组合被中断。
 17. **其它块级标记的同类抖动未处理**：`>`（引用）与 `***`／`---`（分隔线）也会在敲完最后一个字符的瞬间改变块类型。它们不涉及字号跳变，先不动；若将来统一处理，应复用同一套「成形」判定。
 18. ~~**菜单没有「新建」**~~ **已修（2026-11-21）**：文件菜单补齐「新建 / 打开文件… / 保存 / 另存为… / 关闭窗口」，`Ctrl+N` 可用。新建**不在硬盘上落文件**——只在内存里换成未命名空文档（`Session::new_file` → `AppState::open("", None)`），与「双击图标启动」是同一条状态路径；首次 Ctrl+S 才弹保存对话框落盘，这样既不会留下空文件，也不用维护两套入口语义。
@@ -370,14 +370,14 @@ pnpm test:dom                               # 真实浏览器里的内核启动�
 | **保存与另存为**（`Effect::NeedsPath` / `WriteFailed`、保存对话框只给路径不写盘） | `crates/mdview-app/src/state.rs`（`save_into`）、`src-tauri/src/main.rs`（`pick_save_path`）、`src/editor/editor.ts`（`requestSavePath`） |
 | **新建 / 关闭 / 换文档的守卫**（`new_file`、`ask_discard`、`CloseGuard` + `close-requested`） | `src-tauri/src/main.rs`、`src-tauri/src/session.rs`（`new_file` / `is_dirty`）、`src/editor/editor.ts`（`adoptSnapshot`、close 监听） |
 | **表格交互**（Tab 跨格、状态栏行列工具条、自检 6 项） | `src/editor/editor.ts`、`app.css` |
-| **大纲侧栏**（锚点判定 + 跳转，不碰 DOM，跑 unit project） | `src/editor/outline.js`、`outline.test.ts`、`editor.ts`（侧栏渲染/联动） |
-| **主题系统**（跟随系统 + 手动切换 + localStorage，不碰 DOM，跑 unit project） | `src/editor/theme.js`、`theme.test.ts`、`app.css`（CSS 变量） |
+| **大纲侧栏**（锚点判定 + 跳转，不碰 DOM，跑 unit project） | `src/editor/outline.js`、`src/editor/__tests__/outline.test.ts`、`src/editor/editor.ts`（侧栏渲染/联动） |
+| **主题系统**（跟随系统 + 手动切换 + localStorage，不碰 DOM，跑 unit project） | `src/editor/theme.js`、`src/editor/__tests__/theme.test.ts`、`app.css`（CSS 变量） |
 | **编辑页**（停靠点 → 像素、按键 → 消息、增量应用、自检入口） | `src/editor/editor.ts` |
-| **输入法状态机**（不碰 DOM，跑 unit project） | `src/editor/ime.js`、`ime.test.ts` |
-| **上下移动几何**（视觉行判定 + 期望列，不碰 DOM，跑 unit project） | `src/editor/caretline.js`、`caretline.test.ts` |
-| **视口与原生选区**（滚多少才露头、哪些原生选区该清，不碰 DOM） | `src/editor/caretline.js`（`scrollDelta`）、`selection.js`、`selection.test.ts` |
-| **拖选时的边缘自动滚动**（速度曲线、探针点压缩、自走帧循环，不碰 DOM） | `src/editor/dragscroll.js`、`dragscroll.test.ts` |
-| **浏览器里的内核启动用例**（铺 index.html 骨架 + mock IPC + 断言光标像素） | `src/editor/editor.dom.test.ts`、`env.dom.test.ts` |
+| **输入法状态机**（不碰 DOM，跑 unit project） | `src/editor/ime.js`、`src/editor/__tests__/ime.test.ts` |
+| **上下移动几何**（视觉行判定 + 期望列，不碰 DOM，跑 unit project） | `src/editor/caretline.js`、`src/editor/__tests__/caretline.test.ts` |
+| **视口与原生选区**（滚多少才露头、哪些原生选区该清，不碰 DOM） | `src/editor/caretline.js`（`scrollDelta`）、`src/editor/selection.js`、`src/editor/__tests__/selection.test.ts` |
+| **拖选时的边缘自动滚动**（速度曲线、探针点压缩、自走帧循环，不碰 DOM） | `src/editor/dragscroll.js`、`src/editor/__tests__/dragscroll.test.ts` |
+| **浏览器里的内核启动用例**（铺 index.html 骨架 + mock IPC + 断言光标像素） | `src/editor/__tests__/editor.dom.test.ts`、`src/editor/__tests__/env.dom.test.ts` |
 | 自检样张（必须是「一块一行」的文档） | `src-tauri/tests/fixtures/selftest.md` |
 | **剪贴板写入**（内核给文本、前端写系统剪贴板，`execCommand` 兜底） | `src/editor/clipboard.js` |
 | **键位契约**（`Ctrl+A/C/X` → `selectAll`/`copy`/`cut`，见 `editor.ts` 的 keydown） | `src/editor/editor.ts`、`src-tauri/src/session.rs` |

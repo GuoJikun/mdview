@@ -127,11 +127,12 @@ Vue 画的标题栏/状态栏/toast 与现有同名 DOM 会**短暂共存**（�
 │  └─ editor/                           ← 编辑内核，与外壳分家（详见 P3.5）
 │     ├─ editor.ts                      停靠点 → 像素、按键 → 消息、增量应用、自检入口
 │     ├─ ipc.ts                         IPC 契约类型（对应 src-tauri/src/session.rs，P3.6）
-│     ├─ editor.dom.test.ts             真实浏览器里的内核启动用例（P3.7）
-│     ├─ env.dom.test.ts                浏览器能力自检（真实布局 / 命中 / 滚动，P3.7）
 │     ├─ ime.js / caretline.js / selection.js / dragscroll.js / clipboard.js
 │     ├─ outline.js / theme.js          ← 七个纯逻辑模块原样保留（.js）
-│     └─ 六套 *.test.ts                 ← unit project：node 环境，75 项
+│     └─ __tests__/                     ← 用例与实现同目录，靠子目录分开
+│        ├─ 六套 *.test.ts              ← unit project：node 环境，75 项
+│        ├─ editor.dom.test.ts          真实浏览器里的内核启动用例（P3.7）
+│        └─ env.dom.test.ts             浏览器能力自检（真实布局 / 命中 / 滚动，P3.7）
 ├─ dist/                                ← Vite 产物（gitignore）；frontendDist 指向它
 ├─ src-tauri/                           ← Rust crate（原 crates/mdview-desktop 内容整体挪入）
 │  ├─ Cargo.toml / build.rs
@@ -354,3 +355,4 @@ pnpm tauri dev -- -- tests/fixtures/selftest.md
 | 2026-11-21 | **P3.7 完成（测试迁到 vitest）**：六套 `node:test` 用例改写为 vitest（`.test.js` → `.test.ts`，`assert.*` → `expect`，断言语义逐条对齐，75 项数量不变）；新增 `vitest.config.ts` 分两个 project——`unit` 跑 node 环境，`dom` 跑真实 Chromium。dom 用 `playwright()` provider + `launchOptions: { channel: 'chrome' }` 复用系统 Chrome，不下载 Playwright 自带那份（`cdn.playwright.dev` 在本机经代理 10 分钟零字节）。新增 `editor.dom.test.ts`（铺 `index.html` 骨架 + mock `invoke`/`listen` + 动态 import 真 `editor.ts`，断言投影块、大纲条目与**光标像素**）与 `env.dom.test.ts`（真实布局/命中/滚动/CSS 变量等九项能力自检）。`web_ime.rs` 守门从 7 项合并为 2 项（`node --check` 七个 `.js` + 跑 unit project），dom project 不进 cargo test。`package.json` 补 `test` / `test:unit` / `test:dom` / `test:watch`。三个坑记在风险红线第 13 条。验证：`pnpm test` **85 项全过**（1.27s）、`cargo test --workspace` **205 项**、`vue-tsc` 0 错误 |
 | 2026-11-21 | **P3.6 完成（editor.ts 类型化）**：新增 `src/editor/ipc.ts`——`Wire`（23 种 `kind` 的可辨识联合，与 `session.rs` 的 `Wire` 枚举逐条对应）、`Reply` / `Snapshot` / `BlockDto` / `PatchDto` / `CaretDto`（保留 Rust 侧 `char_offset` / `old_len` 等原始字段名，不做 camelCase 改写）、`CaretPos` / `Box` / `Point` / `Check`，以及 `window.__mdviewSelfTest` 的全局声明；`editor.ts` 摘掉 `@ts-nocheck`，DOM 句柄按 `index.html` 骨架断言类型，状态、事件、自检逐处标注。七个纯逻辑模块仍是带 JSDoc 的 `.js`（`node --test` 要能直接跑），类型由 TS 从注释推断，仅在 `createIme` 的 `send: object` 处做一次收窄。顺带三处防御性修正：`selectionchange` 的 null 选区、paste 的两条 `clipboardData` 路径、滚动条节点缺失时改判否而不是抛异常。验证：`vue-tsc --noEmit` 0 错误、`pnpm build` 产物 126.23 KB/12.29 KB（与改动前持平）、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |
 | 2026-11-21 | **P3.5 完成（内核收敛）**：`src/app.js` → `src/editor/editor.ts`，与文档里一直写的 `editor.ts` 对齐；七个纯逻辑模块与六套用例同移入 `src/editor/`，`src/` 根只剩入口（`main.ts`/`index.html`）与外壳（`bridge.ts`/`menu.ts`/`platform.ts`/`scrollbars.ts`/`components/`）；`web_ime.rs` 的 `cwd` 改为 `../src/editor` 并从语法清单移除 `app.js`。改名后 `editor.ts` 首次进入 `tsconfig` 范围，暴露出 297 处隐式 `any`/可空错误——本次先加 `@ts-nocheck` 并写明待办（类型补齐另开一轮，避免混进纯结构重构）。同步修掉三处指向不存在文件的注释（`main.rs` / `session.rs` 的 `src/editor.ts`、`editor.ts` 里的 README、`StatusBar.vue` 里的 `titlebar.js`）。验证：`vue-tsc` 干净、`pnpm build` 通过、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |
+| 2026-11-21 | **测试目录整理**：`src/editor/` 下的八套用例（六套 unit + 两套 dom）移入 `src/editor/__tests__/`，实现与用例靠子目录分开，模块间引用改 `../`。`vitest.config.ts` 的 include/exclude 维持 `src/**/*.test.ts` / `src/**/*.dom.test.ts`，子目录天然命中，无需为 `__tests__` 写特例；`tsconfig` 的 `src/**/*.ts` 继续覆盖用例，类型检查范围不变。验证：`pnpm test` **85 项全过**、`pnpm build` 127.73 KB 不变、`cargo test --test web_ime` 2 项全绿 |

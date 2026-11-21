@@ -1,6 +1,6 @@
 // 原生选区清理判据：只做形状判断，不碰真实 DOM，跑 node 环境。
 import { describe, expect, it } from 'vitest';
-import { shouldClearSelection } from './selection.js';
+import { shouldClearSelection } from '../selection.js';
 
 type Sel = Parameters<typeof shouldClearSelection>[0];
 type Host = Parameters<typeof shouldClearSelection>[1];

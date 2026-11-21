@@ -56,7 +56,7 @@ it('editor.ts 能在浏览器模式里启动并投影出 DOM', async () => {
   `;
 
   // boot() 不 await，import 返回时它还在跑；等投影落地。
-  await import('./editor.ts');
+  await import('../editor.ts');
   await vi.waitFor(() => {
     expect(document.getElementById('doc')!.children.length).toBe(1);
   });

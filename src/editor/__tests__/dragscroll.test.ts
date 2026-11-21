@@ -1,6 +1,6 @@
 // 边缘自动滚动：速度曲线与帧循环，只依赖注入的钩子，不碰真实 DOM，跑 node 环境。
 import { describe, expect, it } from 'vitest';
-import { clampPoint, clampToBox, createDragAutoScroll, edgeSpeed } from './dragscroll.js';
+import { clampPoint, clampToBox, createDragAutoScroll, edgeSpeed } from '../dragscroll.js';
 
 const VIEW = 800;
 

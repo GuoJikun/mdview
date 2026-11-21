@@ -1,6 +1,6 @@
 // 输入法状态机：纯状态逻辑，不碰 DOM，跑 node 环境。
 import { describe, expect, it } from 'vitest';
-import { createIme } from './ime.js';
+import { createIme } from '../ime.js';
 
 /**
  * 最小宿主：记录发出的消息与 preedit 文本。

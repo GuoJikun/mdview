@@ -1,6 +1,6 @@
 // 主题解析：纯函数，不碰 DOM（localStorage 的读写由调用方负责），跑 node 环境。
 import { describe, expect, it } from 'vitest';
-import { modeOf, resolve, toggleNext } from './theme.js';
+import { modeOf, resolve, toggleNext } from '../theme.js';
 
 describe('resolve：偏好与系统主题合成生效主题', () => {
   it('无偏好 + 系统深色 → 深色', () => {

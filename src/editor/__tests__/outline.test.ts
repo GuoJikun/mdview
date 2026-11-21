@@ -1,6 +1,6 @@
 // 大纲联动纯函数：不碰 DOM（锚点坐标由调用方量好传进来），跑 node 环境。
 import { describe, expect, it } from 'vitest';
-import { activeIndex, scrollToAnchor } from './outline.js';
+import { activeIndex, scrollToAnchor } from '../outline.js';
 
 const anchors = [{ top: 0 }, { top: 100 }, { top: 350 }, { top: 900 }];
 
