@@ -432,7 +432,11 @@ fn main() {
             let app = window.app_handle();
             // swap 而不是 load：放行标志是**一次性**的。万一这次关闭后来没成
             // （比如被别的插件拦下），下一次关窗还得重新问，不能永久放开。
-            if app.state::<CloseGuard>().allowed.swap(false, Ordering::SeqCst) {
+            if app
+                .state::<CloseGuard>()
+                .allowed
+                .swap(false, Ordering::SeqCst)
+            {
                 return;
             }
             if !app.state::<Session>().is_dirty() {
@@ -483,24 +487,26 @@ fn main() {
                     let target = session.watch_path();
                     if current.as_ref().map(|(p, _)| p) != target.as_ref() {
                         // 路径变了（打开文件 / 未命名 / 初次启动）：重建或撤掉监听。
-                        current = target.as_ref().and_then(|p| {
-                            match mdview_app::NotifyWatcher::new(p) {
-                                Ok(w) => {
-                                    log::info!("已启动外部修改监听：{}", p.display());
-                                    Some((p.clone(), w))
-                                }
-                                Err(err) => {
-                                    log::warn!("文件监听未启动（不影响编辑）：{err}");
-                                    None
-                                }
-                            }
-                        });
+                        current =
+                            target
+                                .as_ref()
+                                .and_then(|p| match mdview_app::NotifyWatcher::new(p) {
+                                    Ok(w) => {
+                                        log::info!("已启动外部修改监听：{}", p.display());
+                                        Some((p.clone(), w))
+                                    }
+                                    Err(err) => {
+                                        log::warn!("文件监听未启动（不影响编辑）：{err}");
+                                        None
+                                    }
+                                });
                     }
-                    if let Some((path, watcher)) = current.as_mut() {
-                        if !watcher.poll().is_empty() && session.externally_modified() {
-                            log::info!("检测到外部修改：{}", path.display());
-                            let _ = handle.emit("external-change", path.to_string_lossy());
-                        }
+                    if let Some((path, watcher)) = current.as_mut()
+                        && !watcher.poll().is_empty()
+                        && session.externally_modified()
+                    {
+                        log::info!("检测到外部修改：{}", path.display());
+                        let _ = handle.emit("external-change", path.to_string_lossy());
                     }
                     std::thread::sleep(std::time::Duration::from_millis(400));
                 }

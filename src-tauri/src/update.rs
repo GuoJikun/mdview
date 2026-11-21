@@ -154,7 +154,8 @@ pub async fn download_update(app: tauri::AppHandle) -> Result<(), UpdateError> {
     let app_handle = app.clone();
 
     let on_chunk = move |chunk_len: usize, content_length: Option<u64>| {
-        let total = received_chunk.fetch_add(chunk_len as u64, Ordering::Relaxed) + chunk_len as u64;
+        let total =
+            received_chunk.fetch_add(chunk_len as u64, Ordering::Relaxed) + chunk_len as u64;
         let _ = app_handle.emit(
             "update:progress",
             UpdateProgress {

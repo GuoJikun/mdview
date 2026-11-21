@@ -17,7 +17,7 @@
 use std::{fmt::Write as _, ops::Range};
 
 use crate::block::{
-    escape, escape_attr, item_marker, Block, BlockKind, ColumnAlign, ParseResult, SpanKind,
+    Block, BlockKind, ColumnAlign, ParseResult, SpanKind, escape, escape_attr, item_marker,
 };
 use crate::layout::DocumentLayout;
 use crate::project::MarkdownParser;
@@ -143,7 +143,11 @@ fn table_html(
         let (row, col) = grid.locate(stop.byte).or(open_cell).unwrap_or((0, 0));
         if open_row != Some(row) {
             if let Some(prev) = open_row {
-                out.push_str(if grid.rows[prev].head { "</th>" } else { "</td>" });
+                out.push_str(if grid.rows[prev].head {
+                    "</th>"
+                } else {
+                    "</td>"
+                });
                 out.push_str("</tr>");
                 if prev == 0 {
                     out.push_str("</thead><tbody>");
@@ -157,7 +161,11 @@ fn table_html(
         }
         if open_cell != Some((row, col)) {
             if open_cell.is_some() {
-                out.push_str(if grid.rows[row].head { "</th>" } else { "</td>" });
+                out.push_str(if grid.rows[row].head {
+                    "</th>"
+                } else {
+                    "</td>"
+                });
             }
             let table_row = &grid.rows[row];
             let tag = if table_row.head { "th" } else { "td" };
@@ -207,7 +215,11 @@ fn table_html(
     }
 
     if let Some(row) = open_row {
-        out.push_str(if grid.rows[row].head { "</th>" } else { "</td>" });
+        out.push_str(if grid.rows[row].head {
+            "</th>"
+        } else {
+            "</td>"
+        });
         out.push_str("</tr>");
         out.push_str(if row == 0 { "</thead>" } else { "</tbody>" });
     }
@@ -245,12 +257,7 @@ pub fn diff_frames(old: &[BlockFrame], new: &[BlockFrame]) -> Patch {
     }
 }
 
-fn block_html(
-    src: &str,
-    block: &Block,
-    doc: &DocumentLayout,
-    images: ImageMode,
-) -> Option<String> {
+fn block_html(src: &str, block: &Block, doc: &DocumentLayout, images: ImageMode) -> Option<String> {
     let layout = doc.layout(block.id)?;
     let stops = layout.stops();
     if stops.is_empty() {
@@ -490,8 +497,7 @@ fn wrapper(kind: &BlockKind) -> (&'static str, &'static str) {
 mod grid_tests {
     use super::*;
 
-    const TABLE: &str =
-        "| 左 | 中 | 右 |\n| :-- | :-: | --: |\n| a | **b** | c |\n| d | e | f |\n";
+    const TABLE: &str = "| 左 | 中 | 右 |\n| :-- | :-: | --: |\n| a | **b** | c |\n| d | e | f |\n";
 
     #[test]
     fn table_renders_as_grid_with_every_stop() {
@@ -893,7 +899,10 @@ mod tests {
         assert!(html.contains("class=\"atom img\""), "{html}");
         assert!(html.contains("data-asset=\"a.png\""), "{html}");
         assert!(html.contains("title=\"图\""), "{html}");
-        assert!(html.contains("<img alt=\"\" src=\"data:image/gif;base64,"), "{html}");
+        assert!(
+            html.contains("<img alt=\"\" src=\"data:image/gif;base64,"),
+            "{html}"
+        );
         assert!(html.contains(&format!("data-b=\"{}\"", frames[0].base)));
         assert!(html.contains(&format!("data-a=\"{}\"", frames[0].base + 1)));
         // 投影页与文档同目录，可以直接用相对路径装载
@@ -911,7 +920,10 @@ mod tests {
     #[test]
     fn diff_replaces_only_changed_block() {
         // 等长替换：停靠点总数不变，后续块的 data-b 也不变，只该换中间那块
-        let patch = diff_frames(&frames_of("甲\n\n乙\n\n丙\n"), &frames_of("甲\n\n丁\n\n丙\n"));
+        let patch = diff_frames(
+            &frames_of("甲\n\n乙\n\n丙\n"),
+            &frames_of("甲\n\n丁\n\n丙\n"),
+        );
         assert_eq!(patch.replace, 1..2);
         assert!(patch.html.contains("丁"));
         assert_eq!(patch.old_len, 3);
@@ -920,7 +932,10 @@ mod tests {
     #[test]
     fn diff_covers_tail_when_stop_count_changes() {
         // 停靠点总数一变，后面每块的 data-b 都要重编号，只能连尾部一起替换
-        let patch = diff_frames(&frames_of("甲\n\n乙\n\n丙\n"), &frames_of("甲\n\n丁戊\n\n丙\n"));
+        let patch = diff_frames(
+            &frames_of("甲\n\n乙\n\n丙\n"),
+            &frames_of("甲\n\n丁戊\n\n丙\n"),
+        );
         assert_eq!(patch.replace, 1..3);
     }
 

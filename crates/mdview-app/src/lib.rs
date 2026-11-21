@@ -6,7 +6,7 @@
 mod ports;
 mod state;
 
-pub use mdview_support::{logging, init_logging, init_logging_default, AppError, LogConfig};
+pub use mdview_support::{AppError, LogConfig, init_logging, init_logging_default, logging};
 pub use ports::{
     CollectingSink, FileStore, Fingerprint, InMemoryFileStore, NotifyWatcher, RenderFrame,
     RenderSink, StdFileStore, Watcher,

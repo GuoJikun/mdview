@@ -79,7 +79,11 @@ impl Document {
     fn apply_raw(&mut self, span: Range<usize>, insert: &str) -> Result<Transaction, CoreError> {
         let len = self.text.len_chars();
         if span.start > span.end || span.end > len {
-            return Err(CoreError::InvalidRange { start: span.start, end: span.end, len });
+            return Err(CoreError::InvalidRange {
+                start: span.start,
+                end: span.end,
+                len,
+            });
         }
 
         let removed = self.slice(span.clone());

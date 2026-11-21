@@ -177,7 +177,10 @@ impl NotifyWatcher {
     /// 开始监听 `path` 所在目录，只关心 `path` 本身的变化。
     pub fn new(path: &Path) -> Result<Self, AppError> {
         let watched = path.to_path_buf();
-        let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let dir = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let sink = Arc::clone(&events);
         let target = watched.clone();
@@ -218,7 +221,10 @@ impl NotifyWatcher {
 
     /// 构造一个只做去重、不真正监听的监听器，供单元测试验证过滤逻辑。
     #[cfg(test)]
-    fn from_queue(events: VecDeque<PathBuf>, watched: PathBuf) -> (Self, Arc<Mutex<VecDeque<PathBuf>>>) {
+    fn from_queue(
+        events: VecDeque<PathBuf>,
+        watched: PathBuf,
+    ) -> (Self, Arc<Mutex<VecDeque<PathBuf>>>) {
         // 测试里没有真实后端，用一个永不触发的空壳占位；注意不要调用 poll 依赖后端的部分
         let shared = Arc::new(Mutex::new(events));
         (
@@ -269,7 +275,8 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let dir = std::env::temp_dir().join(format!("mdview_{tag}_{nanos}_{}", std::process::id()));
+            let dir =
+                std::env::temp_dir().join(format!("mdview_{tag}_{nanos}_{}", std::process::id()));
             fs::create_dir_all(&dir).unwrap();
             Self(dir)
         }

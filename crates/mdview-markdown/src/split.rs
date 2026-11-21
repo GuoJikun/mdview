@@ -24,10 +24,11 @@ pub fn split_blocks(src: &str) -> Vec<Range<usize>> {
         let marker = fence_marker(line.trim_start().as_bytes());
 
         if let Some((open, len)) = in_fence {
-            if let Some((m, n)) = marker {
-                if m == open && n >= len {
-                    in_fence = None;
-                }
+            if let Some((m, n)) = marker
+                && m == open
+                && n >= len
+            {
+                in_fence = None;
             }
         } else if let Some((m, n)) = marker {
             in_fence = Some((m, n));

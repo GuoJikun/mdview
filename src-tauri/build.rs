@@ -8,7 +8,10 @@ fn main() {
     //
     // build script 的 CWD 是 src-tauri/，Vite 产物在其上一级的 dist/。
     println!("cargo:rerun-if-changed=../dist");
-    println!("cargo:rustc-env=MDVIEW_WEB_STAMP={:016x}", stamp(Path::new("../dist")));
+    println!(
+        "cargo:rustc-env=MDVIEW_WEB_STAMP={:016x}",
+        stamp(Path::new("../dist"))
+    );
     tauri_build::build();
 }
 

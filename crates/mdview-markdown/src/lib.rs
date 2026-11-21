@@ -20,11 +20,11 @@ mod split;
 
 pub use asset::{is_inline_or_remote, mime_for, resolve_local};
 pub use block::{
-    align, Block, BlockId, BlockKind, ColumnAlign, OutlineItem, ParseResult, Span, SpanKind,
-    Style, TableCell, TableGrid, TableRow,
+    Block, BlockId, BlockKind, ColumnAlign, OutlineItem, ParseResult, Span, SpanKind, Style,
+    TableCell, TableGrid, TableRow, align,
 };
 pub use layout::{Caret, DocumentLayout, Gravity, Layout, Selection, Stop};
-pub use preview::{preview_html, BlockFrame, Patch, block_frames, diff_frames};
-pub use project::{parse, MarkdownParser};
+pub use preview::{BlockFrame, Patch, block_frames, diff_frames, preview_html};
+pub use project::{MarkdownParser, parse};
 pub use sourcemap::SourceMap;
 pub use split::split_blocks;

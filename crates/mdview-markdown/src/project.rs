@@ -231,14 +231,15 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
                 // 后半段块的首个事件是 `Item` 而不是 `List`，走 `classify` 会退化成段落，
                 // 序号与项目符号一起消失（用户看到的是「列表变成了普通文字」）。
                 // 这里按「当前打开的 List 容器」判类型，只对首事件是 `Item` 的块生效。
-                let from_item = matches!(tag, Tag::Item).then(|| list_stack.last().copied().unwrap_or(false));
-                if let Some(owner) = owner_of(&ranges, range.start) {
-                    if accs[owner].kind.is_none() {
-                        accs[owner].kind = Some(match from_item {
-                            Some(ordered) => BlockKind::List { ordered },
-                            None => classify(&tag),
-                        });
-                    }
+                let from_item =
+                    matches!(tag, Tag::Item).then(|| list_stack.last().copied().unwrap_or(false));
+                if let Some(owner) = owner_of(&ranges, range.start)
+                    && accs[owner].kind.is_none()
+                {
+                    accs[owner].kind = Some(match from_item {
+                        Some(ordered) => BlockKind::List { ordered },
+                        None => classify(&tag),
+                    });
                 }
                 if let Tag::List(start) = &tag {
                     list_stack.push(start.is_some());
@@ -271,13 +272,13 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
                             }
                         }
                         Tag::TableCell => {
-                            if let Some(t) = accs[owner].table.as_mut() {
-                                if let Some(row) = t.rows.last_mut() {
-                                    row.cells.push(BuildCell {
-                                        byte: range.clone(),
-                                        span_start,
-                                    });
-                                }
+                            if let Some(t) = accs[owner].table.as_mut()
+                                && let Some(row) = t.rows.last_mut()
+                            {
+                                row.cells.push(BuildCell {
+                                    byte: range.clone(),
+                                    span_start,
+                                });
                             }
                         }
                         _ => {}
@@ -308,10 +309,9 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
                 if matches!(
                     tag,
                     TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link
-                ) {
-                    if let Some(owner) = owner_of(&ranges, range.start) {
-                        accs[owner].containers.push(range.clone());
-                    }
+                ) && let Some(owner) = owner_of(&ranges, range.start)
+                {
+                    accs[owner].containers.push(range.clone());
                 }
                 if matches!(tag, TagEnd::List(_)) {
                     list_stack.pop();
@@ -540,7 +540,8 @@ fn close_previous_line(src: &str, ranges: &[Range<usize>], accs: &mut [Acc], sta
     accs[owner].covered.push(nl..nl + 1);
 }
 
-fn code_inner(src: &str, range: &Range<usize>) -> Range<usize> {    let delims = src
+fn code_inner(src: &str, range: &Range<usize>) -> Range<usize> {
+    let delims = src
         .get(range.clone())
         .map(|s| s.bytes().take_while(|b| *b == b'`').count())
         .unwrap_or(0);
@@ -587,10 +588,7 @@ fn classify(tag: &Tag<'_>) -> BlockKind {
 
 fn owner_of(ranges: &[Range<usize>], byte: usize) -> Option<usize> {
     let index = ranges.partition_point(|r| r.end <= byte);
-    ranges
-        .get(index)
-        .filter(|r| r.start <= byte)
-        .map(|_| index)
+    ranges.get(index).filter(|r| r.start <= byte).map(|_| index)
 }
 
 pub(crate) fn merge(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
@@ -656,8 +654,7 @@ mod tests {
             .expect("至少一个块")
     }
 
-    const TABLE: &str =
-        "| 左 | 中 | 右 |\n| :-- | :-: | --: |\n| a | **b** | c |\n| d | e | f |\n";
+    const TABLE: &str = "| 左 | 中 | 右 |\n| :-- | :-: | --: |\n| a | **b** | c |\n| d | e | f |\n";
 
     #[test]
     fn table_is_one_block_with_grid() {
@@ -834,7 +831,10 @@ mod tests {
         assert_eq!(block.spans[0].kind, SpanKind::Image);
         assert_eq!(block.spans[0].text, "图");
         assert_eq!(block.spans[0].style.link.as_deref(), Some("a.png"));
-        assert!(block.hidden.is_empty(), "整段被图片节点覆盖，不应再有隐藏区间");
+        assert!(
+            block.hidden.is_empty(),
+            "整段被图片节点覆盖，不应再有隐藏区间"
+        );
     }
 
     #[test]
@@ -973,7 +973,10 @@ mod tests {
         let src = "- 甲\n- 乙\n\n3. 丙\n4. 丁\n";
         let html = parse(src, MarkdownParser::gfm().options()).to_html(src);
         assert!(html.contains("<ul><li>甲</li><li>乙</li></ul>"), "{html}");
-        assert!(html.contains("<ol start=\"3\"><li>丙</li><li>丁</li></ol>"), "{html}");
+        assert!(
+            html.contains("<ol start=\"3\"><li>丙</li><li>丁</li></ol>"),
+            "{html}"
+        );
     }
 
     #[test]
@@ -1012,7 +1015,10 @@ mod tests {
             assert!(src.is_char_boundary(block.byte.start));
             assert!(src.is_char_boundary(block.byte.end));
             for span in &block.spans {
-                assert!(src.is_char_boundary(span.byte.start), "span 起点不在字符边界");
+                assert!(
+                    src.is_char_boundary(span.byte.start),
+                    "span 起点不在字符边界"
+                );
                 assert!(src.is_char_boundary(span.byte.end), "span 终点不在字符边界");
             }
             for hidden in &block.hidden {

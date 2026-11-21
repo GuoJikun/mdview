@@ -509,7 +509,9 @@ mod tests {
     #[test]
     fn open_file_replaces_state_and_updates_path() {
         let session = session("旧内容");
-        session.dispatch(Wire::InsertText { text: "未保存".into() });
+        session.dispatch(Wire::InsertText {
+            text: "未保存".into(),
+        });
         assert!(session.snapshot().dirty);
 
         let dir = std::env::temp_dir().join(format!("mdview-open-{}", std::process::id()));
@@ -597,9 +599,7 @@ mod tests {
     #[test]
     fn new_file_resets_to_an_untitled_document() {
         let session = session("甲");
-        session.dispatch(Wire::InsertText {
-            text: "乙".into(),
-        });
+        session.dispatch(Wire::InsertText { text: "乙".into() });
         assert!(session.is_dirty(), "输入之后应当是脏的");
 
         let snap = session.new_file();
@@ -626,18 +626,27 @@ mod tests {
         let target_str = target.display().to_string();
 
         let session = session("甲");
-        session.dispatch(Wire::InsertText {
-            text: "乙".into(),
-        });
+        session.dispatch(Wire::InsertText { text: "乙".into() });
         let reply = session.dispatch(Wire::SaveTo {
             path: target_str.clone(),
         });
 
         assert!(reply.saved, "写成功要报 saved");
-        assert_eq!(reply.path.as_deref(), Some(target_str.as_str()), "回包要带新路径");
+        assert_eq!(
+            reply.path.as_deref(),
+            Some(target_str.as_str()),
+            "回包要带新路径"
+        );
         assert!(!reply.dirty);
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "乙甲", "光标在文首，新字插在前面");
-        assert_eq!(session.snapshot().path.as_deref(), Some(target_str.as_str()));
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "乙甲",
+            "光标在文首，新字插在前面"
+        );
+        assert_eq!(
+            session.snapshot().path.as_deref(),
+            Some(target_str.as_str())
+        );
 
         let _ = std::fs::remove_file(&target);
     }
@@ -650,9 +659,7 @@ mod tests {
     #[test]
     fn saving_an_untitled_document_asks_for_a_path() {
         let session = session("甲");
-        session.dispatch(Wire::InsertText {
-            text: "乙".into(),
-        });
+        session.dispatch(Wire::InsertText { text: "乙".into() });
         let reply = session.dispatch(Wire::Save);
         assert!(reply.needs_path, "无路径应要求宿主补一个路径");
         assert!(!reply.saved, "没写盘就不能报已保存");

@@ -7,4 +7,3 @@ license.workspace = true
 
 [dependencies]
 pulldown-cmark = { workspace = true }
-thiserror = { workspace = true }

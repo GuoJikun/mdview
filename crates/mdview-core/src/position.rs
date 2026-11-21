@@ -46,7 +46,10 @@ impl Anchor {
             }
         };
 
-        Self { offset, bias: self.bias }
+        Self {
+            offset,
+            bias: self.bias,
+        }
     }
 }
 
@@ -59,7 +62,10 @@ pub struct Selection {
 impl Selection {
     pub fn caret(offset: usize) -> Self {
         let anchor = Anchor::new(offset, Bias::Right);
-        Self { anchor, head: anchor }
+        Self {
+            anchor,
+            head: anchor,
+        }
     }
 
     pub fn range(&self) -> Range<usize> {

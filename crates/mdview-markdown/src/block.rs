@@ -52,11 +52,15 @@ pub enum SpanKind {
     /// 原子控件：整个 `![alt](url)` 折叠为一个节点，alt 存于 text。
     Image,
     /// 段落内换行。必须保留，隐藏它会让排版塌成一行。
-    Break { hard: bool },
+    Break {
+        hard: bool,
+    },
     /// 分隔线，无文本，渲染为控件。
     Rule,
     /// `[ ]` / `[x]`，无文本，渲染为复选框。
-    TaskMarker { checked: bool },
+    TaskMarker {
+        checked: bool,
+    },
     FootnoteReference,
 }
 
@@ -288,14 +292,7 @@ impl Block {
         let tag = match &self.kind {
             BlockKind::Heading(level) => format!("h{level}"),
             BlockKind::Paragraph => "p".to_owned(),
-            BlockKind::List { ordered } => {
-                if *ordered {
-                    "ol"
-                } else {
-                    "ul"
-                }
-                .to_owned()
-            }
+            BlockKind::List { ordered } => if *ordered { "ol" } else { "ul" }.to_owned(),
             BlockKind::BlockQuote => "blockquote".to_owned(),
             BlockKind::CodeBlock { .. } => "pre".to_owned(),
             BlockKind::Table => "table".to_owned(),
@@ -304,7 +301,9 @@ impl Block {
         };
         // 有序列表从 3 开始时浏览器得知道，否则一律从 1 数起
         let start = match &self.kind {
-            BlockKind::List { ordered: true } => item_number(src, self.byte.start).filter(|n| *n != 1),
+            BlockKind::List { ordered: true } => {
+                item_number(src, self.byte.start).filter(|n| *n != 1)
+            }
             _ => None,
         };
         let open = match start {
@@ -570,13 +569,13 @@ pub fn align(src: &str, text: &str, target: usize) -> usize {
             continue;
         }
         // 实体在源码侧多字节、文本侧一个字符
-        if sc == '&' {
-            if let Some(len) = entity_len(&src[si..]) {
-                si += len;
-                chars.next();
-                ti += 1;
-                continue;
-            }
+        if sc == '&'
+            && let Some(len) = entity_len(&src[si..])
+        {
+            si += len;
+            chars.next();
+            ti += 1;
+            continue;
         }
         si += sc.len_utf8();
         chars.next();
@@ -594,9 +593,7 @@ fn entity_len(s: &str) -> Option<usize> {
         return None;
     }
     let body = &s[1..end];
-    let valid = body
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '#')
+    let valid = body.chars().all(|c| c.is_ascii_alphanumeric() || c == '#')
         && body
             .chars()
             .next()
@@ -636,12 +633,22 @@ mod tests {
         let src = "| 左 | 中 | 右 |\n| :--- | :---: | ---: |\n| a | b | c |\n";
         let parsed = crate::parse(src, crate::MarkdownParser::gfm().options());
         let html = parsed.to_html(src);
-        assert_eq!(html.matches("<table").count(), 1, "表格外壳只应有一层: {html}");
+        assert_eq!(
+            html.matches("<table").count(),
+            1,
+            "表格外壳只应有一层: {html}"
+        );
         assert_eq!(html.matches("</table>").count(), 1);
         assert!(html.contains("border-radius:4px"), "缺 4px 圆角: {html}");
         assert!(html.contains("border:1px solid #d0d7de"), "缺外框: {html}");
-        assert!(html.contains("border-right:1px solid #d0d7de"), "缺内部竖线: {html}");
-        assert!(html.contains("border-bottom:1px solid #d0d7de"), "缺内部横线: {html}");
+        assert!(
+            html.contains("border-right:1px solid #d0d7de"),
+            "缺内部竖线: {html}"
+        );
+        assert!(
+            html.contains("border-bottom:1px solid #d0d7de"),
+            "缺内部横线: {html}"
+        );
         assert_eq!(html.matches("<tr>").count(), 2, "表头 + 一行正文: {html}");
         assert_eq!(html.matches("<th").count(), 3);
         assert_eq!(html.matches("<td").count(), 3);

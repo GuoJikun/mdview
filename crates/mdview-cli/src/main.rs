@@ -108,7 +108,11 @@ fn print_stats(content: &str, parsed: &ParseResult) {
     }
 }
 
-fn kind_table() -> Vec<(&'static str, fn(&BlockKind) -> bool)> {
+/// 统计表里的一个条目：显示名 + 判断某个块是否属于该类的函数。
+/// 写成别名，免得 `Vec<(&str, fn(&BlockKind) -> bool)>` 触发 type_complexity。
+type KindPredicate = fn(&BlockKind) -> bool;
+
+fn kind_table() -> Vec<(&'static str, KindPredicate)> {
     vec![
         ("heading", |k| matches!(k, BlockKind::Heading(_))),
         ("paragraph", |k| matches!(k, BlockKind::Paragraph)),
@@ -206,7 +210,8 @@ fn print_layout(content: &str, parsed: &ParseResult) {
     }
 }
 
-fn annotate(content: &str, block: &Block) -> String {    let mut out = String::new();
+fn annotate(content: &str, block: &Block) -> String {
+    let mut out = String::new();
     let mut cursor = block.byte.start;
     for range in &block.hidden {
         if range.start > cursor {
@@ -235,7 +240,11 @@ fn run_demo() {
     );
     println!(
         "[outline] {:?}",
-        app.parsed.outline.iter().map(|i| &i.title).collect::<Vec<_>>()
+        app.parsed
+            .outline
+            .iter()
+            .map(|i| &i.title)
+            .collect::<Vec<_>>()
     );
 
     let effects = app.update(
@@ -327,15 +336,15 @@ fn run_edit_demo() {
         &mut app,
         &files,
         "点进加粗内部",
-        Message::Click { byte_offset: inside },
+        Message::Click {
+            byte_offset: inside,
+        },
     );
     step(
         &mut app,
         &files,
         "输入「很」",
-        Message::InsertText {
-            text: "很".into(),
-        },
+        Message::InsertText { text: "很".into() },
     );
     step(
         &mut app,
@@ -388,9 +397,8 @@ fn step(app: &mut AppState, files: &InMemoryFileStore, label: &str, msg: Message
     println!("[{label}]");
     println!("   源码 {text:?}");
     println!("   光标 {caret}  停靠点 {}", app.selection.head);
-    if let Some(Effect::Patch { patch, .. }) = effects
-        .iter()
-        .find(|e| matches!(e, Effect::Patch { .. }))
+    if let Some(Effect::Patch { patch, .. }) =
+        effects.iter().find(|e| matches!(e, Effect::Patch { .. }))
     {
         println!(
             "   增量 替换块 {:?} / 共 {} 块，HTML {} 字节",

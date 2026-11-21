@@ -5,7 +5,11 @@ use crate::document::Revision;
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     #[error("invalid char range {start}..{end}, document length is {len}")]
-    InvalidRange { start: usize, end: usize, len: usize },
+    InvalidRange {
+        start: usize,
+        end: usize,
+        len: usize,
+    },
     #[error("empty transaction")]
     NoOp,
 }
@@ -24,7 +28,10 @@ impl Transaction {
     /// 构造逆操作：把插入的内容删掉，把删掉的内容放回。
     pub fn inverse(&self) -> (Range<usize>, String) {
         let inserted_len = self.insert.chars().count();
-        (self.span.start..self.span.start + inserted_len, self.removed.clone())
+        (
+            self.span.start..self.span.start + inserted_len,
+            self.removed.clone(),
+        )
     }
 }
 

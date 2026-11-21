@@ -19,7 +19,7 @@
 
 use std::ops::Range;
 
-use crate::block::{align, Block, BlockId, ParseResult, SpanKind};
+use crate::block::{Block, BlockId, ParseResult, SpanKind, align};
 use crate::sourcemap::SourceMap;
 
 /// 光标可停靠的一个位置。
@@ -230,7 +230,10 @@ impl Layout {
 }
 
 enum Seg<'a> {
-    Visible { byte: Range<usize>, text: &'a str },
+    Visible {
+        byte: Range<usize>,
+        text: &'a str,
+    },
     /// 视觉宽 1，内部不可进入
     Atom(Range<usize>),
     /// 视觉宽 0，被折叠的标记
@@ -572,14 +575,23 @@ mod tests {
         assert_eq!(layout.stop_at_visual(0, Gravity::Upstream), 0);
         assert_eq!(layout.byte(0), Some(2));
         // 列 2 左侧有文字，停在「粗」之后而非闭合标记之后
-        assert_eq!(layout.byte(layout.stop_at_visual(2, Gravity::Upstream)), Some(8));
+        assert_eq!(
+            layout.byte(layout.stop_at_visual(2, Gravity::Upstream)),
+            Some(8)
+        );
     }
 
     #[test]
     fn downstream_gravity_crosses_markers() {
         let layout = first("**加粗**");
-        assert_eq!(layout.byte(layout.stop_at_visual(0, Gravity::Downstream)), Some(2));
-        assert_eq!(layout.byte(layout.stop_at_visual(2, Gravity::Downstream)), Some(10));
+        assert_eq!(
+            layout.byte(layout.stop_at_visual(0, Gravity::Downstream)),
+            Some(2)
+        );
+        assert_eq!(
+            layout.byte(layout.stop_at_visual(2, Gravity::Downstream)),
+            Some(10)
+        );
     }
 
     #[test]
@@ -735,7 +747,10 @@ mod tests {
         // 空文档也保留一个空段落，否则 caret 无处可停
         let (_, doc) = build("");
         assert_eq!(doc.stops(), 1);
-        assert_eq!(Caret::from_byte(&doc, 0).and_then(|c| c.to_byte(&doc)), Some(0));
+        assert_eq!(
+            Caret::from_byte(&doc, 0).and_then(|c| c.to_byte(&doc)),
+            Some(0)
+        );
     }
 
     #[test]

@@ -2201,7 +2201,6 @@ name = "mdview-markdown"
 version = "0.1.0"
 dependencies = [
  "pulldown-cmark",
- "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -18,7 +18,7 @@ use std::{
 };
 
 use log::{Level, LevelFilter, Log, Metadata, Record};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const DEFAULT_MAX_BYTES: u64 = 1024 * 1024;
 pub const DEFAULT_MAX_FILES: usize = 5;
@@ -53,7 +53,10 @@ impl LogConfig {
 
 /// 应用同级目录下的 `logs`。
 pub fn default_log_dir() -> PathBuf {
-    match std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)) {
+    match std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+    {
         Some(dir) => dir.join("logs"),
         None => PathBuf::from("logs"),
     }
@@ -175,7 +178,8 @@ fn format_line(record: &Record<'_>) -> String {
 
 fn timestamp() -> String {
     let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-    now.format(&Rfc3339).unwrap_or_else(|_| "unknown-time".to_owned())
+    now.format(&Rfc3339)
+        .unwrap_or_else(|_| "unknown-time".to_owned())
 }
 
 /// 按大小滚动的单文件写入器。文件名形如 `mdview.log` / `mdview.1.log`。
@@ -189,7 +193,12 @@ struct RotatingWriter {
 }
 
 impl RotatingWriter {
-    fn open(dir: &Path, stem: &'static str, max_bytes: u64, max_files: usize) -> std::io::Result<Self> {
+    fn open(
+        dir: &Path,
+        stem: &'static str,
+        max_bytes: u64,
+        max_files: usize,
+    ) -> std::io::Result<Self> {
         fs::create_dir_all(dir)?;
         let path = dir.join(format!("{stem}.{EXT}"));
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
@@ -264,7 +273,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("mdview-log-{tag}-{}-{nanos}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("mdview-log-{tag}-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -307,7 +317,11 @@ mod tests {
         let logger = FileLogger::new(&config).unwrap();
 
         for i in 0..200 {
-            write(&logger, Level::Info, &format!("第 {i} 条用于触发滚动的填充日志"));
+            write(
+                &logger,
+                Level::Info,
+                &format!("第 {i} 条用于触发滚动的填充日志"),
+            );
         }
 
         // error.log 是空文件，不属于本次滚动统计
@@ -363,7 +377,11 @@ mod tests {
         let logger = FileLogger::new(&LogConfig::new(&dir)).unwrap();
         write(&logger, Level::Warn, "第一行\n第二行");
         let text = fs::read_to_string(dir.join("mdview.log")).unwrap();
-        assert_eq!(text.lines().count(), 1, "多行消息必须压成单行，否则日志解析会错位");
+        assert_eq!(
+            text.lines().count(),
+            1,
+            "多行消息必须压成单行，否则日志解析会错位"
+        );
         assert!(text.contains("第一行\\n第二行"));
         fs::remove_dir_all(&dir).ok();
     }
@@ -380,7 +398,10 @@ mod tests {
             write(&logger, Level::Info, "第二条");
         }
         let text = fs::read_to_string(dir.join("mdview.log")).unwrap();
-        assert!(text.contains("第一条") && text.contains("第二条"), "重启后不能清空历史日志");
+        assert!(
+            text.contains("第一条") && text.contains("第二条"),
+            "重启后不能清空历史日志"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 }
