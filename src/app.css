@@ -372,6 +372,17 @@ html[data-view="reading"] #doc {
   background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px;
   padding: .9em 1em; overflow-x: auto;
 }
+/* 代码块语言标签：挂在 section 上、绝对定位到代码框右上角，用伪元素而不是
+   真实节点，避免混进逐字符停靠点。缩进代码块与裸 ``` 没有 data-lang。 */
+#doc .kind-codeblock[data-lang]::after {
+  content: attr(data-lang);
+  position: absolute; top: .45em; right: .75em;
+  padding: 0 .4em;
+  font: 500 11px/1.5 var(--font-ui);
+  color: var(--faint); background: var(--code-bg);
+  border-radius: 3px;
+  pointer-events: none; user-select: none;
+}
 #doc blockquote {
   margin: 0; padding-left: 1em; border-left: 3px solid var(--quote-border); color: var(--muted);
 }

@@ -86,6 +86,9 @@ fn frontend_unit_suites_pass() {
             "run",
             "--project",
             "unit",
+            // 默认 reporter 在非 TTY 下只打总数，不带文件名；守门断言需要
+            // 每个 suite 的名字都出现在输出里。
+            "--reporter=verbose",
         ],
     );
     assert!(ok, "前端 unit 用例失败：\n{output}");

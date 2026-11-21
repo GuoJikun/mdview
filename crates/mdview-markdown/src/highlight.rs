@@ -73,21 +73,28 @@ enum Lang {
     Plain,
 }
 
+/// 围栏 info 字符串里的语言词。`rust`、`{.python}`、`js,ignore` 都只取第一个词，
+/// 供语法高亮与代码块上的语言标签共用，避免两处各猜一套。
+pub(crate) fn language_word(info: Option<&str>) -> Option<&str> {
+    let info = info?;
+    let word = info
+        .trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .trim()
+        .trim_start_matches('.')
+        .split(|c: char| c.is_whitespace() || c == ',' || c == ';')
+        .next()
+        .unwrap_or("")
+        .trim_matches('.');
+    (!word.is_empty()).then_some(word)
+}
+
 impl Lang {
     fn from_info(info: Option<&str>) -> Self {
-        let Some(info) = info else {
+        let Some(word) = language_word(info) else {
             return Lang::Plain;
         };
-        let word = info
-            .trim()
-            .trim_start_matches('{')
-            .trim_end_matches('}')
-            .trim()
-            .trim_start_matches('.')
-            .split(|c: char| c.is_whitespace() || c == ',' || c == ';')
-            .next()
-            .unwrap_or("")
-            .trim_matches('.');
         match word.to_ascii_lowercase().as_str() {
             "rust" | "rs" => Lang::Rust,
             "js" | "javascript" | "jsx" | "mjs" | "cjs" => Lang::Js,

@@ -19,6 +19,7 @@ use std::{fmt::Write as _, ops::Range};
 use crate::block::{
     Block, BlockKind, ColumnAlign, ParseResult, SpanKind, escape, escape_attr, item_marker,
 };
+use crate::highlight::language_word;
 use crate::layout::DocumentLayout;
 use crate::project::MarkdownParser;
 
@@ -267,9 +268,19 @@ fn block_html(src: &str, block: &Block, doc: &DocumentLayout, images: ImageMode)
     let last = first + stops.len() - 1;
 
     let mut out = String::new();
+    // 语言标签挂在块容器上，由 CSS 伪元素画在右上角；不参与逐字符停靠点。
+    // 围栏后没有语言时（缩进代码块、裸 ```）就不加属性。
+    let lang = match &block.kind {
+        BlockKind::CodeBlock { info } => language_word(info.as_deref()),
+        _ => None,
+    };
+    let lang_attr = match lang {
+        Some(lang) => format!(" data-lang=\"{}\"", escape_attr(lang)),
+        None => String::new(),
+    };
     let _ = write!(
         out,
-        "<section class=\"blk kind-{}\" data-block=\"{}\" data-bb=\"{first}\" data-be=\"{last}\">",
+        "<section class=\"blk kind-{}\" data-block=\"{}\" data-bb=\"{first}\" data-be=\"{last}\"{lang_attr}>",
         block.kind.label(),
         block.id.0
     );
@@ -429,6 +440,19 @@ fn write_segment(
                 return;
             };
             if ch == '\n' {
+                // 代码块末尾的换行只是最后一行收尾，不是空行。它后面紧接着
+                // 闭合围栏与块尾锚点（都是零宽元素），再输出 `<br>` 会把它们
+                // 顶到下一行，代码框底部就多出一行空白。换成零宽标记，
+                // 停靠点与光标位置不变（表格行尾同理）。
+                if is_code_tail_newline(block, stops, index) {
+                    let _ = write!(
+                        out,
+                        "<span class=\"mk\" data-b=\"{global}\" data-byte=\"{}\" \
+                         data-block=\"{block_id}\">&#8203;</span>",
+                        stop.byte
+                    );
+                    return;
+                }
                 let _ = write!(
                     out,
                     "<br class=\"nl\" data-b=\"{global}\" data-byte=\"{}\" data-block=\"{block_id}\">",
@@ -456,6 +480,17 @@ fn write_segment(
             );
         }
     }
+}
+
+/// 代码块末尾的换行：它之后直到块尾锚点之间全是隐藏区间（闭合围栏）。
+///
+/// 中间真正的空行后面还有可见换行，仍会正常输出 `<br>`；只有最后一行的
+/// 收尾换行被折叠成零宽标记，避免代码框底部多出一行空白。
+fn is_code_tail_newline(block: &Block, stops: &[crate::layout::Stop], index: usize) -> bool {
+    matches!(block.kind, BlockKind::CodeBlock { .. })
+        && stops[index + 1..stops.len().saturating_sub(1)]
+            .iter()
+            .all(|stop| block.hidden_at(stop.byte).is_some())
 }
 
 /// 把这一项的**有序标记**（`1.`、`2)`）写进元素的 `data-m` 属性。
@@ -596,6 +631,16 @@ body {
   font-size: .92em; line-height: 1.6; white-space: pre;
   background: #f6f8fa; border: 1px solid #eaecef; border-radius: 6px;
   padding: .9em 1em; overflow-x: auto;
+}
+/* 代码块语言标签：与桌面端 app.css 同一套做法，伪元素不参与停靠点。 */
+#doc .kind-codeblock[data-lang]::after {
+  content: attr(data-lang);
+  position: absolute; top: .45em; right: .75em;
+  padding: 0 .4em;
+  font: 500 11px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: #8b949e; background: #f6f8fa;
+  border-radius: 3px;
+  pointer-events: none; user-select: none;
 }
 #doc blockquote {
   margin: 0; padding-left: 1em; border-left: 3px solid #dfe2e5; color: #57606a;
@@ -897,6 +942,43 @@ mod tests {
         assert!(html.contains("tk-number"), "缺数字着色: {html}");
         // 着色只加 class，不改变停靠点：`let a = 1;` 仍是 10 个逐字符元素
         assert_eq!(html.matches("class=\"ch ").count(), 10);
+    }
+
+    #[test]
+    fn code_block_tail_newline_does_not_add_a_blank_line() {
+        // 末尾换行只收尾最后一行（闭合围栏与 EOB 都在同一行），
+        // 不能再断出一行；源码里真正的空行仍要保留。
+        let one = preview_html("```\n甲\n```");
+        assert_eq!(one.matches("<br class=\"nl\"").count(), 0, "{one}");
+
+        let one_blank = preview_html("```\n甲\n\n```");
+        assert_eq!(
+            one_blank.matches("<br class=\"nl\"").count(),
+            1,
+            "一个空行应只产生一个 <br>: {one_blank}"
+        );
+
+        let two_blanks = preview_html("```\n甲\n\n\n```");
+        assert_eq!(
+            two_blanks.matches("<br class=\"nl\"").count(),
+            2,
+            "两个空行应产生两个 <br>: {two_blanks}"
+        );
+    }
+
+    #[test]
+    fn code_block_shows_its_language() {
+        let rust = preview_html("```rust\nlet a = 1;\n```");
+        assert!(rust.contains("kind-codeblock"), "{rust}");
+        assert!(rust.contains("data-lang=\"rust\""), "{rust}");
+
+        // info 字符串常写成 `{.python}` 或带额外选项，标签只取语言词本身
+        let python = preview_html("```{.python}\nprint(1)\n```");
+        assert!(python.contains("data-lang=\"python\""), "{python}");
+
+        // 裸围栏与缩进代码块没有语言，不该凭空造一个标签
+        let plain = preview_html("```\n纯文本\n```");
+        assert!(!plain.contains("data-lang="), "{plain}");
     }
 
     #[test]
