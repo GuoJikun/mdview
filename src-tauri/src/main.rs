@@ -24,6 +24,7 @@ use mdview_app::Watcher;
 use session::{Reply, Session, Snapshot, Wire};
 use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+use tauri_plugin_window_state::StateFlags;
 
 /// 关窗守卫：`CloseRequested` 里发现未保存改动时拦住，交给前端确认。
 ///
@@ -414,8 +415,23 @@ fn main() {
     }));
 
     builder
-        // 自动记住窗口的位置、尺寸与最大化状态，下次启动恢复。
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // 记住窗口的尺寸、位置、最大化与全屏，下次启动恢复。
+        // 窗口在三份 tauri.*.conf.json 里都是 visible: false，显示交给 setup 里的
+        // show()：插件在窗口创建时就恢复几何，setup 在它之后跑，所以是先摆好再露出来，
+        // 不会先按 conf 的 960×760 闪一下再跳过去。
+        // 只记这四项，不含 DECORATIONS（标题栏形态由 conf 单点决定，插件再覆盖一次
+        // 就成了两个来源，Windows 上会同时长出原生标题栏与自绘标题栏），
+        // 也不含 VISIBLE（可见性由 setup 决定，不让它有机会持久化成 false）。
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    StateFlags::SIZE
+                        | StateFlags::POSITION
+                        | StateFlags::MAXIMIZED
+                        | StateFlags::FULLSCREEN,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         // 更新：清单拉取与签名校验都在 Rust 侧，前端只调自定义命令。
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -463,6 +479,15 @@ fn main() {
             update::install_update
         ])
         .setup(move |app| {
+            // 窗口按 conf 以隐藏状态创建，插件在创建时就恢复了尺寸/位置/最大化，
+            // 这里才让它露面——顺序反了就会看到窗口先小后大地跳一下。
+            // 注意：这一步早于页面加载，所以可能有极短的白底；若将来要消掉，
+            // 改成前端首帧后再 invoke 一个 show 命令即可。
+            if let Some(window) = app.get_webview_window("main") {
+                window.show()?;
+                let _ = window.set_focus();
+            }
+
             // macOS：标题栏用系统装饰，菜单也用原生菜单栏；点击项转发给前端执行。
             #[cfg(target_os = "macos")]
             {
