@@ -20,8 +20,8 @@ mod split;
 
 pub use asset::{is_inline_or_remote, mime_for, resolve_local};
 pub use block::{
-    Block, BlockId, BlockKind, ColumnAlign, OutlineItem, ParseResult, Span, SpanKind, Style,
-    TableCell, TableGrid, TableRow, align,
+    Block, BlockId, BlockKind, ColumnAlign, ListInfo, ListItem, OutlineItem, ParseResult, Span,
+    SpanKind, Style, TableCell, TableGrid, TableRow, align,
 };
 pub use layout::{Caret, DocumentLayout, Gravity, Layout, Selection, Stop};
 pub use preview::{BlockFrame, Patch, block_frames, diff_frames, preview_html};

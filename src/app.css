@@ -359,6 +359,18 @@ html[data-view="reading"] #doc {
 #doc .li[data-m]::before { content: attr(data-m); left: auto; right: calc(100% + .35em); }
 #doc .li:has(.atom.task)::before { content: none; }
 #doc .li:has(.atom.task) { padding-left: .1em; }
+/* 嵌套列表：data-depth 由投影层按 pulldown 的 Item 事件层级写入。
+   每层缩进一个列表单位，并依次换项目符号，缩进结构一目了然。 */
+#doc .li[data-depth="1"] { margin-left: 1.5em; }
+#doc .li[data-depth="2"] { margin-left: 3em; }
+#doc .li[data-depth="3"] { margin-left: 4.5em; }
+#doc .li[data-depth="4"] { margin-left: 6em; }
+#doc .li[data-depth="1"]::before { content: "○"; }
+#doc .li[data-depth="2"]::before { content: "▪"; }
+#doc .li[data-depth="3"]::before { content: "▸"; }
+#doc .li[data-depth="4"]::before { content: "·"; }
+/* 有序子项用自己的源码标记，不要被上面的符号覆盖 */
+#doc .li[data-depth][data-m]::before { content: attr(data-m); left: auto; right: calc(100% + .35em); }
 #doc .sep { display: inline-block; width: .55em; }
 /* 分割线：`---` 折叠成一个原子停靠点，8 个 `─` 只负责占位与光标矩形。
    可见的横线交给伪元素，占满整行；文字本身透明，避免只画出短短一截。 */

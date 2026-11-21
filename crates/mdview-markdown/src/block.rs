@@ -211,6 +211,31 @@ impl TableGrid {
     }
 }
 
+/// 列表项的结构化投影：源码 byte → 嵌套层级。
+///
+/// 一个列表容器会被空行切成多个块，pulldown 的 `Tag::Item` / `Tag::List`
+/// 事件则给出准确的嵌套深度。这里把「第几个可见片段是一个新项的起点、
+/// 它位于第几层」记下来，供渲染层还原缩进——否则三级嵌套会被拍成平级。
+#[derive(Debug, Clone)]
+pub struct ListItem {
+    /// 该项行首标记 byte（= `Tag::Item` 事件的起点）
+    pub byte: usize,
+    /// 嵌套深度，0 = 最外层
+    pub depth: usize,
+    /// 该项所在列表是否有序
+    pub ordered: bool,
+    /// 紧邻该项之前的换行 byte——即把它和上一项分开的那个换行。
+    /// 块首第一项为 None。渲染层据此精确判定「哪个 Break 是项边界」，
+    /// 不会把项内的 Shift+Enter 误当成新项。
+    pub lead_break: Option<usize>,
+}
+
+/// 列表块的结构化投影，与 `table` 一样不参与文本编辑本身。
+#[derive(Debug, Clone, Default)]
+pub struct ListInfo {
+    pub items: Vec<ListItem>,
+}
+
 /// 一个块：完整源码区间 + 可见片段序列 + 折叠掉的标记区间。
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -225,6 +250,8 @@ pub struct Block {
     pub markers: Vec<MarkerPair>,
     /// 表格的结构化投影。只有 `BlockKind::Table` 才有值。
     pub table: Option<TableGrid>,
+    /// 列表项的结构化投影。只有 `BlockKind::List` 才有值。
+    pub list: Option<ListInfo>,
 }
 
 impl Block {
@@ -265,6 +292,23 @@ impl Block {
         self.markers
             .iter()
             .find(|p| p.open.contains(&byte) || p.close.contains(&byte))
+    }
+
+    /// 以该换行 byte 为前导的那一项的深度。精确匹配 `lead_break`——
+    /// 只有真正分隔两项的换行才会命中；项内 Shift+Enter 没有对应的 Item
+    /// 事件、不在任何项的 `lead_break` 里，故返回 None，不会被误切成新项。
+    pub fn list_depth_after(&self, break_byte: usize) -> Option<usize> {
+        self.list
+            .as_ref()?
+            .items
+            .iter()
+            .find(|item| item.lead_break == Some(break_byte))
+            .map(|item| item.depth)
+    }
+
+    /// 本块第一项的深度；用于块首那个没有前置 Break 的项。
+    pub fn first_list_depth(&self) -> Option<usize> {
+        self.list.as_ref()?.items.first().map(|item| item.depth)
     }
 
     /// 落在原子控件（图片、分隔线、任务框）内部时返回该片段。
@@ -370,12 +414,15 @@ impl Block {
         }
         // 列表项之间的换行在本模型里是 Break 片段，`<li>` 边界由它切出来。
         // 不切的话整份列表只有一个 `<li>`，浏览器只肯给一个序号。
+        // 边界判定用投影层的 ListInfo（pulldown 的 Item 事件），不再从源码
+        // 缩进猜——后者把四空格缩进的三级项误判成正文，挤进上一项。
         if is_list {
-            out.push_str("<li>");
+            out.push_str(&list_li_open(self.first_list_depth()));
         }
         for span in &self.spans {
-            if is_list && is_item_boundary(src, span) {
-                out.push_str("</li><li>");
+            if is_list && is_item_boundary(self, span) {
+                out.push_str("</li>");
+                out.push_str(&list_li_open(self.list_depth_after(span.byte.start)));
                 continue;
             }
             self.push_span(&mut out, span);
@@ -527,28 +574,26 @@ pub(crate) fn item_number(src: &str, start: usize) -> Option<u64> {
     marker[..marker.len() - 1].parse().ok()
 }
 
-/// 行首是不是一个列表项（无序 `- ` / 有序 `1. ` 都算）。
-pub(crate) fn line_starts_item(src: &str, start: usize) -> bool {
-    let Some(line) = src.get(start..) else {
-        return false;
-    };
-    let indent = line.len() - line.trim_start_matches(' ').len();
-    if indent > 3 {
-        return false;
-    }
-    let rest = &line[indent..];
-    let mut chars = rest.chars();
-    match chars.next() {
-        Some('-') | Some('*') | Some('+') => matches!(chars.next(), Some(' ') | Some('\t')),
-        _ => item_marker(src, start).is_some(),
-    }
+/// 这个片段是不是「两项之间」：它是个换行，且其后紧随另一个列表项。
+///
+/// 用投影层的 `ListInfo` 判定，而不是从源码缩进猜。旧实现 `line_starts_item`
+/// 把缩进 >3 空格的三级项误判成正文，导致二级、三级挤进同一个 `<li>`。
+fn is_item_boundary(block: &Block, span: &Span) -> bool {
+    matches!(span.kind, SpanKind::Break { .. }) && block.list_depth_after(span.byte.start).is_some()
 }
 
-/// 这个片段是不是「两项之间」：它是个硬换行，且下一行自己又是一个列表项。
-///
-/// 只按「是不是硬换行」判断会把项内的 Shift+Enter 也当成换项。
-fn is_item_boundary(src: &str, span: &Span) -> bool {
-    matches!(span.kind, SpanKind::Break { hard: true }) && line_starts_item(src, span.byte.end)
+/// 阅读视图的 `<li>` 起始标签。带 `data-depth` 供 CSS 缩进，并用 inline
+/// `padding-left` 兜底（阅读视图 HTML 会被塞进不同外壳，未必自带对应 CSS）。
+fn list_li_open(depth: Option<usize>) -> String {
+    let depth = depth.unwrap_or(0);
+    if depth == 0 {
+        "<li>".to_owned()
+    } else {
+        format!(
+            "<li data-depth=\"{depth}\" style=\"margin-left:{}em\">",
+            depth * 2
+        )
+    }
 }
 
 /// 源码区间与投影文本的对齐：返回文本第 `target` 个字符在源码中的字节偏移。

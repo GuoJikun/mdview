@@ -15,8 +15,8 @@ use std::ops::Range;
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::block::{
-    Block, BlockId, BlockKind, ColumnAlign, MarkerPair, OutlineItem, ParseResult, Span, SpanKind,
-    Style, TableCell, TableGrid, TableRow,
+    Block, BlockId, BlockKind, ColumnAlign, ListInfo, ListItem, MarkerPair, OutlineItem,
+    ParseResult, Span, SpanKind, Style, TableCell, TableGrid, TableRow,
 };
 use crate::split::split_blocks;
 
@@ -67,6 +67,8 @@ struct Acc {
     /// 表格构建状态。 pulldown 的表格事件不直接给出「内容区间」，
     /// 必须在单元格结束时用该格累积的可见片段反推。
     table: Option<TableBuild>,
+    /// 该块的列表项（按出现顺序）。Tag::Item 事件给出准确嵌套深度。
+    list_items: Vec<ListItem>,
 }
 
 #[derive(Default)]
@@ -243,6 +245,28 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
                 }
                 if let Tag::List(start) = &tag {
                     list_stack.push(start.is_some());
+                }
+                // 记录该项的嵌套深度。此刻 list_stack 已含它所属的所有 List：
+                // 外层项 len=1 → depth 0，二级项 len=2 → depth 1，依此类推。
+                // Item 事件的 range.start 是该项行首的标记 byte，渲染层据此把
+                // 每个 Break 映射到「它后面的那一项」，从而还原层级。
+                if matches!(tag, Tag::Item)
+                    && let Some(owner) = owner_of(&ranges, range.start)
+                {
+                    // 分隔这一项与上一项的换行：从行首往回找最近的换行，且必须
+                    // 落在本块内。块首第一项找不到 → None。项内的 Shift+Enter
+                    // 不产生 Item 事件，因此绝不会成为任何项的 lead_break。
+                    let block = &ranges[owner];
+                    let lead_break = src
+                        .get(..range.start)
+                        .and_then(|head| head.rfind('\n'))
+                        .filter(|&nl| nl >= block.start && nl < block.end);
+                    accs[owner].list_items.push(ListItem {
+                        byte: range.start,
+                        depth: list_stack.len().saturating_sub(1),
+                        ordered: list_stack.last().copied().unwrap_or(false),
+                        lead_break,
+                    });
                 }
                 // 表格：pulldown 的事件流里表格是一串 Table/TableHead/TableRow/TableCell
                 // 容器事件，单元格区间直接取事件 range（竖线之间的原文，含填充空格）。
@@ -424,6 +448,7 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
             containers,
             kind,
             table,
+            list_items,
         } = acc;
         let byte = ranges[index].clone();
         let kind = kind.unwrap_or_else(|| {
@@ -436,6 +461,9 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
         let hidden = subtract(byte.clone(), &merge(covered));
         let markers = collect_markers(&hidden, &containers, &spans);
         let table = table.map(|build| finish_table(build, &spans));
+        let list = matches!(kind, BlockKind::List { .. })
+            .then(|| ListInfo { items: list_items })
+            .filter(|info| !info.items.is_empty());
         let block = Block {
             id: BlockId(index),
             kind,
@@ -444,6 +472,7 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
             hidden,
             markers,
             table,
+            list,
         };
         let block = if heading_is_bare(src, &block) {
             demote_to_paragraph(src, block)
@@ -507,6 +536,7 @@ fn demote_to_paragraph(src: &str, block: Block) -> Block {
         hidden: Vec::new(),
         markers: Vec::new(),
         table: None,
+        list: None,
     }
 }
 
@@ -977,6 +1007,58 @@ mod tests {
             html.contains("<ol start=\"3\"><li>丙</li><li>丁</li></ol>"),
             "{html}"
         );
+    }
+
+    #[test]
+    fn nested_list_keeps_indent_levels_in_both_views() {
+        // 三级嵌套曾被拍平：阅读视图靠 line_starts_item 猜项边界，四空格
+        // 缩进的三级项被误判成正文、挤进二级的 <li>；投影层也只存了一个
+        // ordered 布尔值，深度信息全丢。现在两级视图都要带出层级。
+        let src = "- 一级\n  - 二级\n    - 三级\n";
+        let parsed = parse(src, MarkdownParser::gfm().options());
+        let block = &parsed.blocks[0];
+
+        // 投影层：三个项，深度 0/1/2
+        let list = block.list.as_ref().expect("列表块应有 ListInfo");
+        assert_eq!(list.items.len(), 3);
+        assert_eq!(
+            list.items.iter().map(|i| i.depth).collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "每项的嵌套深度应来自 pulldown 的 Item 事件"
+        );
+
+        // 阅读视图：三个 li，层级以 data-depth / margin-left 表达
+        let html = parsed.to_html(src);
+        assert_eq!(html.matches("<li").count(), 3, "{html}");
+        assert!(html.contains("data-depth=\"1\""), "{html}");
+        assert!(html.contains("data-depth=\"2\""), "{html}");
+        assert!(html.contains("margin-left:2em"), "{html}");
+        assert!(html.contains("margin-left:4em"), "{html}");
+    }
+
+    #[test]
+    fn nested_list_editor_li_keeps_depth_without_touching_stops() {
+        // 编辑视图的 li 必须带 data-depth，且字符停靠点 data-b/data-a 序列
+        // 与拍平版本完全一致——否则光标定位、选区、点击都会错位。
+        use crate::{DocumentLayout, preview::block_frames};
+
+        let src = "- 一级\n  - 二级\n    - 三级\n";
+        let parsed = parse(src, MarkdownParser::gfm().options());
+        let doc = DocumentLayout::build(src, &parsed);
+        let html = &block_frames(src, &parsed, &doc)[0].html;
+
+        assert_eq!(html.matches("<div class=\"li\"").count(), 3, "{html}");
+        assert!(html.contains("data-depth=\"1\""), "{html}");
+        assert!(html.contains("data-depth=\"2\""), "{html}");
+
+        // 所有 data-b 停靠点编号连续 0..=10（含被折叠标记的 mk 停靠点与块尾），
+        // 与拍平版本完全一致——层级只加在 li 容器上，没碰任何停靠点。
+        let before: Vec<usize> = html
+            .split("data-b=\"")
+            .skip(1)
+            .filter_map(|s| s.split('"').next()?.parse().ok())
+            .collect();
+        assert_eq!(before, (0..=10).collect::<Vec<_>>(), "{html}");
     }
 
     #[test]

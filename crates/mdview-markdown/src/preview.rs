@@ -299,7 +299,8 @@ fn block_html(src: &str, block: &Block, doc: &DocumentLayout, images: ImageMode)
     // 项与项之间的硬换行由下面的 Break 分支负责拆行。
     let is_list = matches!(block.kind, BlockKind::List { .. });
     if is_list {
-        out.push_str("<div class=\"p list\"><div class=\"li\"");
+        out.push_str("<div class=\"p list\">");
+        out.push_str(&li_open(block.first_list_depth()));
         push_item_marker(&mut out, src, block.byte.start);
         out.push('>');
     } else {
@@ -403,7 +404,8 @@ fn write_segment(
             // 其余情况交给 <br>。只标 before，让下一个字符元素承担 after，
             // 光标才不会定位到零高矩形上。
             if matches!(block.kind, BlockKind::List { .. }) {
-                out.push_str("</div><div class=\"li\"");
+                out.push_str("</div>");
+                out.push_str(&li_open(block.list_depth_after(stop.byte)));
                 // 有序项把序号附着在这个新行上：`1. ` 那几个字节是折叠的，
                 // 视图里必须有个东西代替它，否则整份列表都长成圆点。
                 push_item_marker(out, src, stop.byte + 1);
@@ -451,6 +453,16 @@ fn write_segment(
 /// 序号不是用 CSS counter 数出来的，而是逐项从源码读的：用户写下 `3. 甲`，
 /// 视图里就该显示 `3.`——他可能从别处粘来半截列表，也可能就想从 3 开始。
 /// counter 会把它悄悄改成 1，「看到的就是文件里的样子」这条就破了。
+/// 编辑视图的 `<div class="li">` 起始标签。`data-depth` 是层级信号，
+/// CSS 据此缩进并切换项目符号；`data-b/data-a` 仍由后文按原顺序输出，
+/// 光标停靠点一个不变。
+fn li_open(depth: Option<usize>) -> String {
+    match depth {
+        Some(0) | None => "<div class=\"li\"".to_owned(),
+        Some(d) => format!("<div class=\"li\" data-depth=\"{d}\""),
+    }
+}
+
 fn push_item_marker(out: &mut String, src: &str, start: usize) {
     if let Some(marker) = item_marker(src, start) {
         let _ = write!(out, " data-m=\"{}\"", escape(&marker));
@@ -573,6 +585,16 @@ body {
 #doc .li[data-m]::before { content: attr(data-m); left: auto; right: calc(100% + .35em); }
 #doc .li:has(.atom.task)::before { content: none; }
 #doc .li:has(.atom.task) { padding-left: .1em; }
+/* 嵌套列表层级：与桌面端 app.css 保持一致 */
+#doc .li[data-depth="1"] { margin-left: 1.5em; }
+#doc .li[data-depth="2"] { margin-left: 3em; }
+#doc .li[data-depth="3"] { margin-left: 4.5em; }
+#doc .li[data-depth="4"] { margin-left: 6em; }
+#doc .li[data-depth="1"]::before { content: "○"; }
+#doc .li[data-depth="2"]::before { content: "▪"; }
+#doc .li[data-depth="3"]::before { content: "▸"; }
+#doc .li[data-depth="4"]::before { content: "·"; }
+#doc .li[data-depth][data-m]::before { content: attr(data-m); left: auto; right: calc(100% + .35em); }
 #doc .sep { display: inline-block; width: .55em; }
 /* 表格边框与 4px 圆角由最外层 table 承担；内部线只画右/下两边，
    separate + spacing 0 + overflow 才能让圆角裁住内格，又不会叠成 2px。 */
