@@ -2,8 +2,8 @@
 // 由 src-tauri/tests/web_ime.rs 调起，保证不会随代码漂移。
 'use strict';
 
-const assert = require('assert');
-const { createIme } = require('./ime.js');
+import assert from 'node:assert/strict';
+import { createIme } from './ime.js';
 
 function harness(clock) {
   const sent = [];

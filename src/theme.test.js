@@ -1,7 +1,7 @@
 // 主题解析逻辑的 Node 单测。
 'use strict';
 
-const { resolve, toggleNext, modeOf } = require('./theme.js');
+import { resolve, toggleNext, modeOf } from './theme.js';
 
 let passed = 0;
 let failed = 0;

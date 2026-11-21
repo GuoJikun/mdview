@@ -2,8 +2,8 @@
 // 由 src-tauri/tests/web_ime.rs 调起，避免逻辑随代码漂移。
 'use strict';
 
-const assert = require('assert');
-const { shouldClearSelection } = require('./selection.js');
+import assert from 'node:assert/strict';
+import { shouldClearSelection } from './selection.js';
 
 const tests = [];
 function test(name, fn) {

@@ -48,9 +48,4 @@ function legacyCopy(text) {
   return ok;
 }
 
-const clipboardApi = { copyText, legacyCopy };
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = clipboardApi;
-} else {
-  window.copyText = copyText;
-}
+export { copyText, legacyCopy };

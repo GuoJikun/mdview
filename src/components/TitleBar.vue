@@ -42,6 +42,8 @@
 </template>
 
 <script setup lang="ts">
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { onMounted, ref } from 'vue';
 import { state } from '../bridge';
 import { MENU_LABELS, MENU_ORDER, menuState, showMenu, toggleMenu, type MenuKey } from '../menu';
@@ -50,7 +52,14 @@ import { MENU_LABELS, MENU_ORDER, menuState, showMenu, toggleMenu, type MenuKey 
 const LOGO =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAASUlEQVR42mNgGAVQIK+s8Z+eeNQBow4YdQDRDui8+I0iPPQdMJoGRh1w4uwlsvDwccBoGhh1ALUS3dB1wGgaGHXAqAPo5oARCwCme+39B8DaVAAAAABJRU5ErkJggg==';
 
-const appWindow = window.__TAURI__?.window?.getCurrentWindow?.();
+// Tauri 之外（浏览器直接打开 dev server）按原来的可选行为降级。
+const appWindow = (() => {
+  try {
+    return getCurrentWindow();
+  } catch {
+    return null;
+  }
+})();
 const maximized = ref(false);
 
 function onMenuClick(key: MenuKey, event: MouseEvent): void {
@@ -93,6 +102,6 @@ async function syncMaximizeIcon(): Promise<void> {
 
 onMounted(() => {
   syncMaximizeIcon();
-  window.__TAURI__?.event?.listen?.('tauri://resize', syncMaximizeIcon)?.catch?.(() => {});
+  listen('tauri://resize', syncMaximizeIcon).catch(() => {});
 });
 </script>

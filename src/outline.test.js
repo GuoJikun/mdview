@@ -1,7 +1,7 @@
 // 大纲联动纯函数的 Node 单测。cargo test 的 web_ime.rs 守门会跑它。
 'use strict';
 
-const { activeIndex, scrollToAnchor } = require('./outline.js');
+import { activeIndex, scrollToAnchor } from './outline.js';
 
 let passed = 0;
 let failed = 0;

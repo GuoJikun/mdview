@@ -4,11 +4,10 @@
 // 这里的锚点是每个标题块在文档中的实际纵坐标 scrollTop（而不是它在列表里的
 // 序号）。判定当前所在节时，取「最后一个已经越过阅读基准线的标题」。用实际
 // 位置而非百分比，才能在标题疏密不均、末尾留白很大的文档里仍然对得上。
-(function (root) {
-  'use strict';
+'use strict';
 
-  /**
-   * 当前应该高亮哪一个大纲项。
+/**
+ * 当前应该高亮哪一个大纲项。
    *
    * @param {Array<{top:number}>} anchors 每个大纲项的锚点，top 为该标题在
    *        文档坐标系里的纵坐标（element.offsetTop 累加，或 rect.top + scrollY）。
@@ -40,11 +39,4 @@
     return Math.max(0, anchorTop - lineOffset);
   }
 
-  const api = { activeIndex: activeIndex, scrollToAnchor: scrollToAnchor };
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = api;
-  } else {
-    root.outlineActiveIndex = activeIndex;
-    root.outlineScrollToAnchor = scrollToAnchor;
-  }
-})(typeof window !== 'undefined' ? window : this);
+export { activeIndex, scrollToAnchor };

@@ -282,8 +282,8 @@ P0-a 独立成段是因为它和 Vue 无关、纯路径调整，先做能单独�
 7. **Vue 化不改自检断言的 DOM 契约**：迁移时组件模板保留现有 `id`/`class`；确需改断言时，同步改 `editor.ts` 的 `__mdviewSelfTest` 与 `tests/` 下的用例，不允许只改一边。
 8. **`frontendDist` / `build.rs` / workspace members 必须同改**：三者任一遗漏都会出现「跑的是旧产物」「编译期嵌入空目录」或「workspace 解析失败」。P0-a 后用自检和全量测试验证，不要靠肉眼。
 9. **相对路径基准变了**：conf、`build.rs`、守门测试的 CWD/基准目录都从 crate 根变成 `src-tauri/`，所有 `web` 相关路径都要重新核对；`generate_context!()` 和 capabilities 因随 conf 同目录而免疫。
-10. **UMD 脚本必须带 `type="module"` 才会被 Vite 打包**：`index.html` 里那 9 个 `<script src="/src/xxx.js">` 若不写 `type="module"`，Vite 会警告「can't be bundled」并原样输出 `/src/` 路径，而 dist 里没有 `src/` 目录 → 运行时全部 404。加上后 Vite 把它们打进 bundle，ES module 按文档顺序执行，恰好保住 UMD 脚本间的依赖顺序，且模块作用域避免了顶层 `const` 撞名。**P2 迁移某脚本时要同步把它从 index.html 移除**，否则会重复执行。
-11. **`"type": "module"` 与 CommonJS 测试的冲突**：前端根 `package.json` 必须是 `type: module`（Vite 要求），但六套 `*.test.js` 用 `require('assert')`。解法是在 `src/` 下放一个局部 `package.json` 写 `{"type":"commonjs"}`，让 Node 按 CommonJS 跑测试，Vite 不受影响（P0-b 实测：加了之后 `pnpm build` 与守门测试同时通过）。**不要**把测试改成 `.cjs`——那会牵动守门测试里的文件名清单。
+10. **脚本必须带 `type="module"` 才会被 Vite 打包**：早期 `index.html` 里那 9 个 `<script src="/src/xxx.js">` 若不写 `type="module"`，Vite 会警告「can't be bundled」并原样输出 `/src/` 路径，而 dist 里没有 `src/` 目录 → 运行时全部 404。现已收敛为单一入口 `<script type="module" src="/src/main.ts">`，纯逻辑模块由 `app.js` 显式 import，不再依赖脚本标签顺序或 window 全局。
+11. **`"type": "module"` 与 CommonJS 测试的冲突（已解决）**：早期六套 `*.test.js` 用 `require('assert')`，靠 `src/package.json` 里的 `{"type":"commonjs"}` 让 Node 按 CommonJS 跑。现已把七个 `.js` 模块与六套测试全部改成 ES Module，局部 `src/package.json` 已删除，Node 直接继承根 `package.json` 的 `type: module`；文件名保持不变，守门测试里的清单无需改动。
 12. **`dist/` 不入库，直接 `cargo build` 会失败**：`generate_context!()` 编译期读 `dist/index.html`，新 clone 或清理后它是空的。任何 `cargo` 直跑前先 `pnpm build`；`tauri dev/build` 有 before 命令兜底。`cargo test --workspace` 也会编译 desktop bin，所以首次跑测试前同样要先 build 前端。
 
 ---

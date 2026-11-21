@@ -10,9 +10,8 @@
 // 本模块刻意不碰 DOM：选区从参数进来，Node 能直接测（`node selection.test.js`）。
 'use strict';
 
-(function (root) {
-  /**
-   * @param {{rangeCount: number, isCollapsed: boolean, anchorNode: Node|null}|null} sel
+/**
+ * @param {{rangeCount: number, isCollapsed: boolean, anchorNode: Node|null}|null} sel
    *   `document.getSelection()` 的返回值
    * @param {{contains: (node: Node) => boolean}|null} host 透明输入框
    * @returns {boolean} 需要清空吗
@@ -26,10 +25,4 @@
     return true;
   }
 
-  const api = { shouldClearSelection: shouldClearSelection };
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = api;
-  } else {
-    root.shouldClearSelection = shouldClearSelection;
-  }
-})(typeof window !== 'undefined' ? window : this);
+export { shouldClearSelection };

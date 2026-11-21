@@ -2,8 +2,8 @@
 // 由 src-tauri/tests/web_ime.rs 调起，避免逻辑随代码漂移。
 'use strict';
 
-const assert = require('assert');
-const { createLineMotion, sameLine, scrollDelta } = require('./caretline.js');
+import assert from 'node:assert/strict';
+import { createLineMotion, sameLine, scrollDelta } from './caretline.js';
 
 /**
  * 用矩形数组描述版面：一行 = 一批同 top 的停靠点。

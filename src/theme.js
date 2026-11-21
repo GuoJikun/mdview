@@ -1,9 +1,8 @@
 // 主题切换。默认跟随系统 prefers-color-scheme，用户手动切一次后记住选择
 // （localStorage），并可用「跟随系统」清除覆盖。纯逻辑，Node 可直接测。
-(function (root) {
-  'use strict';
+'use strict';
 
-  const STORAGE_KEY = 'mdview-theme';
+const STORAGE_KEY = 'mdview-theme';
 
   /** 从系统偏好取默认主题：深色返回 'dark'，否则 'light'。 */
   function systemTheme() {
@@ -100,14 +99,14 @@
     return resolve(readStore(), systemTheme());
   }
 
-  const api = {
-    systemTheme: systemTheme, resolve: resolve, toggleNext: toggleNext,
-    modeOf: modeOf, mode: mode, set: set,
-    init: init, toggle: toggle, followSystem: followSystem,
-  };
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = api;
-  } else {
-    root.mdviewTheme = api;
-  }
-})(typeof window !== 'undefined' ? window : this);
+export {
+  systemTheme,
+  resolve,
+  toggleNext,
+  modeOf,
+  mode,
+  set,
+  init,
+  toggle,
+  followSystem,
+};

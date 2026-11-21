@@ -11,8 +11,7 @@
 // 本模块刻意不碰 DOM：矩形由 hooks 提供，因此 Node 能直接测（`node caretline.test.js`）。
 'use strict';
 
-(function (root) {
-  /** 纵向重叠超过较矮者的一半，才算同一视觉行。 */
+/** 纵向重叠超过较矮者的一半，才算同一视觉行。 */
   const SAME_LINE_RATIO = 0.5;
   /** 距离在这个像素范围内视为并列，此时优先选文字停靠点而非标记停靠点。 */
   const TIE_EPSILON = 0.5;
@@ -202,12 +201,4 @@
     };
   }
 
-  const api = { createLineMotion: createLineMotion, sameLine: sameLine, scrollDelta: scrollDelta };
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = api;
-  } else {
-    root.createLineMotion = createLineMotion;
-    root.sameLine = sameLine;
-    root.scrollDelta = scrollDelta;
-  }
-})(typeof window !== 'undefined' ? window : this);
+export { createLineMotion, sameLine, scrollDelta };

@@ -2,8 +2,8 @@
 // 由 src-tauri/tests/web_ime.rs 调起，避免逻辑随代码漂移。
 'use strict';
 
-const assert = require('assert');
-const { edgeSpeed, clampPoint, clampToBox, createDragAutoScroll } = require('./dragscroll.js');
+import assert from 'node:assert/strict';
+import { edgeSpeed, clampPoint, clampToBox, createDragAutoScroll } from './dragscroll.js';
 
 const VIEW = 800;
 

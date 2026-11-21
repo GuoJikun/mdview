@@ -1,9 +1,17 @@
 // 前端只做两件事：把「停靠点」映射成像素，把用户操作翻译成消息。
 // 文本真值与解析结果都在 Rust 侧，这里不留任何文档状态。
-'use strict';
-
-const { invoke } = window.__TAURI__.core;
-const listen = window.__TAURI__.event?.listen;
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { createLineMotion, scrollDelta } from './caretline.js';
+import { copyText } from './clipboard.js';
+import { clampToBox, createDragAutoScroll, edgeSpeed } from './dragscroll.js';
+import { createIme } from './ime.js';
+import {
+  activeIndex as outlineActiveIndex,
+  scrollToAnchor as outlineScrollToAnchor,
+} from './outline.js';
+import { shouldClearSelection } from './selection.js';
+import * as mdviewTheme from './theme.js';
 
 const docEl = document.getElementById('doc');
 const caretEl = document.getElementById('caret');
@@ -373,7 +381,7 @@ function pushShellState() {
     revision: meta.revision,
     inTable: inTable(),
     mode: window.__mdviewMode,
-    themeMode: window.mdviewTheme ? window.mdviewTheme.mode() : 'system',
+    themeMode: mdviewTheme.mode(),
     theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
     outline,
     activeOutlineIdx,

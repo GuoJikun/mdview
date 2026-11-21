@@ -11,8 +11,7 @@
 // 因此 Node 能直接测（`node dragscroll.test.js`）。
 'use strict';
 
-(function (root) {
-  /** 距离视口上下沿多少像素内开始自动滚动。 */
+/** 距离视口上下沿多少像素内开始自动滚动。 */
   const DEFAULT_MARGIN = 48;
   /** 每帧最多滚多少像素。60fps 下约 1440px/s，比手动拖快一档，但不会失控。 */
   const DEFAULT_MAX_SPEED = 24;
@@ -143,20 +142,11 @@
     };
   }
 
-  const api = {
-    edgeSpeed: edgeSpeed,
-    clampPoint: clampPoint,
-    clampToBox: clampToBox,
-    createDragAutoScroll: createDragAutoScroll,
-    DEFAULT_MARGIN: DEFAULT_MARGIN,
-    DEFAULT_MAX_SPEED: DEFAULT_MAX_SPEED,
-  };
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = api;
-  } else {
-    root.edgeSpeed = edgeSpeed;
-    root.clampPoint = clampPoint;
-    root.clampToBox = clampToBox;
-    root.createDragAutoScroll = createDragAutoScroll;
-  }
-})(typeof window !== 'undefined' ? window : this);
+export {
+  edgeSpeed,
+  clampPoint,
+  clampToBox,
+  createDragAutoScroll,
+  DEFAULT_MARGIN,
+  DEFAULT_MAX_SPEED,
+};

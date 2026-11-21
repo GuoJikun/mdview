@@ -3,6 +3,7 @@
 // 只传「状态快照」和「动作名」：状态由现有逻辑推上来（app.js / bridge.setTitle），
 // 动作由 Vue 组件发回去（复用 window.__mdviewRunAction），两侧都不碰对方的 DOM。
 // 文档内容、DOM 节点、编辑器坐标一概不过桥。
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { nextTick, reactive, readonly } from 'vue';
 
 export interface OutlineItem {
@@ -57,19 +58,6 @@ declare global {
     __mdviewNextTick?: () => Promise<void>;
     __mdviewMode?: ViewMode;
     mdviewTheme?: { mode?: () => string };
-    __TAURI__?: {
-      core?: { invoke?: (cmd: string, args?: unknown) => Promise<unknown> };
-      event?: { listen?: (event: string, handler: (...args: unknown[]) => void) => Promise<() => void> };
-      window?: {
-        getCurrentWindow?: () => {
-          minimize: () => void;
-          toggleMaximize: () => void;
-          close: () => void;
-          isMaximized: () => Promise<boolean>;
-          setTitle: (title: string) => Promise<void>;
-        };
-      };
-    };
   }
 }
 
@@ -126,7 +114,12 @@ export function dispatch(action: string): void {
 }
 
 function tauriWindow() {
-  return window.__TAURI__?.window?.getCurrentWindow?.();
+  // 直接用浏览器打开 dev server 时没有 Tauri 内部对象，保持原来的可选行为。
+  try {
+    return getCurrentWindow();
+  } catch {
+    return null;
+  }
 }
 
 /**

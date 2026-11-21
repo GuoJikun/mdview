@@ -10,8 +10,7 @@
 // 3. 组合结束一次性提交，整段文本在文档里只占一步撤销。
 'use strict';
 
-(function (root) {
-  /**
+/**
    * @param {{
    *   send: (message: object) => void,
    *   setPreedit: (text: string) => void,
@@ -92,9 +91,4 @@
     };
   }
 
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { createIme: createIme };
-  } else {
-    root.createIme = createIme;
-  }
-})(typeof window !== 'undefined' ? window : this);
+export { createIme };
