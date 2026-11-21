@@ -77,7 +77,7 @@ crates/
 ```
 
 前端工程根 = 仓库根：`src/`（Vite + Vue 3 + TypeScript）、`index.html`、`dist/`（构建产物，不入库）。
-`src/app.js` 是编辑内核投影层；七个纯逻辑模块（`ime/caretline/selection/dragscroll/clipboard/outline/theme`）保持 `.js` 原样；
+`src/editor/editor.ts` 是编辑内核投影层；七个纯逻辑模块（`ime/caretline/selection/dragscroll/clipboard/outline/theme`）保持 `.js` 原样，与它同放 `src/editor/`；
 外壳（标题栏 / 菜单 / 状态栏 / toast）由 `src/components/*.vue` 渲染，经 `src/bridge.ts` 与内核单向通信。
 大纲与正文区是 Vue 覆盖层上的「洞」，不进任何组件模板。
 
@@ -132,7 +132,7 @@ byte   0  2  5  8  10
 - ✅ `Revision` 单调递增
 - ✅ **原子保存**（2026-11-20 修复）：`StdFileStore::save` 改为「同目录临时文件 → `atomic_replace`」。Windows 走 `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`（extern 直连 kernel32，零新依赖），Unix 走 POSIX `rename`。两者都是内核级单步替换，彻底消除旧实现 `remove_file → rename` 之间目标文件消失的窗口期；失败时清理临时文件且不掩盖原错误。4 项单测覆盖覆盖/新建/无残留/指纹变化
 - ✅ 外部冲突检测：mtime + size 指纹比对（`Fingerprint`）
-- ✅ **Watcher 实现**（2026-11-20）：`NotifyWatcher`（notify 8）监听父目录而非单文件——编辑器保存常走「写临时文件 → rename 覆盖」，watch 单文件会在 rename 瞬间丢监听目标。回调过滤 Modify/Create/Remove（忽略 Access），`poll()` 取走并去重。后台线程 400ms 轮询，命中后用 `AppState::externally_modified` 指纹比对**挡掉自己保存产生的事件**，再 emit `external-change`；前端 `app.js` 监听后 toast 提示（不自动重载，避免冲掉未保存编辑）。自检模式不开监听。端到端测试 + 去重单测各 1 项
+- ✅ **Watcher 实现**（2026-11-20）：`NotifyWatcher`（notify 8）监听父目录而非单文件——编辑器保存常走「写临时文件 → rename 覆盖」，watch 单文件会在 rename 瞬间丢监听目标。回调过滤 Modify/Create/Remove（忽略 Access），`poll()` 取走并去重。后台线程 400ms 轮询，命中后用 `AppState::externally_modified` 指纹比对**挡掉自己保存产生的事件**，再 emit `external-change`；前端 `src/editor/editor.ts` 监听后 toast 提示（不自动重载，避免冲掉未保存编辑）。自检模式不开监听。端到端测试 + 去重单测各 1 项
 
 ### M2 只读渲染 ✅
 - ✅ 投影模型：`Block` / `Span` / `hidden`，HTML 合成（`to_html()`）
@@ -151,7 +151,7 @@ byte   0  2  5  8  10
 - ✅ **同步滚动（锚点插值）**（2026-11-20）：滚动正文时按 `activeIndex(锚点, 阅读基准线)` 高亮当前节，侧栏自动把高亮项滚进视野；resize / 编辑后重测锚点。纯函数 `outline.js` 可在 Node 下测，判定依据是标题块真实纵坐标而非序号均分
 - ✅ **跨平台标题栏与菜单**（2026-11-20）：
   - Windows/Linux 用 `src-tauri/tauri.windows.conf.json` / `tauri.linux.conf.json` 关掉原生装饰（数组整体替换，须重复完整 window 配置），标题栏由 `TitleBar.vue` + `MenuPopup.vue` 自绘 VSCode 风格：文件/编辑/选择/视图/转到/帮助六个下拉菜单 + 居中文件名标题 + 最小化/最大化/关闭。`data-tauri-drag-region="deep"` 负责拖拽，按钮不参与拖拽
-  - macOS 保留原生标题栏；`main.rs` 用 `#[cfg(target_os = "macos")]` 构建系统菜单栏，自定义项以 `menu-action` 事件 emit 给前端，和自绘菜单共用 `app.js` 的 `runAction`。原生项不设 accelerator，避免和 `keydown` 重复触发（撤销这类非幂等动作尤其危险）
+  - macOS 保留原生标题栏；`main.rs` 用 `#[cfg(target_os = "macos")]` 构建系统菜单栏，自定义项以 `menu-action` 事件 emit 给前端，和自绘菜单共用 `editor.ts` 的 `runAction`。原生项不设 accelerator，避免和 `keydown` 重复触发（撤销这类非幂等动作尤其危险）
   - capability 补 `core:window:allow-{minimize,toggle-maximize,is-maximized,close,start-dragging,set-title}`；`use_custom_titlebar` 命令让前端以 Rust 配置为唯一判据（UA 只用于首帧抢跑）
   - 验证：`cargo test -p mdview-desktop` 17 项通过，端到端自检 47/47，真实窗口截图确认菜单/标题/窗口按钮与正文让位均正常
   - **滚动条修正**：原生滚动条属于窗口视口，纵跨整窗会插进标题栏、压住状态栏。改为自绘（现位于 `src/scrollbars.ts`）：`html.custom-titlebar` 隐藏原生滚动条，`#vscroll` 的 top/bottom 按标题栏与状态栏实际高度定位，滑块跟随 `window.scrollY` 并支持拖拽/点轨道；滚动本身仍是 window 的，caret / 大纲 / 拖拽自动滚动的视口坐标逻辑一行未改。截图验证滑块严格落在两栏之间
@@ -221,11 +221,11 @@ byte   0  2  5  8  10
 - ✅ **Vite + Vue 3 + TypeScript**：端口 1450、`outDir=dist`、`emptyOutDir`；`pnpm build` 同时跑 `vue-tsc --noEmit`
 - ✅ **`bridge.ts` 状态桥**：只读快照 + `set/notify/dispatch`；主题经 `MutationObserver` 跟随 `<html data-theme>`，不侵入 `theme.js`；`setTitle` / `nextTick` / `close-window` 收进桥
 - ✅ **外壳逐组件迁移**（每步单独提交，自检断言零改动）：
-  - `StatusBar.vue` 用 `<Teleport to="#bar">` 接管状态栏内容，`app.js` 不再拼 `innerHTML`
+  - `StatusBar.vue` 用 `<Teleport to="#bar">` 接管状态栏内容，`editor.ts` 不再拼 `innerHTML`
   - `Toast.vue` 接管 `#toast`，显隐与计时统一由 `bridge.notify` 管
   - `TitleBar.vue` + `MenuPopup.vue` + `menu.ts` 接管标题、菜单、窗口按钮、拖拽区与最大化图标；滚动条抽到 `scrollbars.ts`；删除 `titlebar.js`
 - ✅ **单入口**：`index.html` 只留 `<script type="module" src="/src/main.ts">`，九个旧脚本按序在 `main.ts` 里 `import`；首帧 UA 判定挪到 `platform.ts`，满足 CSP（不再需要内联脚本）
-- ✅ **红线保持**：`app.js` 的投影/光标/坐标内核与七个纯逻辑模块零逻辑改动；大纲与正文仍是覆盖层上的洞
+- ✅ **红线保持**：`editor.ts` 的投影/光标/坐标内核与七个纯逻辑模块零逻辑改动；大纲与正文仍是覆盖层上的洞
 - 验证：`pnpm build` 通过、`cargo test --workspace` **204 项全绿**、端到端自检 **OK 61/61**
 
 ---
@@ -361,21 +361,21 @@ node src/dragscroll.test.js # 边缘自动滚动几何单测（cargo test 已含
 | **编辑闭环**（输入 → 事务 → 光标回填 → patch）+ **表格跨格 / 行列增删** | `crates/mdview-app/src/state.rs` |
 | 端口（FileStore 原子写 / RenderSink / **NotifyWatcher**） | `crates/mdview-app/src/ports.rs` |
 | 外部修改监听线程 + `external-change` emit | `src-tauri/src/main.rs`（setup 钩子） |
-| 外部修改提示（前端 listen + toast） | `src/app.js`（boot） |
+| 外部修改提示（前端 listen + toast） | `src/editor/editor.ts`（boot） |
 | 日志滚动 | `crates/mdview-support/src/logging.rs` |
 | 命令行入口（含 `demo edit` 回放） | `crates/mdview-cli/src/main.rs` |
 | **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包、大纲下发、**表格操作**） | `src-tauri/src/session.rs` |
-| **表格交互**（Tab 跨格、状态栏行列工具条、自检 6 项） | `src/app.js`、`app.css` |
-| **大纲侧栏**（锚点判定 + 跳转，不碰 DOM，Node 可测） | `src/outline.js`、`outline.test.js`、`app.js`（侧栏渲染/联动） |
-| **主题系统**（跟随系统 + 手动切换 + localStorage，不碰 DOM，Node 可测） | `src/theme.js`、`theme.test.js`、`app.css`（CSS 变量） |
-| **编辑页**（停靠点 → 像素、按键 → 消息、增量应用、自检入口） | `src/app.js` |
-| **输入法状态机**（不碰 DOM，Node 可测） | `src/ime.js`、`ime.test.js` |
-| **上下移动几何**（视觉行判定 + 期望列，不碰 DOM，Node 可测） | `src/caretline.js`、`caretline.test.js` |
-| **视口与原生选区**（滚多少才露头、哪些原生选区该清，不碰 DOM） | `src/caretline.js`（`scrollDelta`）、`selection.js`、`selection.test.js` |
-| **拖选时的边缘自动滚动**（速度曲线、探针点压缩、自走帧循环，不碰 DOM） | `src/dragscroll.js`、`dragscroll.test.js` |
+| **表格交互**（Tab 跨格、状态栏行列工具条、自检 6 项） | `src/editor/editor.ts`、`app.css` |
+| **大纲侧栏**（锚点判定 + 跳转，不碰 DOM，Node 可测） | `src/editor/outline.js`、`outline.test.js`、`editor.ts`（侧栏渲染/联动） |
+| **主题系统**（跟随系统 + 手动切换 + localStorage，不碰 DOM，Node 可测） | `src/editor/theme.js`、`theme.test.js`、`app.css`（CSS 变量） |
+| **编辑页**（停靠点 → 像素、按键 → 消息、增量应用、自检入口） | `src/editor/editor.ts` |
+| **输入法状态机**（不碰 DOM，Node 可测） | `src/editor/ime.js`、`ime.test.js` |
+| **上下移动几何**（视觉行判定 + 期望列，不碰 DOM，Node 可测） | `src/editor/caretline.js`、`caretline.test.js` |
+| **视口与原生选区**（滚多少才露头、哪些原生选区该清，不碰 DOM） | `src/editor/caretline.js`（`scrollDelta`）、`selection.js`、`selection.test.js` |
+| **拖选时的边缘自动滚动**（速度曲线、探针点压缩、自走帧循环，不碰 DOM） | `src/editor/dragscroll.js`、`dragscroll.test.js` |
 | 自检样张（必须是「一块一行」的文档） | `src-tauri/tests/fixtures/selftest.md` |
-| **剪贴板写入**（内核给文本、前端写系统剪贴板，`execCommand` 兜底） | `src/clipboard.js` |
-| **键位契约**（`Ctrl+A/C/X` → `selectAll`/`copy`/`cut`，见 `app.js` 的 keydown） | `src/app.js`、`src-tauri/src/session.rs` |
+| **剪贴板写入**（内核给文本、前端写系统剪贴板，`execCommand` 兜底） | `src/editor/clipboard.js` |
+| **键位契约**（`Ctrl+A/C/X` → `selectAll`/`copy`/`cut`，见 `editor.ts` 的 keydown） | `src/editor/editor.ts`、`src-tauri/src/session.rs` |
 | 前端守门测试（语法检查 + 跑六套 Node 用例） | `src-tauri/tests/web_ime.rs` |
 | **Vue 外壳入口**（挂载、单入口 import、UA 首帧判定、平台复核） | `src/main.ts`、`src/platform.ts` |
 | **状态桥**（只读快照 / `set` / `notify` / `dispatch` / `setTitle` / `nextTick`） | `src/bridge.ts` |

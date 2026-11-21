@@ -1,6 +1,6 @@
 // 前端外壳与编辑内核之间唯一的窄桥。
 //
-// 只传「状态快照」和「动作名」：状态由现有逻辑推上来（app.js / bridge.setTitle），
+// 只传「状态快照」和「动作名」：状态由现有逻辑推上来（editor/editor.ts / bridge.setTitle），
 // 动作由 Vue 组件发回去（复用 window.__mdviewRunAction），两侧都不碰对方的 DOM。
 // 文档内容、DOM 节点、编辑器坐标一概不过桥。
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -124,7 +124,7 @@ function tauriWindow() {
 
 /**
  * 标题栏文案：文件名 + 脏标记 + 应用名，与 VSCode 的写法一致。
- * app.js 仍通过 window.__mdviewSetTitle 调用，签名不变。
+ * editor.ts 仍通过 window.__mdviewSetTitle 调用，签名不变。
  */
 export function setTitle(path: string | null, dirty: boolean): void {
   const name = path ? String(path).split(/[\\/]/).pop() : '未命名';

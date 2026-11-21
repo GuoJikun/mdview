@@ -1,7 +1,7 @@
-// Vue 入口。外壳组件全部挂在这里；编辑内核仍由 app.js 驱动。
+// Vue 入口。外壳组件全部挂在这里；编辑内核仍由 editor/editor.ts 驱动。
 //
 // 所有前端脚本都从这一处引入，index.html 只留一个入口。纯逻辑模块已是 ES Module，
-// 由 app.js 显式 import，不再依赖挂 window 全局或副作用 import 的顺序。
+// 由 editor.ts 显式 import，不再依赖挂 window 全局或副作用 import 的顺序。
 import './platform';
 import { invoke } from '@tauri-apps/api/core';
 import { createApp, nextTick } from 'vue';
@@ -13,8 +13,8 @@ import './bridge';
 // 自绘滚动条从原 titlebar.js 抽出；它惰性读取 Vue 渲染的标题栏/状态栏。
 import './scrollbars';
 
-// 编辑内核（原 app.js）最后引入：boot() 在模块求值时启动，依赖由它自己 import。
-import './app.js';
+// 编辑内核（`editor/editor.ts`）最后引入：boot() 在模块求值时启动，依赖由它自己 import。
+import './editor/editor';
 
 createApp(App).mount('#vue-app');
 

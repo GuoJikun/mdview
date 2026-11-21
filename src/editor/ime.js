@@ -1,7 +1,7 @@
 // 输入法组合状态机。
 //
 // 刻意不碰 DOM：所有副作用都通过 hooks 注入，因此可以用 Node 直接跑测试
-// （`node ime.test.js`）。app.js 只负责把 DOM 事件喂进来。
+// （`node ime.test.js`）。editor.ts 只负责把 DOM 事件喂进来。
 //
 // 三条规则：
 // 1. 组合期间只发一条 compositionStart，其余全部挂起——内核此时不得重绘，

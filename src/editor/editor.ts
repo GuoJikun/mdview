@@ -1,5 +1,12 @@
-// 前端只做两件事：把「停靠点」映射成像素，把用户操作翻译成消息。
+// 编辑内核：把「停靠点」映射成像素，把用户操作翻译成消息。
 // 文本真值与解析结果都在 Rust 侧，这里不留任何文档状态。
+//
+// @ts-nocheck —— 本文件由 app.js 原样改名而来（PLAN-VUE 里一直写作 editor.ts，
+// 这次把代码与文档对齐）。它此前不在 tsconfig 的 include 里，也就从未被类型
+// 检查过；改名后为了让「行为零变化」这一条先落地，先显式豁免，避免用一次性
+// 的大规模类型改写混进这次纯结构重构。
+// 待办：补齐 IPC 契约类型（Reply / Patch / Caret / 停靠点）后再摘掉这一行。
+// 当前守门靠 `--self-test` 的 61 项不变量 + `editor/*.test.js` 六套用例。
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { createLineMotion, scrollDelta } from './caretline.js';
@@ -714,7 +721,8 @@ window.addEventListener('keydown', (event) => {
       break;
   }
 
-  // 可打印字符。中文输入走输入法或粘贴，见 README 里的说明
+  // 可打印字符。中文输入走输入法的 composition 事件（见上面 ime 段），
+  // 或直接粘贴，两条路都不经过这里；这里只补 ASCII 单字符的 keydown
   if (event.key.length === 1 && !event.altKey) {
     event.preventDefault();
     send({ kind: 'insertText', text: event.key });

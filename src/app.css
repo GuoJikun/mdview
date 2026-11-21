@@ -356,7 +356,7 @@ html.custom-titlebar #outline::-webkit-scrollbar { width: 0; height: 0; display:
 #doc .atom.img.loaded img { display: block; }
 #doc .atom.task { color: var(--muted); }
 #doc .sel { background: var(--sel); border-radius: 2px; }
-/* 原生选区不上色：选区只由自绘 .sel 表达（见 app.js 的 selectionchange）。
+/* 原生选区不上色：选区只由自绘 .sel 表达（见 src/editor/editor.ts 的 selectionchange）。
    留着这条兜底，是怕清理晚一帧时用户看到两套高亮叠在一起。 */
 #doc ::selection { background: transparent; }
 #caret {

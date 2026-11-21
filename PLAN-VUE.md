@@ -20,7 +20,7 @@
 
 下面这些是项目最难、回归高发的核心逻辑，**一行都不迁、一行都不改**：
 
-- `app.js` → `editor.ts` 的 `#doc` 投影、`reindex`、`applyPatch`、光标定位、点击/拖选落点、`revealCaret`、视口坐标（**本次未改名，仍为 `app.js`，逻辑零改动**）
+- `app.js` → `editor.ts` 的 `#doc` 投影、`reindex`、`applyPatch`、光标定位、点击/拖选落点、`revealCaret`、视口坐标（**P3.5 已改名为 `src/editor/editor.ts`，逻辑零改动，先带 `@ts-nocheck`**）
 - `ime.js` / `caretline.js` / `selection.js` / `dragscroll.js` / `clipboard.js` / `outline.js` / `theme.js` 七个纯逻辑模块及其六套 Node 用例（只挪目录、改名文件路径）
 - Rust 侧 `session.rs` 的 IPC 契约、`main.rs` 的窗口与菜单逻辑（只挪目录、改注释）
 
@@ -87,7 +87,7 @@
 | Vue 放到现有实现上层、对应区域穿透 | 暴露镜像问题 | 同一份状态两套 DOM（现有 `#bar` 与 Vue 状态栏、现有 `#tb-title` 与 Vue 标题），同步机制别扭 |
 | **只穿透大纲和正文（留洞）** | **最终采纳** | Vue 根本不画这两处 → 无镜像；window 滚动不变 → 坐标零改动；外壳由 Vue 真正接管 |
 
-**必须记住的判据**：`pointer-events:none` 只解决「鼠标命中谁」，不改变「谁在滚动」。app.js 那套坐标能否不动，唯一取决于 `window.scrollY` 是否仍有效。留洞方案里 `#doc` 留在文档流、滚动归 window，所以有效。
+**必须记住的判据**：`pointer-events:none` 只解决「鼠标命中谁」，不改变「谁在滚动」。`editor.ts` 那套坐标能否不动，唯一取决于 `window.scrollY` 是否仍有效。留洞方案里 `#doc` 留在文档流、滚动归 window，所以有效。
 
 ### 2.3 双层重叠的代价与 P0 规避
 
@@ -124,9 +124,10 @@ Vue 画的标题栏/状态栏/toast 与现有同名 DOM 会**短暂共存**（�
 │  ├─ menu.ts                           六档菜单树 + 展开状态
 │  ├─ scrollbars.ts                     正文/大纲自绘滚动条（原 titlebar.js 抽出）
 │  ├─ vue-overlay.css                   覆盖层穿透与外壳 pointer-events
-│  ├─ app.js                            编辑内核投影层（红线；本次不改名 editor.ts）
-│  └─ ime.js / caretline.js / selection.js / dragscroll.js / clipboard.js
-│     outline.js / theme.js + 六套 *.test.js   ← 七个纯逻辑模块原样保留
+│  └─ editor/                           ← 编辑内核，与外壳分家（详见 P3.5）
+│     ├─ editor.ts                      停靠点 → 像素、按键 → 消息、增量应用、自检入口
+│     └─ ime.js / caretline.js / selection.js / dragscroll.js / clipboard.js
+│        outline.js / theme.js + 六套 *.test.js   ← 七个纯逻辑模块原样保留
 ├─ dist/                                ← Vite 产物（gitignore）；frontendDist 指向它
 ├─ src-tauri/                           ← Rust crate（原 crates/mdview-desktop 内容整体挪入）
 │  ├─ Cargo.toml / build.rs
@@ -192,8 +193,8 @@ CSP 保持 `default-src 'self'`，**不要**为 Vue 开 `unsafe-eval`：走 runt
 | `src-tauri/tauri.conf.json` | `frontendDist: "./web"` → `../web` | `../web` → `../dist`，并补 dev 命令 | conf 相对自身目录解析；P0-a 阶段 `web/index.html` 就是产物 |
 | `src-tauri/tests/web_ime.rs` | `join("web")` → `join("../web")` | `../web` → `../src` | 守门测试 CWD 变成 `src-tauri/`；语法检查清单里的文件名不变 |
 | `.gitignore` | `crates/mdview-desktop/gen` → `crates/mdview-desktop/src-tauri/gen` | 不变 | `node_modules` 忽略规则不变（仍在前端根） |
-| `src/main.rs` | `web/app.js` → `web/index.html` | `web/index.html` → `src/editor.js`；`web/ 里的内容变了` → `dist/ 里的内容变了` | 仅注释，`generate_context!()` 调用不变（它读同目录 conf） |
-| `src/session.rs` | 注释 `与 web/app.js 里发的一致` 保持（文件仍在 `web/`） | → `与 src/editor.js 里发的一致` | 仅注释，契约字面量不变 |
+| `src/main.rs` | `web/app.js` → `web/index.html` | `web/index.html` → `src/editor/editor.ts`；`web/ 里的内容变了` → `dist/ 里的内容变了` | 仅注释，`generate_context!()` 调用不变（它读同目录 conf） |
+| `src/session.rs` | 注释 `与 web/app.js 里发的一致` 保持（文件仍在 `web/`） | → `与 src/editor/editor.ts 里发的一致` | 仅注释，契约字面量不变 |
 | **`crates/mdview-app/src/state.rs`** | `table_ops_on_selftest_fixture` 里的 `read_to_string("../mdview-desktop/tests/fixtures/selftest.md")` → 插入 `src-tauri/` | 不变 | **易漏**：跨 crate 读样张的测试，不在 desktop crate 内，grep `tests/fixtures` 才会发现 |
 | 自检命令 | 参数路径 → `.../src-tauri/tests/fixtures/selftest.md` | 不变 | 见第 8 节；主 `PLAN.md` 里的旧路径本次不改 |
 
@@ -227,12 +228,12 @@ reactive store 字段：`meta.title / stats.blocks / stats.lines / dirty / theme
 | 现有写入点 | 加一句 |
 |---|---|
 | `setTitle`（原 `titlebar.js`，P2-3 已收进 `bridge.ts`） | `bridge.set({ path, dirty, title })` |
-| `app.js` 的 `renderStatus` | `bridge.set({ blocks, stop, column, revision, inTable })` |
-| `app.js` 的 `runAction` / 主题切换 / 大纲联动 | `bridge.set(...)` |
+| `app.js` 的 `renderStatus`（现 `editor/editor.ts`） | `bridge.set({ blocks, stop, column, revision, inTable })` |
+| `app.js` 的 `runAction` / 主题切换 / 大纲联动（现 `editor/editor.ts`） | `bridge.set(...)` |
 
 Vue 组件只读 store，反向不写。
 
-> P1 落地说明（2026-11-20）：写入点仍在 `app.js`（尚未改名 `editor.ts`），统一由
+> P1 落地说明（2026-11-20）：写入点仍在 `app.js`（P3.5 已改名 `src/editor/editor.ts`），统一由
 > `pushShellState()` 推一份快照；标题由 `bridge.setTitle` 推（P2-3 从 `titlebar.js` 收进）。store 的
 > 字段按现有状态栏实际需要建模：`path / title / dirty / blocks / stop / column /
 > revision / inTable / themeMode / theme / mode / outline / activeOutlineIdx / toast`
@@ -247,7 +248,7 @@ Vue 侧的菜单项、状态栏按钮点击后：`emit('action', name)` → `bri
 
 ### 5.3 全局钩子保留
 
-`window.__mdviewSelfTest` / `__mdviewRunAction` / `__mdviewSetTitle` / `__mdviewRefreshScrollbar` 继续挂在 `window` 上（`app.js` / `bridge.ts` / `scrollbars.ts`），Rust 侧 `window.eval` 和自检断言不用动。菜单迁移后自检需要 `await window.__mdviewNextTick()`（由 bridge 暴露 Vue 的 `nextTick`）。
+`window.__mdviewSelfTest` / `__mdviewRunAction` / `__mdviewSetTitle` / `__mdviewRefreshScrollbar` 继续挂在 `window` 上（`editor/editor.ts` / `bridge.ts` / `scrollbars.ts`），Rust 侧 `window.eval` 和自检断言不用动。菜单迁移后自检需要 `await window.__mdviewNextTick()`（由 bridge 暴露 Vue 的 `nextTick`）。
 
 ### 5.4 几何对齐
 
@@ -266,6 +267,7 @@ Vue 侧的菜单项、状态栏按钮点击后：`emit('action', name)` → `bri
 | **P1** | ✅ | Vue 组件挂载但仍是空壳/只读展示；把 5.1 的状态写入点与 5.2 的动作桥接铺好 | 自检全绿；鼠标穿透、拖拽区、滚动条均无回归 |
 | **P2** | ✅ | 逐组件迁移，每组件单独提交：`StatusBar` → `Toast` → `TitleBar`/`MenuPopup` | 每步自检全绿；模板复刻现有 `id`/`class`，让断言零改动 |
 | **P3** | ✅ | 删旧脚本引用；`web_ime.rs` 守门清单改造（Vue 侧交 `vue-tsc --noEmit`）；CSP 复核；更新主 `PLAN.md` 与本文件 | 全量测试 + 自检 + 真机截图三对齐 |
+| **P3.5** | ✅ | 编辑内核收敛：`src/app.js` → `src/editor/editor.ts`，七个纯逻辑模块与六套用例一起挪进 `src/editor/`，守门清单同步（含 `cwd`） | `vue-tsc` + `pnpm build` 绿；`cargo test --workspace` 204 项；自检 61/61 |
 
 P0-a 独立成段是因为它和 Vue 无关、纯路径调整，先做能单独验证，避免把目录问题和前端问题混在一起排查。P0-b 再一次性完成 Vite 就位与路径切换。`MenuPopup` 在 P2 放最后：它有键盘导航、子菜单 `pointerenter`、打开瞬间求值勾选态三个易碎交互，且自检覆盖最多。
 
@@ -282,7 +284,7 @@ P0-a 独立成段是因为它和 Vue 无关、纯路径调整，先做能单独�
 7. **Vue 化不改自检断言的 DOM 契约**：迁移时组件模板保留现有 `id`/`class`；确需改断言时，同步改 `editor.ts` 的 `__mdviewSelfTest` 与 `tests/` 下的用例，不允许只改一边。
 8. **`frontendDist` / `build.rs` / workspace members 必须同改**：三者任一遗漏都会出现「跑的是旧产物」「编译期嵌入空目录」或「workspace 解析失败」。P0-a 后用自检和全量测试验证，不要靠肉眼。
 9. **相对路径基准变了**：conf、`build.rs`、守门测试的 CWD/基准目录都从 crate 根变成 `src-tauri/`，所有 `web` 相关路径都要重新核对；`generate_context!()` 和 capabilities 因随 conf 同目录而免疫。
-10. **脚本必须带 `type="module"` 才会被 Vite 打包**：早期 `index.html` 里那 9 个 `<script src="/src/xxx.js">` 若不写 `type="module"`，Vite 会警告「can't be bundled」并原样输出 `/src/` 路径，而 dist 里没有 `src/` 目录 → 运行时全部 404。现已收敛为单一入口 `<script type="module" src="/src/main.ts">`，纯逻辑模块由 `app.js` 显式 import，不再依赖脚本标签顺序或 window 全局。
+10. **脚本必须带 `type="module"` 才会被 Vite 打包**：早期 `index.html` 里那 9 个 `<script src="/src/xxx.js">` 若不写 `type="module"`，Vite 会警告「can't be bundled」并原样输出 `/src/` 路径，而 dist 里没有 `src/` 目录 → 运行时全部 404。现已收敛为单一入口 `<script type="module" src="/src/main.ts">`，纯逻辑模块由 `editor/editor.ts` 显式 import，不再依赖脚本标签顺序或 window 全局。
 11. **`"type": "module"` 与 CommonJS 测试的冲突（已解决）**：早期六套 `*.test.js` 用 `require('assert')`，靠 `src/package.json` 里的 `{"type":"commonjs"}` 让 Node 按 CommonJS 跑。现已把七个 `.js` 模块与六套测试全部改成 ES Module，局部 `src/package.json` 已删除，Node 直接继承根 `package.json` 的 `type: module`；文件名保持不变，守门测试里的清单无需改动。
 12. **`dist/` 不入库，直接 `cargo build` 会失败**：`generate_context!()` 编译期读 `dist/index.html`，新 clone 或清理后它是空的。任何 `cargo` 直跑前先 `pnpm build`；`tauri dev/build` 有 before 命令兜底。`cargo test --workspace` 也会编译 desktop bin，所以首次跑测试前同样要先 build 前端。
 
@@ -337,3 +339,4 @@ pnpm tauri dev -- -- tests/fixtures/selftest.md
 | 2026-11-20 | **P2-3 完成（TitleBar + MenuPopup）**：新增 `menu.ts`（菜单树 + 展开状态）与 `MenuPopup.vue`（子菜单 / 勾选态 / 键盘导航 / 定位）；`TitleBar.vue` 接管标题、窗口按钮、拖拽区与最大化图标；`titlebar.js` 的滚动条抽成 `scrollbars.ts`，`setTitle` 与 `close-window` 收进 bridge；删除 `src/titlebar.js` 并同步守门清单。自检里点菜单后补 `await nextTick()`。验证：`pnpm build` 通过、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |
 | 2026-11-20 | **P3 完成（单入口 + 文档收尾）**：`index.html` 只留 `<script type="module" src="/src/main.ts">`，九个旧脚本按序在 `main.ts` 里 `import`；首帧 UA 判定挪到 `platform.ts`，删除 `<head>` 内联脚本以符合 CSP；守门清单与注释早已随 P2-3 更新；主 `PLAN.md` 的结构、路径、测试数、命令与文件地图同步到 Vue 工程；真实窗口截图复核标题栏/菜单/状态栏/滚动条与正文让位。验证：`pnpm build` 通过、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |
 | 2026-11-20 | **合并**：`ui-vue-p1` 快进并入 `ui-vue`（`2062d3c`），主仓库工作树同步更新 |
+| 2026-11-21 | **P3.5 完成（内核收敛）**：`src/app.js` → `src/editor/editor.ts`，与文档里一直写的 `editor.ts` 对齐；七个纯逻辑模块与六套用例同移入 `src/editor/`，`src/` 根只剩入口（`main.ts`/`index.html`）与外壳（`bridge.ts`/`menu.ts`/`platform.ts`/`scrollbars.ts`/`components/`）；`web_ime.rs` 的 `cwd` 改为 `../src/editor` 并从语法清单移除 `app.js`。改名后 `editor.ts` 首次进入 `tsconfig` 范围，暴露出 297 处隐式 `any`/可空错误——本次先加 `@ts-nocheck` 并写明待办（类型补齐另开一轮，避免混进纯结构重构）。同步修掉三处指向不存在文件的注释（`main.rs` / `session.rs` 的 `src/editor.ts`、`editor.ts` 里的 README、`StatusBar.vue` 里的 `titlebar.js`）。验证：`vue-tsc` 干净、`pnpm build` 通过、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |

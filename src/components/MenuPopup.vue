@@ -1,6 +1,6 @@
 <template>
   <!-- 菜单弹层：DOM 契约与原 titlebar.js 一致（#tb-menu-popup / .tb-sep / .tb-submenu），
-       动作统一经 bridge.dispatch 回到 app.js 的 runAction。 -->
+       动作统一经 bridge.dispatch 回到 editor.ts 的 runAction。 -->
   <div
     id="tb-menu-popup"
     ref="popupEl"
@@ -115,7 +115,7 @@ function onKeydown(event: KeyboardEvent): void {
   if (!menuState.open) return;
   const NAV = ['Escape', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter'];
   if (NAV.indexOf(event.key) < 0) return;
-  // 菜单开着时这些键归菜单：不能让 app.js 的 window 监听器同时挪动光标
+  // 菜单开着时这些键归菜单：不能让 editor.ts 的 window 监听器同时挪动光标
   event.preventDefault();
   event.stopPropagation();
   if (event.key === 'Escape') closeMenu();

@@ -5,7 +5,7 @@
 //!
 //! 用法：`mdview-desktop [file.md] [--self-test]`
 //!
-//! `--self-test` 会在页面接管后跑一遍输入法自检（见前端 `src/editor.ts` 里的
+//! `--self-test` 会在页面接管后跑一遍输入法自检（见前端 `src/editor/editor.ts` 里的
 //! `__mdviewSelfTest`），把结果写进日志并按成败退出。它是唯一能不靠肉眼
 //! 确认「composition 事件真的接上了内核」的手段。
 
@@ -170,7 +170,7 @@ fn menu_action(id: &str) -> Option<&'static str> {
     })
 }
 
-/// macOS 的系统菜单栏。故意不给自定义项设 accelerator：快捷键由 app.js 的
+/// macOS 的系统菜单栏。故意不给自定义项设 accelerator：快捷键由 editor.ts 的
 /// keydown 统一处理，两边都设会让「撤销」这类非幂等动作执行两次。
 #[cfg(target_os = "macos")]
 fn build_native_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {

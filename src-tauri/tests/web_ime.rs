@@ -1,10 +1,14 @@
 //! 前端脚本的守门测试。
 //!
-//! 这一层没有 Rust 代码可测，但 `src/` 里的纯逻辑不该靠肉眼验证：
+//! 这一层没有 Rust 代码可测，但 `src/editor/` 里的纯逻辑不该靠肉眼验证：
 //! `ime.js`（输入法状态机）、`caretline.js`（上下移动与滚动的几何）、
 //! `selection.js`（原生选区判据）与 `dragscroll.js`（拖动时的边缘自动滚动）
 //! 都刻意不碰 DOM，因此可以直接用 Node 跑。
-//! 这里做两件事——语法检查所有前端脚本，再把几套用例跑一遍。
+//! 这里做两件事——语法检查这些脚本，再把几套用例跑一遍。
+//!
+//! 编辑内核 `editor.ts` 与 `src/` 下的外壳（`bridge.ts` / `menu.ts` / `*.vue`）
+//! 是 TypeScript，`node --check` 读不了，改由 `vue-tsc --noEmit` 守门；
+//! 那道门在 `pnpm build` 里，这里不重复跑（cargo test 不该依赖 node_modules）。
 //!
 //! 浏览器行为本身（滚轮、真实选区）在这里测不了：合成事件不触发默认行为，
 //! 那部分只能靠 `--self-test` 的不变量与真人验收。
@@ -14,9 +18,9 @@
 use std::{path::PathBuf, process::Command};
 
 fn web_dir() -> PathBuf {
-    // 测试二进制的 manifest 目录是 src-tauri/，前端源码在其上一级的 src/。
-    // 六个纯逻辑模块保持 .js，Node 可直接跑；Vite 产物在 dist/，两边互不干扰。
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src")
+    // 测试二进制的 manifest 目录是 src-tauri/，编辑内核在其上一级的 src/editor/。
+    // 七个纯逻辑模块保持 .js，Node 可直接跑；Vite 产物在 dist/，两边互不干扰。
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/editor")
 }
 
 fn node_ready() -> bool {
@@ -45,7 +49,6 @@ fn frontend_scripts_are_syntactically_valid() {
         return;
     }
     for script in [
-        "app.js",
         "ime.js",
         "ime.test.js",
         "caretline.js",

@@ -1,7 +1,7 @@
 <template>
   <!-- 状态栏内容由 Vue 渲染，但宿主仍是 index.html 里的 #bar：
-       这样 titlebar.js 的 edges() 与自检里的 barEl 引用都不用改。
-       点击委托仍在 app.js 的 #bar 监听器上，动作逻辑零重写。 -->
+       这样 scrollbars.ts 的 edges() 与自检里的 barEl 引用都不用改。
+       点击委托仍在 editor.ts 的 #bar 监听器上，动作逻辑零重写。 -->
   <Teleport to="#bar">
     <span>块 <b>{{ blockText }}</b></span>
     <span>停靠点 <b>{{ dash(state.stop) }}</b></span>
