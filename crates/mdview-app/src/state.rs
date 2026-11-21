@@ -37,6 +37,11 @@ pub enum Message {
         span: Range<usize>,
         insert: String,
     },
+    /// 源码视图整篇替换：textarea 里的就是 Markdown 源文本本身，整篇写回内核。
+    /// 与 `Edit` 一样是一次事务（进撤销栈），但替换区间恒为整篇、光标落在文末。
+    ReplaceSource {
+        text: String,
+    },
     /// 键盘或输入法提交的一段文本。有选区时替换选区。
     InsertText {
         text: String,
@@ -279,6 +284,10 @@ impl AppState {
         let is_undo = matches!(&msg, Message::Undo);
         match msg {
             Message::Edit { span, insert } => self.apply(span, &insert),
+            Message::ReplaceSource { text } => {
+                let len = self.document.len_chars();
+                self.apply(0..len, &text)
+            }
             Message::InsertText { text } => self.insert_text(&text),
             Message::Backspace => self.delete_backward(),
             Message::DeleteForward => self.delete_forward(),

@@ -32,6 +32,8 @@ export type Wire =
   | { kind: 'selectAll' }
   | { kind: 'copy' }
   | { kind: 'cut' }
+  /** 源码视图整篇替换：text 是原始 Markdown，不是渲染后的 HTML。 */
+  | { kind: 'replaceSource'; text: string }
   | { kind: 'setMode'; mode: string }
   | { kind: 'tableMoveCell'; delta: number }
   | { kind: 'tableInsertRow'; after: boolean }
@@ -98,6 +100,8 @@ export interface Reply {
   /** 回包时的文档路径；另存为成功后前端据此更新标题栏。 */
   path?: string | null;
   outline?: OutlineDto[] | null;
+  /** 内核里的 Markdown 源文本真值，供源码视图同步（不覆盖正在编辑的 textarea）。 */
+  source?: string | null;
 }
 
 /** `snapshot` / `open_file` 的返回：整篇文档的一次全量投影。 */
@@ -110,6 +114,8 @@ export interface Snapshot {
   caret: CaretDto | null;
   selection: [number, number] | null;
   outline: OutlineDto[];
+  /** Markdown 源文本真值。源码视图显示这一份，不是渲染后的 HTML。 */
+  source: string;
 }
 
 /** 「停靠点 → 像素」的测量结果。`el` 供 preedit 复制字体、判定表格用。 */

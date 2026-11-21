@@ -11,12 +11,18 @@
 <!-- 自绘纵向滚动条：浏览器原生滚动条纵跨整窗，会压住标题栏和状态栏。
      正文与大纲各一套，共用 .tb-vscroll 的视觉与拖动逻辑 -->
 <div id="vscroll" class="tb-vscroll" aria-hidden="true"><div id="vscroll-thumb" class="tb-vscroll-thumb"></div></div>
+<!-- 横向滚动条：源码视图长行不换行时才有内容可滚，纵向/横向共用同一套视觉 -->
+<div id="hscroll" class="tb-hscroll" aria-hidden="true"><div id="hscroll-thumb" class="tb-hscroll-thumb"></div></div>
 
 <!-- 大纲侧栏：标题清单，点击跳正文，滚动时高亮当前节 -->
 <nav id="outline" aria-label="文档大纲"></nav>
 <div id="outline-scroll" class="tb-vscroll" aria-hidden="true"><div id="outline-scroll-thumb" class="tb-vscroll-thumb"></div></div>
 <!-- 内核持有文本真值，这里只有投影：每块一个 <section>，每个停靠点一个元素 -->
 <div id="doc" tabindex="-1" spellcheck="false"></div>
+<!-- 源码视图：直接显示与编辑 Markdown 源文本真值（不是渲染后的 HTML）。
+     平时隐藏，只有 window.__mdviewMode === 'source' 时由 data-view 切换显示。 -->
+<textarea id="source" spellcheck="false" autocomplete="off" autocapitalize="off"
+          autocorrect="off" aria-label="Markdown 源码"></textarea>
 <div id="caret"></div>
 <!-- preedit 镜像层：组合期间唯一可见的输入反馈，位置贴着 caret -->
 <div id="preedit"></div>

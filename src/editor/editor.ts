@@ -35,6 +35,7 @@ import * as mdviewTheme from './theme.js';
 // 这几个节点在 index.html 里是写死的骨架，缺任何一个后续都会立刻炸。
 // 断言只影响类型，不改运行时行为（真拿不到时，仍是首次调用处的 TypeError）。
 const docEl = document.getElementById('doc') as HTMLElement;
+const sourceEl = document.getElementById('source') as HTMLTextAreaElement;
 const caretEl = document.getElementById('caret') as HTMLElement;
 const preeditEl = document.getElementById('preedit') as HTMLElement;
 const imeEl = document.getElementById('ime') as HTMLTextAreaElement;
@@ -56,9 +57,12 @@ let maxStop = -1;                                   // 最大停靠点序号，�
 let caret: CaretDto | null = null;                  // 最近一次内核回报的光标
 let pendingStop: number | null = null;              // 已发出、尚未回包的垂直移动落点
 let meta: Meta = { revision: 0, dirty: false, path: null, stops: 0 };
-// 当前视图模式：内核快照不带这个字段，前端记住菜单点选的结果供自绘菜单画单选圆点。
-// 与内核默认值（wysiwyg）一致；macOS 原生菜单切模式也走 runAction，会同步更新。
+// 当前视图模式。它不只画菜单圆点，还真正驱动 <html data-view> 切 DOM：
+// wysiwyg 显示富文本投影；reading 只读；source 显示并编辑 Markdown 源文本。
+// 与内核默认值一致；macOS 原生菜单切模式也走 runAction，会同步更新。
 window.__mdviewMode = 'wysiwyg';
+let sourceText = '';                        // 内核下发的 Markdown 源文本真值（不是 HTML）
+let sourceSyncTimer = 0;                    // textarea → 内核的整篇同步去抖
 let dragging = false;
 let dragPoint: Point | null = null;  // 拖动期间指针的视口坐标（自动滚动要按它反复求落点）
 let dragStop: number | null = null;  // 拖动中已发出的落点，避免同一落点每帧都过一趟 IPC
@@ -98,6 +102,53 @@ function reindex() {
     if (after > maxStop) maxStop = after;
     marks.push(el);
   }
+}
+
+/**
+ * 当前模式该把焦点放到哪个输入元素。源码视图用 textarea 自己编辑，
+ * 其余模式仍靠透明的 #ime 承接输入法。统一收口，避免各调用点写死 imeEl。
+ */
+function focusActiveEditor(): void {
+  const target = window.__mdviewMode === 'source' ? sourceEl : imeEl;
+  if (document.activeElement !== target) target.focus({ preventScroll: true });
+}
+
+/**
+ * 比较 textarea 的值与内核源文本是否等价。
+ *
+ * textarea.value 会把 CRLF 规范化成 LF（HTML 规范），而内核 read_to_string
+ * 原样保留文件的 \r\n。直接 === 比较会让 CRLF 文档在「只是切了个视图」
+ * 时被误判成用户编辑，发出 replaceSource 把全文换行改写并置脏。
+ * 比较时统一归一成 LF；写回内核的文本也用 textarea 的值（本就是 LF）。
+ */
+const lf = (s: string) => s.replace(/\r\n/g, '\n');
+const sameSource = (a: string, b: string) => lf(a) === lf(b);
+
+/** textarea 里的内容还没同步给内核时，立即整篇写回（切视图 / 保存前调用）。 */
+function flushSource(): void {
+  if (window.clearTimeout) window.clearTimeout(sourceSyncTimer);
+  sourceSyncTimer = 0;
+  if (window.__mdviewMode !== 'source') return;
+  if (sameSource(sourceEl.value, sourceText)) return;
+  sourceText = sourceEl.value;
+  send({ kind: 'replaceSource', text: sourceText });
+}
+
+/**
+ * 应用视图模式：写 <html data-view> 让 CSS 真正切换显示的 DOM 层。
+ * source 额外把 sourceText 灌进 textarea 并聚焦它，其它模式把焦点还给 #ime。
+ */
+function applyViewMode(mode: 'wysiwyg' | 'reading' | 'source'): void {
+  if (mode === 'source') {
+    // 进入源码视图：把内核的源文本真值灌进 textarea（离开时的未同步编辑
+    // 由调用方的 flushSource() 先入队，回包会把 sourceText 刷新成最新）
+    sourceEl.value = sourceText;
+  }
+  window.__mdviewMode = mode;
+  document.documentElement.dataset.view = mode;
+  focusActiveEditor();
+  pushShellState();
+  if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
 }
 
 function renderAll(blocks: BlockDto[]) {
@@ -451,12 +502,28 @@ function requestSavePath() {
     .finally(() => {
       saveDialogOpen = false;
       // 对话框关掉后焦点可能停在系统窗口上，不还回去就再也打不进字
-      if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+      focusActiveEditor();
     });
 }
 
 /** 菜单动作统一入口：Windows/Linux 的自绘菜单、macOS 的原生菜单栏共用。 */
 function runAction(action: string) {
+  // 源码视图下 textarea 自己就是编辑器：编辑类菜单动作必须作用于它，
+  // 不能误发到内核（内核那侧是富文本投影，两套真值会打架）。
+  if (window.__mdviewMode === 'source' && document.activeElement === sourceEl) {
+    const native: Record<string, string> = {
+      undo: 'undo', redo: 'redo', cut: 'cut', copy: 'copy', paste: 'paste',
+      'select-all': 'selectAll',
+    };
+    const cmd = native[action];
+    if (cmd) {
+      sourceEl.focus({ preventScroll: true });
+      document.execCommand(cmd);
+      // paste/输入类命令会触发 input 事件，由 input 监听整篇同步；
+      // undo/redo 也触发 input，统一走同一条同步路径。
+      return;
+    }
+  }
   switch (action) {
     case 'new-file':
       // 内核在有未保存改动时会先问一句；取消返回 null，这里什么都不做。
@@ -479,7 +546,7 @@ function runAction(action: string) {
       break;
     case 'undo': send({ kind: 'undo' }); break;
     case 'redo': send({ kind: 'redo' }); break;
-    case 'save': send({ kind: 'save' }); break;
+    case 'save': flushSource(); send({ kind: 'save' }); break;
     case 'save-as': requestSavePath(); break;
     case 'copy': send({ kind: 'copy' }); break;
     case 'cut': send({ kind: 'cut' }); break;
@@ -499,9 +566,13 @@ function runAction(action: string) {
     case 'theme-dark':
       mdviewTheme.set(action.slice(6));
       break;
-    case 'mode-wysiwyg': window.__mdviewMode = 'wysiwyg'; send({ kind: 'setMode', mode: 'wysiwyg' }); break;
-    case 'mode-reading': window.__mdviewMode = 'reading'; send({ kind: 'setMode', mode: 'reading' }); break;
-    case 'mode-source': window.__mdviewMode = 'source'; send({ kind: 'setMode', mode: 'source' }); break;
+    case 'mode-wysiwyg':
+      flushSource(); applyViewMode('wysiwyg'); send({ kind: 'setMode', mode: 'wysiwyg' }); break;
+    case 'mode-reading':
+      flushSource(); applyViewMode('reading'); send({ kind: 'setMode', mode: 'reading' }); break;
+    case 'mode-source':
+      // 切到源码视图前先把 sourceText 灌进 textarea（applyViewMode 内完成）
+      applyViewMode('source'); send({ kind: 'setMode', mode: 'source' }); break;
     case 'line-home':
     case 'line-end':
       // 复用键盘路径：行首/行尾的视觉行判定已经在那里实现
@@ -523,7 +594,7 @@ function runAction(action: string) {
     default: break;
   }
   pushShellState();
-  if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+  focusActiveEditor();
 }
 window.__mdviewRunAction = runAction;
 
@@ -586,6 +657,14 @@ function applyReply(reply: Reply) {
   meta.dirty = reply.dirty;
   // 另存为成功后内核会把文档改绑到新路径，标题栏要跟着换名字
   if (reply.path) meta.path = reply.path;
+  // 内核回传的源文本真值。源码视图里 textarea 是用户正在敲的那一侧，
+  // 它的值可能与这条回包同revision，不要回写覆盖，否则光标会跳。
+  if (typeof reply.source === 'string') {
+    sourceText = reply.source;
+    if (window.__mdviewMode !== 'source' && !sameSource(sourceEl.value, sourceText)) {
+      sourceEl.value = sourceText;
+    }
+  }
   if (typeof reply.clipboard === 'string') writeClipboard(reply.clipboard);
   if (reply.conflict) toast('文件已被外部修改，保存被拒');
   else if (reply.error) toast(reply.error);
@@ -612,13 +691,16 @@ function writeClipboard(text: string) {
     })
     .catch(() => toast('复制失败：系统剪贴板不可用'))
     .finally(() => {
-      if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+      focusActiveEditor();
     });
 }
 
 /** 用一份内核快照全量重绘。boot 与「打开文件」共用，避免两处渲染逻辑漂移。 */
 function applySnapshot(snap: Snapshot) {
   meta = { revision: snap.revision, dirty: snap.dirty, path: snap.path, stops: snap.stops };
+  // 换文档/新建/启动：源文本真值整份替换，textarea 无条件跟上
+  sourceText = snap.source ?? '';
+  sourceEl.value = sourceText;
   renderAll(snap.blocks);
   rebuildOutline(snap.outline || []);
   applyCaret(snap.caret);
@@ -636,8 +718,9 @@ function applySnapshot(snap: Snapshot) {
 function adoptSnapshot(snap: Snapshot) {
   applySnapshot(snap);
   window.scrollTo(0, 0);
+  sourceEl.scrollTop = 0;  // 源码视图自滚，换文档也要回到顶部
   if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
-  if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+  focusActiveEditor();
 }
 
 /**
@@ -658,7 +741,7 @@ async function boot() {
   mdviewTheme.init();
   applySnapshot(await invoke<Snapshot>('snapshot'));
   // 焦点必须落在透明输入框上：输入法只认真正的可编辑元素
-  imeEl.focus({ preventScroll: true });
+  focusActiveEditor();
   // 给内核一个「页面已接管」的信号，日志里能对上游标是否真的画出来了
   invoke('ready').catch(() => {});
   // 外部修改：后端 Watcher 发现磁盘上的文件被别的进程改了会 emit 这个事件。
@@ -755,6 +838,46 @@ function blockBounds(): { start: number; end: number } | null {
 }
 
 window.addEventListener('keydown', (event) => {
+  // 源码视图：textarea 自己就是编辑器，有原生光标/选区/撤销栈。
+  // 只拦文件类快捷键；其余（输入、方向、Ctrl+A/C/V/Z/Y、Tab）全部放行，
+  // 由 input 事件把文本整篇同步回内核。
+  if (window.__mdviewMode === 'source') {
+    if (event.ctrlKey || event.metaKey) {
+      const key = event.key.toLowerCase();
+      if (key === 's') {
+        event.preventDefault();
+        if (event.shiftKey) requestSavePath();
+        else { flushSource(); send({ kind: 'save' }); }
+        return;
+      }
+      if (key === 'n') { event.preventDefault(); runAction('new-file'); return; }
+      if (key === 'o') { event.preventDefault(); runAction('open-file'); return; }
+    }
+    return;
+  }
+  // 阅读视图：只读，拦掉一切会改文档的输入，仅放行导航与文件快捷键。
+  if (window.__mdviewMode === 'reading') {
+    if (event.ctrlKey || event.metaKey) {
+      const key = event.key.toLowerCase();
+      if (key === 's') {
+        event.preventDefault();
+        if (event.shiftKey) requestSavePath();
+        else { flushSource(); send({ kind: 'save' }); }
+        return;
+      }
+      if (key === 'n') { event.preventDefault(); runAction('new-file'); return; }
+      if (key === 'o') { event.preventDefault(); runAction('open-file'); return; }
+    }
+    // Escape 留给菜单；方向/翻页/滚动放行，其余编辑键吞掉
+    const NAV = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown',
+      'Home', 'End', 'Escape', 'Tab'];
+    if (NAV.indexOf(event.key) < 0 && !(event.ctrlKey || event.metaKey || event.altKey)
+        && event.key.length === 1) {
+      event.preventDefault();
+    }
+    return;
+  }
+
   // 组合期与 229 一律放行，preedit 交给输入法自己渲染（内核侧同样会挂起重绘）
   if (ime.shouldIgnoreKey(event)) return;
 
@@ -773,7 +896,7 @@ window.addEventListener('keydown', (event) => {
     if (key === 's') {
       event.preventDefault();
       if (event.shiftKey) requestSavePath();
-      else send({ kind: 'save' });
+      else { flushSource(); send({ kind: 'save' }); }
       return;
     }
     if (key === 'z') { event.preventDefault(); send({ kind: event.shiftKey ? 'redo' : 'undo' }); return; }
@@ -848,13 +971,33 @@ window.addEventListener('keydown', (event) => {
 type WindowWithClipboard = Window & { clipboardData?: DataTransfer };
 
 window.addEventListener('paste', (event) => {
+  // 源码视图：让 textarea 原生粘贴源文本，随后 input 事件整篇同步给内核。
+  if (window.__mdviewMode === 'source') return;
   // Windows 上 `clipboardData` 一定在；老 WebView 才有 window 兜底，故一并保留
   const data = event.clipboardData ?? (window as WindowWithClipboard).clipboardData;
   const text = data?.getData('text/plain') ?? '';
   if (!text) return;
   event.preventDefault();
+  if (window.__mdviewMode === 'reading') return;  // 阅读视图只读
   send({ kind: 'insertText', text });
 });
+
+// 源码视图：textarea 是输入源，去抖后把整篇 Markdown 写回内核。
+// 不回写 textarea 的值（内核 reply 里带 source 也不覆盖正在编辑的一侧），
+// 只在换文档 / 切换视图时用 sourceText 灌入。
+sourceEl.addEventListener('input', () => {
+  if (window.__mdviewMode !== 'source') return;
+  if (window.clearTimeout) window.clearTimeout(sourceSyncTimer);
+  sourceSyncTimer = window.setTimeout(() => {
+    sourceSyncTimer = 0;
+    if (window.__mdviewMode !== 'source') return;
+    if (sameSource(sourceEl.value, sourceText)) return;
+    sourceText = sourceEl.value;
+    send({ kind: 'replaceSource', text: sourceText });
+  }, 120);
+});
+// 失焦时立即同步，避免切窗口/点菜单前还有去抖未落盘的内容
+sourceEl.addEventListener('blur', flushSource);
 
 // 输入法：所有 composition 事件都走 ime.js 的状态机，这里只做 DOM 搬运。
 // 有一条必须守住——组合期间不碰 docEl，否则会把浏览器正在画的 preedit 冲掉。
@@ -998,7 +1141,7 @@ docEl.addEventListener('mousedown', (event) => {
   dragging = true;
   dragPoint = { x: event.clientX, y: event.clientY };
   dragStop = stop;
-  imeEl.focus({ preventScroll: true });
+  focusActiveEditor();
   send({ kind: 'setCaret', stop, extend: event.shiftKey });
 });
 
@@ -1462,6 +1605,27 @@ window.__mdviewSelfTest = async function () {
         document.documentElement.getAttribute('data-theme') ===
           mdviewTheme.resolve(null, mdviewTheme.systemTheme()), mdviewTheme.mode());
     mdviewTheme.set(themePref); // 恢复原始偏好
+
+    // 三种视图必须真正切换 DOM，而不是只换菜单圆点、正文永远是所见即所得
+    runAction('mode-source');
+    check('切到源码视图 data-view=source',
+      document.documentElement.dataset.view === 'source',
+      String(document.documentElement.dataset.view));
+    check('源码视图显示 Markdown 源文本而非 HTML',
+      sourceEl.value.length > 0 && !sourceEl.value.includes('<h1') &&
+        sourceEl.value.includes('#'),
+      sourceEl.value.slice(0, 40));
+    check('源码视图焦点在 textarea',
+      document.activeElement === sourceEl,
+      document.activeElement?.id ?? '无');
+    runAction('mode-reading');
+    check('切到阅读视图 data-view=reading',
+      document.documentElement.dataset.view === 'reading',
+      String(document.documentElement.dataset.view));
+    runAction('mode-wysiwyg');
+    check('切回所见即所得 data-view=wysiwyg',
+      document.documentElement.dataset.view === 'wysiwyg',
+      String(document.documentElement.dataset.view));
 
     // 表格：网格渲染 + Tab 跨格 + 行增删，整条 IPC 链路都要走到
     const table = docEl.querySelector<HTMLElement>('.md-table');

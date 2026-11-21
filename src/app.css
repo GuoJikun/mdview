@@ -207,17 +207,22 @@ html.custom-titlebar #tb-menu-popup {
 html.custom-titlebar #outline { top: 30px; }
 html.custom-titlebar #doc { padding-top: 86px; }
 
-/* 自绘纵向滚动条：原生滚动条属于窗口视口，会纵跨标题栏和状态栏。
-   正文（#vscroll）和大纲（#outline-scroll）共用这一套视觉与交互，只有
-   定位边缘不同：正文贴窗口右侧，大纲贴侧栏右侧（left:220px = 232-12）。
-   top/bottom 由 JS 按标题栏、状态栏的实际高度算出来，只占中间那段。 */
+/* 自绘滚动条：原生滚动条属于窗口视口，会纵跨标题栏和状态栏。
+   正文（#vscroll）与大纲（#outline-scroll）各一套纵向，源码视图另有一套
+   横向（#hscroll，长行不换行才会溢出），共用同一套视觉与拖动逻辑，只有
+   定位边缘不同：正文贴窗口右侧，大纲贴侧栏右侧（left:220px = 232-12），
+   横向贴窗口底部。上下/左右边缘由 JS 按栏的实际高度算出来，只占中间那段。 */
 html.custom-titlebar { scrollbar-width: none; }
 html.custom-titlebar::-webkit-scrollbar,
 html.custom-titlebar body::-webkit-scrollbar { width: 0; height: 0; display: none; }
-.tb-vscroll { display: none; }
+.tb-vscroll, .tb-hscroll { display: none; }
 html.custom-titlebar .tb-vscroll {
   display: block; position: fixed; z-index: 25; width: 12px;
   top: 30px; bottom: 29px;
+}
+html.custom-titlebar .tb-hscroll {
+  display: block; position: fixed; z-index: 25; height: 12px;
+  left: 0; right: 12px; bottom: 29px;  /* 右侧给纵向条让出 12px */
 }
 #vscroll { right: 0; }
 #outline-scroll { left: 220px; }
@@ -225,10 +230,18 @@ html.custom-titlebar .tb-vscroll {
   position: absolute; right: 3px; width: 6px; min-height: 28px;
   border-radius: 3px; background: var(--tb-scroll-thumb);
 }
+.tb-hscroll-thumb {
+  position: absolute; bottom: 3px; height: 6px; min-width: 28px;
+  border-radius: 3px; background: var(--tb-scroll-thumb);
+}
 html.custom-titlebar .tb-vscroll:hover .tb-vscroll-thumb,
-html.custom-titlebar .tb-vscroll.dragging .tb-vscroll-thumb {
+html.custom-titlebar .tb-vscroll.dragging .tb-vscroll-thumb,
+html.custom-titlebar .tb-hscroll:hover .tb-hscroll-thumb,
+html.custom-titlebar .tb-hscroll.dragging .tb-hscroll-thumb {
   background: var(--tb-scroll-thumb-hover);
 }
+/* 横向条只在源码视图露面：其余视图 textarea 隐藏、正文不横向溢出 */
+html:not([data-view="source"]) .tb-hscroll { display: none !important; }
 
 /* 大纲侧栏：固定在左侧，正文靠右边距让出位置 */
 #outline {
@@ -269,6 +282,58 @@ html.custom-titlebar #outline::-webkit-scrollbar { width: 0; height: 0; display:
   max-width: 780px; margin: 0 auto; padding: 56px 32px 45vh;
   margin-left: max(calc(50% - 390px + 116px), 232px + 32px);
   outline: none; cursor: text;
+}
+
+/* ---- 视图模式 -------------------------------------------------------
+   <html data-view> 由 editor.ts 在切换视图时写入，只有三档：
+   wysiwyg（默认）/ reading（只读沉浸）/ source（编辑 Markdown 源文本）。
+   三种模式共用正文区几何，差异只在「显示哪一层」与「是否可编辑」。 */
+
+/* 源码编辑器：默认隐藏，等宽字体显示原始 Markdown，占满整个正文宽度
+   （源码视图下大纲已隐藏，不必再给它留 232px）。自身就是滚动容器
+   （top/bottom 夹在标题栏与状态栏之间），否则长文档既没有滚动条、
+   方向键也走不到文末。横纵滚动条都用 #vscroll / #hscroll 自绘。 */
+#source {
+  display: none;
+  position: fixed; top: 0; bottom: 29px;
+  left: 0; right: 0;
+  box-sizing: border-box;
+  padding: 56px 32px 45vh;
+  border: 0; outline: none; resize: none;
+  background: transparent; color: var(--fg);
+  font: 13px/1.7 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  tab-size: 2; white-space: pre; overflow: auto;
+  caret-color: var(--caret);
+}
+html.custom-titlebar #source { top: 30px; padding-top: 56px; }
+/* 原生横纵条全部让位给自绘条：原生横条只会从 textarea 左边缘（屏幕中间）
+   开始、粗 9px、光标还是 I-beam，和纵向那套 6px 自绘条完全不搭。 */
+html.custom-titlebar #source::-webkit-scrollbar { width: 0; height: 0; }
+
+/* 源码视图：只留 textarea，隐藏富文本投影与所有编辑辅助层。
+   #vscroll 保留——它在 source 模式下改由 textarea 的滚动量驱动。 */
+html[data-view="source"] #doc,
+html[data-view="source"] #caret,
+html[data-view="source"] #ime,
+html[data-view="source"] #preedit,
+html[data-view="source"] #outline,
+html[data-view="source"] #outline-scroll { display: none !important; }
+html[data-view="source"] #source { display: block; bottom: 0; }
+
+/* 阅读视图：富文本只读，隐藏光标/输入法，正文居中放宽，更像一篇文章。 */
+html[data-view="reading"] #caret,
+html[data-view="reading"] #ime,
+html[data-view="reading"] #preedit { display: none !important; }
+
+/* 源码/阅读视图不需要状态栏：块号、停靠点、列、表格工具、编辑快捷键
+   都是所见即所得编辑器的专有信息，在 textarea 与只读模式下既无用又不对应。
+   隐藏后 #bar 高度为 0，滚动条的 edges() 会自动把轨道延伸到底部。 */
+html[data-view="source"] #bar,
+html[data-view="reading"] #bar { display: none !important; }
+html[data-view="reading"] #doc {
+  cursor: default; user-select: text;
+  max-width: 720px; padding-top: 72px;
+  font-size: 15px; line-height: 1.95;
 }
 #doc .blk { position: relative; margin: 0 0 1.1em; white-space: pre-wrap; }
 #doc .p { margin: 0; }

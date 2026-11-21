@@ -26,13 +26,17 @@ const h = vi.hoisted(() => {
     caret: { stop: 0, char_offset: 0, block: 0, visual: 0 },
     selection: null,
     outline: [{ level: 1, title: '你好世界', block: 0 }],
+    source: '# 你好世界\n\n**粗体** 正文',
   };
-  return { snapshot, calls: [] as string[] };
+  return { snapshot, calls: [] as string[], dispatchCalls: [] as Record<string, unknown>[] };
 });
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(async (cmd: string) => {
+  invoke: vi.fn(async (cmd: string, args?: { message?: unknown }) => {
     h.calls.push(cmd);
+    if (cmd === 'dispatch' && args?.message) {
+      h.dispatchCalls.push(args.message as Record<string, unknown>);
+    }
     return cmd === 'snapshot' ? h.snapshot : {};
   }),
 }));
@@ -48,6 +52,7 @@ it('editor.ts 能在浏览器模式里启动并投影出 DOM', async () => {
     <nav id="outline"></nav>
     <div id="outline-scroll"><div id="outline-scroll-thumb"></div></div>
     <div id="doc" tabindex="-1" spellcheck="false"></div>
+    <textarea id="source" spellcheck="false"></textarea>
     <div id="caret"></div>
     <div id="preedit"></div>
     <textarea id="ime" rows="1"></textarea>
@@ -87,4 +92,40 @@ it('editor.ts 能在浏览器模式里启动并投影出 DOM', async () => {
   // 不该有别的 IPC 意外发生。
   expect(h.calls.filter((c) => c !== 'snapshot' && c !== 'ready')).toEqual([]);
   expect(h.calls).toContain('ready');
+
+  // 三种视图真正切换 DOM：不再是"点了只换圆点、正文永远所见即所得"
+  const run = window.__mdviewRunAction!;
+  const html = document.documentElement;
+  expect(html.dataset.view ?? 'wysiwyg').toBe('wysiwyg');
+
+  // 源码视图：data-view 变化 + textarea 拿到原始 Markdown 真值，不是渲染后的 HTML
+  run('mode-source');
+  expect(html.dataset.view).toBe('source');
+  expect(window.__mdviewMode).toBe('source');
+  const src = document.getElementById('source') as HTMLTextAreaElement;
+  expect(src.value).toContain('# 你好世界');
+  expect(src.value).not.toContain('<h1');
+  expect(src.value).toContain('**粗体**');
+
+  // 在源码视图编辑 textarea：去抖后整篇 Markdown 写回内核（不是富文本 HTML）
+  h.calls.length = 0;
+  src.value = '# 改过的标题\n\n- 列表项';
+  src.dispatchEvent(new Event('input', { bubbles: true }));
+  // input 是 120ms 去抖，等 replaceSource 真正写回内核
+  await vi.waitFor(() => {
+    expect(h.dispatchCalls.some((m) => m.kind === 'replaceSource')).toBe(true);
+  });
+  const replaced = h.dispatchCalls.find((m) => m.kind === 'replaceSource');
+  expect(replaced).toBeDefined();
+  expect((replaced as { text: string }).text).toBe('# 改过的标题\n\n- 列表项');
+
+  // 阅读视图：只读呈现，data-view 跟上
+  run('mode-reading');
+  expect(html.dataset.view).toBe('reading');
+  expect(window.__mdviewMode).toBe('reading');
+
+  // 切回所见即所得
+  run('mode-wysiwyg');
+  expect(html.dataset.view).toBe('wysiwyg');
+  expect(window.__mdviewMode).toBe('wysiwyg');
 });

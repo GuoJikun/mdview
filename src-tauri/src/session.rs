@@ -59,6 +59,10 @@ pub enum Wire {
     SelectAll,
     Copy,
     Cut,
+    /// 源码视图整篇替换：把 textarea 里的 Markdown 源文本整篇写回内核。
+    ReplaceSource {
+        text: String,
+    },
     SetMode {
         mode: String,
     },
@@ -102,6 +106,7 @@ impl Wire {
             Wire::SelectAll => Message::SelectAll,
             Wire::Copy => Message::Copy,
             Wire::Cut => Message::Cut,
+            Wire::ReplaceSource { text } => Message::ReplaceSource { text },
             Wire::SetMode { mode } => Message::SetMode(match mode.as_str() {
                 "reading" => ViewMode::Reading,
                 "source" => ViewMode::Source,
@@ -144,6 +149,8 @@ pub struct Snapshot {
     pub selection: Option<[usize; 2]>,
     /// 大纲（标题项），供侧栏渲染与滚动定位
     pub outline: Vec<OutlineDto>,
+    /// Markdown 源文本真值。源码视图直接显示与编辑这一份，不是渲染后的 HTML。
+    pub source: String,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -170,6 +177,8 @@ pub struct Reply {
     pub path: Option<String>,
     /// 大纲随每次编辑回包，前端据此增量更新侧栏
     pub outline: Option<Vec<OutlineDto>>,
+    /// 内核里的 Markdown 源文本真值，供源码视图在任何编辑后同步。
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -271,6 +280,7 @@ impl Session {
             caret: caret_of(&app),
             selection: selection_of(&app),
             outline: outline_of(&app),
+            source: app.document.text(),
         }
     }
 
@@ -284,6 +294,7 @@ impl Session {
             selection: selection_of(&app),
             outline: Some(outline_of(&app)),
             path: app.path.as_ref().map(|p| p.display().to_string()),
+            source: Some(app.document.text()),
             ..Reply::default()
         };
         for effect in effects {
@@ -448,6 +459,12 @@ mod tests {
         assert!(matches!(wire, Wire::Copy));
         let wire: Wire = serde_json::from_str(r#"{"kind":"cut"}"#).unwrap();
         assert!(matches!(wire, Wire::Cut));
+        // 源码视图整篇替换：camelCase 的 kind，带原始 Markdown 文本
+        let wire: Wire = serde_json::from_str(
+            "{\"kind\":\"replaceSource\",\"text\":\"# 标题\\n\\n正文\"}",
+        )
+        .unwrap();
+        assert!(matches!(wire, Wire::ReplaceSource { ref text } if text == "# 标题\n\n正文"));
 
         // 表格操作：前端用 camelCase 的 kind，内核收到的是同一组语义
         let wire: Wire = serde_json::from_str(r#"{"kind":"tableMoveCell","delta":1}"#).unwrap();
@@ -459,6 +476,42 @@ mod tests {
             serde_json::from_str(r#"{"kind":"tableInsertColumn","after":false}"#).unwrap();
         assert!(matches!(wire, Wire::TableInsertColumn { after: false }));
         assert!(serde_json::from_str::<Wire>(r#"{"kind":"tableDeleteColumn"}"#).is_ok());
+    }
+
+    #[test]
+    fn snapshot_carries_raw_markdown_source() {
+        let src = "# 标题\n\n**粗体** 与 `代码`";
+        let snap = session(src).snapshot();
+        assert_eq!(snap.source, src, "快照必须带原始 Markdown，不是渲染后的 HTML");
+        assert!(!snap.source.contains("<h1"), "下发的不能是 to_html 产物");
+    }
+
+    #[test]
+    fn replace_source_rewrites_whole_document_and_can_undo() {
+        let session = session("旧内容");
+        let reply = session.dispatch(Wire::ReplaceSource {
+            text: "# 新标题\n\n新正文".to_string(),
+        });
+        assert_eq!(session.text(), "# 新标题\n\n新正文");
+        assert!(reply.dirty, "源码视图的编辑必须置脏标记");
+        assert_eq!(reply.source.as_deref(), Some("# 新标题\n\n新正文"));
+        // 整篇替换是一步撤销：撤销后回到替换前的整篇内容
+        session.dispatch(Wire::Undo);
+        assert_eq!(session.text(), "旧内容");
+    }
+
+    #[test]
+    fn set_mode_does_not_change_rendered_blocks() {
+        // 回归：模式切换本身不改变正文投影，差异由前端按模式切换显示哪块 DOM 决定
+        let session = session("# 标题\n\n正文");
+        let before = session.snapshot().blocks;
+        let reply = session.dispatch(Wire::SetMode {
+            mode: "source".to_string(),
+        });
+        let after = session.snapshot().blocks;
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before[0].html, after[0].html, "同一块在不同模式下 HTML 应一致");
+        assert!(reply.source.is_some(), "切到源码视图的回包要带 source 供前端同步");
     }
 
     #[test]
