@@ -12,12 +12,23 @@ pub struct BlockId(pub usize);
 pub enum BlockKind {
     Heading(u8),
     Paragraph,
-    List { ordered: bool },
+    List {
+        ordered: bool,
+    },
     BlockQuote,
-    CodeBlock { info: Option<String> },
+    CodeBlock {
+        info: Option<String>,
+    },
     Table,
     Rule,
     Html,
+    /// 脚注定义。`number` 按引用首次出现顺序分配，`references` 是所有指向它的
+    /// 引用源码 byte 起点，供生成回链用。
+    FootnoteDefinition {
+        label: String,
+        number: usize,
+        references: Vec<usize>,
+    },
 }
 
 impl BlockKind {
@@ -31,6 +42,7 @@ impl BlockKind {
             BlockKind::Table => "table",
             BlockKind::Rule => "rule",
             BlockKind::Html => "html",
+            BlockKind::FootnoteDefinition { .. } => "footnote",
         }
     }
 }
@@ -64,7 +76,12 @@ pub enum SpanKind {
     TaskMarker {
         checked: bool,
     },
-    FootnoteReference,
+    /// 脚注引用 `[^label]`。`number` 由全篇引用首次出现的顺序决定；
+    /// 编辑态仍显示源码 `[^label]`，阅读态显示为上标序号并链接到定义。
+    FootnoteReference {
+        label: String,
+        number: usize,
+    },
     /// 数学公式：`$…$` / `$$…$$`。定界符折叠掉，公式源码逐字符可见、可编辑。
     /// `display` 标记是否为 `$$` 块级公式，只影响阅读态的排版，停靠点不变。
     Math {
@@ -352,6 +369,8 @@ impl Block {
             BlockKind::Table => "table".to_owned(),
             BlockKind::Rule => "div".to_owned(),
             BlockKind::Html => "p".to_owned(),
+            // 脚注定义自带完整结构，外层不额外开标签（见下面的早退分支）
+            BlockKind::FootnoteDefinition { .. } => String::new(),
         };
         // 有序列表从 3 开始时浏览器得知道，否则一律从 1 数起
         let start = match &self.kind {
@@ -371,6 +390,7 @@ impl Block {
             None if matches!(self.kind, BlockKind::CodeBlock { .. }) => {
                 "<pre class=\"md-code\">".to_owned()
             }
+            None if matches!(self.kind, BlockKind::FootnoteDefinition { .. }) => String::new(),
             None => format!("<{tag}>"),
         };
         let is_list = matches!(self.kind, BlockKind::List { .. });
@@ -381,6 +401,29 @@ impl Block {
             self.byte.start,
             self.byte.end
         ));
+        // 脚注定义：编号 + 正文 + 回链，GitHub 风格。回链按每一处引用生成，
+        // 多处的用 ↩1 ↩2 区分；id 里的 byte 是引用源码起点，保证全篇唯一。
+        if let BlockKind::FootnoteDefinition {
+            number, references, ..
+        } = &self.kind
+        {
+            let _ = write!(out, "<div class=\"fn\" id=\"fn{number}\">");
+            let _ = write!(out, "<span class=\"fn-num\">{number}.</span> ");
+            for span in &self.spans {
+                self.push_span(&mut out, span);
+            }
+            out.push_str("<span class=\"fn-back\">");
+            for (i, byte) in references.iter().enumerate() {
+                let mark = if references.len() == 1 {
+                    "↩".to_owned()
+                } else {
+                    format!("↩{}", i + 1)
+                };
+                let _ = write!(out, "<a href=\"#fnref{number}_{byte}\">{mark}</a> ");
+            }
+            out.push_str("</span></div></section>");
+            return out;
+        }
         // 表格按结构化网格输出。阅读态此前只有 `<table>` 外壳没有 `<tr>/<td>`，
         // 浏览器会把一格格文本全塞进同一个隐式单元格，对齐也丢了。
         // 注意 `<table>` 外壳已由上方 `open` 按 BlockKind::Table 输出，这里只铺行与格，
@@ -477,8 +520,15 @@ impl Block {
                 escape_attr(span.style.link.as_deref().unwrap_or("")),
                 escape(&span.text)
             )),
-            SpanKind::FootnoteReference => {
-                out.push_str(&format!("<sup>{}</sup>", escape(&span.text)))
+            SpanKind::FootnoteReference { label, number } => {
+                // 阅读态显示序号而非源码 `[^label]`，并双向链接到定义。
+                // id 带 byte 偏移，避免同一脚注被多次引用时产生重复 id。
+                let _ = write!(
+                    out,
+                    "<sup class=\"fnref\"><a id=\"fnref{number}_{}\" href=\"#fn{number}\" title=\"{}\">{number}</a></sup>",
+                    span.byte.start,
+                    escape_attr(label)
+                );
             }
             SpanKind::Math { display } => {
                 // 阅读态给出稳定钩子，由 CSS 区分行内/块级排版。源码原样输出，
@@ -764,6 +814,21 @@ mod tests {
         assert!(html.contains("text-align:left"), "左对齐丢失: {html}");
         assert!(html.contains("text-align:center"), "居中丢失: {html}");
         assert!(html.contains("text-align:right"), "右对齐丢失: {html}");
+    }
+
+    #[test]
+    fn reading_html_renders_footnote_chain() {
+        let src = "正文[^a]再次[^a]。\n\n[^a]: 脚注内容。\n";
+        let html = crate::parse(src, crate::MarkdownParser::gfm().options()).to_html(src);
+        // 引用：上标序号 + 指向定义的链接；同一脚注两处引用都有唯一 id
+        assert!(html.contains("<sup class=\"fnref\">"), "{html}");
+        assert_eq!(html.matches("href=\"#fn1\"").count(), 2, "{html}");
+        assert_eq!(html.matches("id=\"fnref1_").count(), 2, "{html}");
+        // 定义：编号、正文、两条回链
+        assert!(html.contains("<div class=\"fn\" id=\"fn1\">"), "{html}");
+        assert!(html.contains("<span class=\"fn-num\">1.</span>"), "{html}");
+        assert!(html.contains("脚注内容"), "{html}");
+        assert_eq!(html.matches("href=\"#fnref1_").count(), 2, "{html}");
     }
 
     #[test]

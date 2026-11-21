@@ -301,7 +301,7 @@ byte   0  2  5  8  10
 - ⬜ 链接/图片行内编辑
 - ⬜ 粘贴 HTML 规范化（sanitize 后转 Markdown，不能直接注入）
 - ✅ **数学公式**（2026-11-21）：`MarkdownParser::gfm()` 开启 `ENABLE_MATH`，`project.rs` 把 `InlineMath` / `DisplayMath` 落成 `SpanKind::Math { display }`，定界符按「恰好 want 个 `$`」内缩进 `hidden` 并登记为 `MarkerPair`（退格可整对抽掉，与行内代码同一套逻辑）。编辑态每个公式字符带 `.m`、保留全部 `data-b/data-a` 停靠点；阅读态 `to_html` 输出 `<code class="m">` / `<code class="m md">`，后者由 CSS 居中排版。`app.css` 与 CLI 验证页同步配色，明暗主题各有变量。Rust 单测 4 项 + 应用层配对删除 1 项全过
-- ⬜ 脚注（引用已有 `<sup>`，但定义标签被折叠、无底部脚注区/编号/回链）
+- ✅ **脚注完整链路**（2026-11-21）：`project.rs` 收集全篇 `FootnoteReference` / `FootnoteDefinition` 事件，按引用首次出现顺序分配编号并回填到 `SpanKind::FootnoteReference { label, number }` 与 `BlockKind::FootnoteDefinition { label, number, references }`。阅读态 `to_html` 输出上标序号 + `<a href="#fnN">`、编号定义块与逐处回链 `↩`；编辑态定义独立成 `kind-footnote` 块，`id="fnN"` + `data-fn` 供跳转，标签前缀仍折叠（CSS `::before` 显示序号），回链放在块尾且不带 `data-b`、不占停靠点。引用字符带 `data-fnref/data-fnbyte` 与锚点 id，前端 Ctrl/Cmd+Click（阅读态单击）跳定义、回链跳回引用。定义正文照常逐字符可编辑，源码真值不变。Rust 单测 5 项 + 应用层编辑 1 项全过
 - ⬜ 大文档虚拟化（5 万字以下不做；DOM 节点数与跨块选区天然冲突）
 
 ### M5 前端工程化（Vite + Vue 外壳）✅
@@ -415,6 +415,7 @@ byte   0  2  5  8  10
 18. ~~**菜单没有「新建」**~~ **已修（2026-11-21）**：文件菜单补齐「新建 / 打开文件… / 保存 / 另存为… / 关闭窗口」，`Ctrl+N` 可用。新建**不在硬盘上落文件**——只在内存里换成未命名空文档（`Session::new_file` → `AppState::open("", None)`），与「双击图标启动」是同一条状态路径；首次 Ctrl+S 才弹保存对话框落盘，这样既不会留下空文件，也不用维护两套入口语义。
     - 同批修掉的两个丢稿缺口：① 未命名文档按 Ctrl+S 不再谎称「已保存」（`Effect::NeedsPath` → 弹框 → `saveTo`），写盘失败从 `Conflict` 拆成 `Effect::WriteFailed`；② 关窗与换文档前检查 dirty——`CloseRequested` 由 `on_window_event` 拦截（`CloseGuard` 放行标志 + `close-requested` 事件），`open_file` / `new_file` 前用 `ask_discard` 问一句。自检模式下确认框一律放行，否则会挂死。
 19. **块级公式内含空行时不被识别**：pulldown-cmark 把 math 的定界符跟踪限制在单个块内，`$$\na\n\nb\n$$` 中的 `$$` 会退化成字面文本（mdview 的 `split_blocks` 同样按空行切块，行为一致）。多段公式请把空行去掉，或用多个 `$$…$$`。
+20. **脚注里的复杂块级结构不分层**：定义内的列表 / 代码块 / 引用会被拍平成带换行的普通片段（定义块本身仍独立）。脚注以短段落为主，复杂结构请放到正文；另外无定义的 `[^x]` 按 pulldown 行为保留为字面文本。
 
 ---
 

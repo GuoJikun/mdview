@@ -1171,6 +1171,31 @@ docEl.addEventListener('click', (event) => {
   invoke('open_url', { url }).catch((err) => toast('打不开链接：' + err));
 });
 
+// 脚注跳转：引用 → 定义，回链 → 引用。编辑态沿用外链的 Ctrl/Cmd 约定，
+// 阅读态单击即可。不走 <a href> 的默认行为——mousedown 的光标定位会 preventDefault 吃掉它。
+let fnPress: { x: number; y: number } | null = null;
+docEl.addEventListener('mousedown', (event) => {
+  fnPress = { x: event.clientX, y: event.clientY };
+});
+docEl.addEventListener('click', (event) => {
+  const start = fnPress;
+  fnPress = null;
+  const el = (event.target as Element | null)?.closest<HTMLElement>('[data-fnref], [data-fnback]');
+  if (!el) return;
+  if (window.__mdviewMode !== 'reading' && !(event.ctrlKey || event.metaKey)) return;
+  // 拖选之后浏览器也会补一次 click
+  if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+  event.preventDefault();
+  const num = el.dataset.fnfref ?? el.dataset.fnfback;
+  if (!num) return;
+  const target = el.dataset.fnfref
+    ? docEl.querySelector<HTMLElement>(`[id="fn${num}"]`)
+    : docEl.querySelector<HTMLElement>(
+        `[data-fnref="${num}"][data-fnbyte="${el.dataset.fnfbyte}"]`,
+      );
+  target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+});
+
 window.addEventListener('mousemove', (event) => {
   if (!dragging) return;
   // 在窗口外松手时 `mouseup` 收不到，靠这个兜底，否则指针一回到正文里

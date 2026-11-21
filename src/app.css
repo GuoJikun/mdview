@@ -469,6 +469,19 @@ html[data-view="reading"] #doc {
 #doc .tk-attribute { color: var(--tk-attribute); }
 #doc .tk-operator { color: var(--tk-operator); }
 #doc .a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+/* 脚注：引用仍显示源码 `[^x]`，但按上标画；Ctrl/Cmd+Click 跳到定义。
+   定义块自带 id/编号（预览层写入），序号由 ::before 显示，回链在文字末尾。 */
+#doc .fnref {
+  color: var(--link); font-size: .82em; vertical-align: super; line-height: 0;
+  cursor: pointer;
+}
+#doc .kind-footnote { border-top: 1px solid var(--rule); margin-top: 1.2em; padding-top: .5em; }
+#doc .kind-footnote .p.fn-def { padding-left: 1.9em; color: var(--muted); font-size: .92em; }
+#doc .kind-footnote::before {
+  content: attr(data-fn) "."; position: absolute; left: 0; top: .5em;
+  color: var(--muted); font-size: .92em;
+}
+#doc .fn-back a { color: var(--link); text-decoration: none; margin-left: .35em; }
 /* 阅读态单击链接就打开；编辑态单击属于光标定位，指针仍是文本光标 */
 html[data-view="reading"] #doc .a { cursor: pointer; }
 /* 折叠的标记仍然占位，只是不可见：它是停靠点之间的「跨栏」 */

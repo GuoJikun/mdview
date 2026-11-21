@@ -1969,6 +1969,16 @@ mod tests {
     }
 
     #[test]
+    fn typing_inside_footnote_definition_edits_source() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "[^a]: 脚注内容。\n");
+        // `[^a]: ` 是 6 字节，脚注 6 字节，光标落在「脚注」之后
+        click(&mut app, &files, 12);
+        type_text(&mut app, &files, "新");
+        assert_eq!(app.document.text(), "[^a]: 脚注新内容。\n");
+    }
+
+    #[test]
     fn math_delimiters_collapse_on_backspace_like_code() {
         // 数学定界符与行内代码走同一套配对：删空内容后 `$` 也一起收掉
         let mut files = InMemoryFileStore::default();

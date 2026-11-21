@@ -278,9 +278,17 @@ fn block_html(src: &str, block: &Block, doc: &DocumentLayout, images: ImageMode)
         Some(lang) => format!(" data-lang=\"{}\"", escape_attr(lang)),
         None => String::new(),
     };
+    // 脚注定义挂 id 与编号：引用处的 Ctrl/Cmd+Click 据此跳转；
+    // 序号由 CSS ::before 显示，源码里的 `[^label]: ` 仍是折叠标记。
+    let fn_attr = match &block.kind {
+        BlockKind::FootnoteDefinition { number, .. } => {
+            format!(" id=\"fn{number}\" data-fn=\"{number}\"")
+        }
+        _ => String::new(),
+    };
     let _ = write!(
         out,
-        "<section class=\"blk kind-{}\" data-block=\"{}\" data-bb=\"{first}\" data-be=\"{last}\"{lang_attr}>",
+        "<section class=\"blk kind-{}\" data-block=\"{}\" data-bb=\"{first}\" data-be=\"{last}\"{lang_attr}{fn_attr}>",
         block.kind.label(),
         block.id.0
     );
@@ -339,6 +347,25 @@ fn block_html(src: &str, block: &Block, doc: &DocumentLayout, images: ImageMode)
         "<span class=\"eob\" data-b=\"{last}\" data-byte=\"{}\" data-block=\"{}\">&#8203;</span>",
         block.byte.end, block.id.0
     );
+    // 回链放在块尾锚点之后：没有 data-b，不占停靠点，点击只跳转。
+    if let BlockKind::FootnoteDefinition {
+        number, references, ..
+    } = &block.kind
+    {
+        out.push_str("<span class=\"fn-back\">");
+        for (i, byte) in references.iter().enumerate() {
+            let mark = if references.len() == 1 {
+                "↩".to_owned()
+            } else {
+                format!("↩{}", i + 1)
+            };
+            let _ = write!(
+                out,
+                "<a href=\"#fnref{number}_{byte}\" data-fnback=\"{number}\" data-fnbyte=\"{byte}\">{mark}</a> "
+            );
+        }
+        out.push_str("</span>");
+    }
     if is_list {
         out.push_str("</div></div>");
     } else {
@@ -484,9 +511,26 @@ fn write_segment(
                 }
                 _ => String::new(),
             };
+            // 脚注引用的每个字符带编号与 byte（同链接一样逐字符挂），前端据此
+            // Ctrl/Cmd+Click 跳到 `#fnN`；byte 让多处引用各有唯一锚点供回链定位。
+            let fnref = match span.kind {
+                SpanKind::FootnoteReference { number, .. } => {
+                    // 第一个字符携带锚点 id，与 to_html / 回链的 `fnref{n}_{byte}` 对齐
+                    let anchor = if stop.byte == span.byte.start {
+                        format!(" id=\"fnref{number}_{}\"", span.byte.start)
+                    } else {
+                        String::new()
+                    };
+                    format!(
+                        "{anchor} data-fnref=\"{number}\" data-fnbyte=\"{}\"",
+                        span.byte.start
+                    )
+                }
+                _ => String::new(),
+            };
             let _ = write!(
                 out,
-                "<span class=\"ch {class}\"{href} data-b=\"{global}\" data-a=\"{next}\" \
+                "<span class=\"ch {class}\"{href}{fnref} data-b=\"{global}\" data-a=\"{next}\" \
                  data-byte=\"{}\" data-block=\"{block_id}\">{}</span>",
                 stop.byte,
                 escape(&ch.to_string())
@@ -554,6 +598,9 @@ fn char_class(block: &Block, span_index: usize, byte: usize) -> String {
     if style.link.is_some() && !matches!(span.kind, SpanKind::Image) {
         class.push_str("a ");
     }
+    if matches!(span.kind, SpanKind::FootnoteReference { .. }) {
+        class.push_str("fnref ");
+    }
     // 公式字符逐字可寻址：只加样式类，不当原子控件，光标/选区逻辑不变。
     // 块级公式的 `.md` 包裹由 block_html 统一套，这里只负责逐字着色。
     if matches!(span.kind, SpanKind::Math { .. }) {
@@ -585,6 +632,7 @@ fn wrapper(kind: &BlockKind) -> (&'static str, &'static str) {
         BlockKind::CodeBlock { .. } => ("<div class=\"code\">", "</div>"),
         BlockKind::BlockQuote => ("<blockquote>", "</blockquote>"),
         BlockKind::Table => ("<div class=\"p table\">", "</div>"),
+        BlockKind::FootnoteDefinition { .. } => ("<div class=\"p fn-def\">", "</div>"),
         _ => ("<div class=\"p\">", "</div>"),
     }
 }
@@ -594,6 +642,21 @@ mod grid_tests {
     use super::*;
 
     const TABLE: &str = "| 左 | 中 | 右 |\n| :-- | :-: | --: |\n| a | **b** | c |\n| d | e | f |\n";
+
+    #[test]
+    fn footnote_frames_have_anchors_and_backlinks() {
+        let src = "正文[^a]与[^a]。\n\n[^a]: 脚注内容。\n";
+        let parsed = MarkdownParser::gfm().parse(src);
+        let doc = DocumentLayout::build(src, &parsed);
+        let html = block_frames(src, &parsed, &doc)
+            .iter()
+            .map(|f| f.html.as_str())
+            .collect::<String>();
+        assert!(html.contains("id=\"fn1\""), "{html}");
+        assert_eq!(html.matches("data-fnref=\"1\"").count(), 8, "{html}");
+        assert_eq!(html.matches("id=\"fnref1_").count(), 2, "{html}");
+        assert_eq!(html.matches("data-fnback=\"1\"").count(), 2, "{html}");
+    }
 
     #[test]
     fn table_renders_as_grid_with_every_stop() {
@@ -742,6 +805,15 @@ body {
 #doc .tk-attribute { color: #0550ae; }
 #doc .tk-operator { color: #57606a; }
 #doc .a { color: #0969da; text-decoration: underline; text-underline-offset: 2px; }
+/* 脚注：引用仍显示源码 `[^x]`，但按上标样式画；定义块用序号前缀与回链 */
+#doc .fnref { color: #8250df; font-size: .82em; vertical-align: super; line-height: 0; cursor: pointer; }
+#doc .kind-footnote { border-top: 1px solid #d8dee4; margin-top: 1.2em; padding-top: .5em; }
+#doc .kind-footnote .p.fn-def { padding-left: 1.9em; color: #57606a; font-size: .92em; }
+#doc .kind-footnote::before {
+  content: attr(data-fn) "."; position: absolute; left: 0; top: .5em;
+  color: #57606a; font-size: .92em;
+}
+#doc .fn-back a { color: #0969da; text-decoration: none; margin-left: .35em; }
 #doc .mk { color: transparent; }
 #doc .eob, #doc .mk { user-select: none; }
 #doc .atom {

@@ -10,6 +10,7 @@
 //!    否则 `` `x` `` 差集为空、反引号不会被隐藏。
 //! 3. `SoftBreak` / `HardBreak` 若一并隐藏，段落内换行会消失、排版塌成一行。
 
+use std::collections::HashMap;
 use std::ops::Range;
 
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -205,6 +206,10 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
     let mut list_stack: Vec<bool> = Vec::new();
     // (起始 byte, alt, url, 所属块)
     let mut image: Option<(usize, String, String, usize)> = None;
+    // 脚注引用：(所属块, label, 引用起点 byte)；定义：(所属块, label)
+    // 编号要等全篇事件走完、知道引用首次出现的顺序后才能定，先收集后回填。
+    let mut footnote_refs: Vec<(usize, String, usize)> = Vec::new();
+    let mut footnote_defs: Vec<(usize, String)> = Vec::new();
 
     for (event, range) in Parser::new_ext(src, options).into_offset_iter() {
         // 图片整体原子化：内部事件不外泄，避免 alt 文本与 url 被当成可见内容。
@@ -249,6 +254,19 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
                         Some(ordered) => BlockKind::List { ordered },
                         None => classify(&tag),
                     });
+                }
+                // 脚注定义是块级容器：pulldown 的 Start 区间覆盖 `[^label]: 内容`，
+                // 标签前缀不产生 Text 事件，会落进差集被折叠——编辑视图靠 CSS
+                // `::before` 显示序号（与列表项目符号同一套路子）。
+                if let Tag::FootnoteDefinition(label) = &tag
+                    && let Some(owner) = owner_of(&ranges, range.start)
+                {
+                    accs[owner].kind = Some(BlockKind::FootnoteDefinition {
+                        label: label.to_string(),
+                        number: 0,
+                        references: Vec::new(),
+                    });
+                    footnote_defs.push((owner, label.to_string()));
                 }
                 if let Tag::List(start) = &tag {
                     list_stack.push(start.is_some());
@@ -433,12 +451,16 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
             Event::FootnoteReference(label) => {
                 if let Some(owner) = owner_of(&ranges, range.start) {
                     accs[owner].spans.push(Span {
-                        kind: SpanKind::FootnoteReference,
+                        kind: SpanKind::FootnoteReference {
+                            label: label.to_string(),
+                            number: 0, // 全篇事件走完后按首次引用顺序回填
+                        },
                         byte: range.clone(),
                         text: format!("[^{label}]"),
                         style: style.clone(),
                     });
-                    accs[owner].covered.push(range);
+                    accs[owner].covered.push(range.clone());
+                    footnote_refs.push((owner, label.to_string(), range.start));
                 }
             }
             Event::InlineMath(text) => {
@@ -450,18 +472,56 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
         }
     }
 
+    // 编号规则同 GitHub：按引用在正文中首次出现的顺序递增；从未被引用的定义
+    // 排在后面，也给一个号，免得渲染时没有锚点。
+    let mut numbers: HashMap<String, usize> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for (_, label, _) in &footnote_refs {
+        if !numbers.contains_key(label) {
+            let n = order.len() + 1;
+            numbers.insert(label.clone(), n);
+            order.push(label.clone());
+        }
+    }
+    for (_, label) in &footnote_defs {
+        if !numbers.contains_key(label) {
+            let n = order.len() + 1;
+            numbers.insert(label.clone(), n);
+            order.push(label.clone());
+        }
+    }
+    let mut refs_by_label: HashMap<String, Vec<usize>> = HashMap::new();
+    for (_, label, byte) in &footnote_refs {
+        refs_by_label.entry(label.clone()).or_default().push(*byte);
+    }
+
     let mut blocks = Vec::with_capacity(ranges.len());
     let mut outline = Vec::new();
 
     for (index, acc) in accs.into_iter().enumerate() {
         let Acc {
-            spans,
+            mut spans,
             covered,
             containers,
-            kind,
+            mut kind,
             table,
             list_items,
         } = acc;
+        // 回填编号与回链目标：定义块拿 references，引用片段拿 number。
+        if let Some(BlockKind::FootnoteDefinition {
+            label,
+            number,
+            references,
+        }) = &mut kind
+        {
+            *number = numbers.get(label).copied().unwrap_or(0);
+            *references = refs_by_label.get(label).cloned().unwrap_or_default();
+        }
+        for span in &mut spans {
+            if let SpanKind::FootnoteReference { label, number } = &mut span.kind {
+                *number = numbers.get(label).copied().unwrap_or(0);
+            }
+        }
         let byte = ranges[index].clone();
         let kind = kind.unwrap_or_else(|| {
             if spans.first().is_some_and(|s| s.kind == SpanKind::Rule) {
@@ -1276,6 +1336,51 @@ mod tests {
         let src = "$$ $x$ $$";
         let inner = math_inner(src, &(0..src.len()), true);
         assert_eq!(&src[inner], " $x$ ");
+    }
+
+    #[test]
+    fn footnotes_are_numbered_by_first_reference_and_definitions_are_blocks() {
+        let src = "甲[^a]乙[^b]丙[^a]\n\n[^a]: 第一个。\n\n[^b]: 第二个。\n";
+        let parsed = parse(src, MarkdownParser::gfm().options());
+        let defs: Vec<_> = parsed
+            .blocks
+            .iter()
+            .filter_map(|b| match &b.kind {
+                BlockKind::FootnoteDefinition {
+                    label,
+                    number,
+                    references,
+                } => Some((label.as_str(), *number, references.len())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(defs.len(), 2);
+        assert_eq!(defs[0], ("a", 1, 2));
+        assert_eq!(defs[1], ("b", 2, 1));
+
+        let nums: Vec<_> = parsed.blocks[0]
+            .spans
+            .iter()
+            .filter_map(|s| match s.kind {
+                SpanKind::FootnoteReference { number, .. } => Some(number),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(nums, vec![1, 2, 1]);
+    }
+
+    #[test]
+    fn footnote_definition_label_is_folded_but_content_visible() {
+        let src = "[^x]: 定义内容。\n";
+        let block = first_block(src);
+        assert!(matches!(block.kind, BlockKind::FootnoteDefinition { .. }));
+        let hidden: String = block
+            .hidden
+            .iter()
+            .map(|r| src[r.clone()].to_owned())
+            .collect();
+        assert!(hidden.contains("[^x]:"), "标签前缀应折叠: {hidden}");
+        assert!(block.spans.iter().any(|s| s.text == "定义内容。"));
     }
 
     #[test]
