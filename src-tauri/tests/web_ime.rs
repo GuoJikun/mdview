@@ -1,26 +1,39 @@
-//! 前端脚本的守门测试。
+//! 前端测试的守门。
 //!
-//! 这一层没有 Rust 代码可测，但 `src/editor/` 里的纯逻辑不该靠肉眼验证：
-//! `ime.js`（输入法状态机）、`caretline.js`（上下移动与滚动的几何）、
-//! `selection.js`（原生选区判据）与 `dragscroll.js`（拖动时的边缘自动滚动）
-//! 都刻意不碰 DOM，因此可以直接用 Node 跑。
-//! 这里做两件事——语法检查这些脚本，再把几套用例跑一遍。
+//! 前端用例已统一到 vitest（`vitest.config.ts` 里分两个 project）：
+//!   unit —— 纯逻辑（输入法状态机、上下移动几何、选区判据、边缘滚动、大纲、主题），
+//!           跑 node 环境，几十毫秒。
+//!   dom  —— 碰真实布局的（内核启动、点击落点、光标像素定位），跑真浏览器。
 //!
-//! 编辑内核 `editor.ts` 与 `src/` 下的外壳（`bridge.ts` / `menu.ts` / `*.vue`）
-//! 是 TypeScript，`node --check` 读不了，改由 `vue-tsc --noEmit` 守门；
-//! 那道门在 `pnpm build` 里，这里不重复跑（cargo test 不该依赖 node_modules）。
+//! 这里只跑 unit：dom project 要拉一个 Chromium 实例，塞进 `cargo test` 会让
+//! Rust 侧的流水线变得又慢又脆（还依赖本机装没装 Chrome）。dom 那一半由
+//! `pnpm test:dom` 单独负责，`pnpm build` 里的 `vue-tsc` 负责类型。
 //!
-//! 浏览器行为本身（滚轮、真实选区）在这里测不了：合成事件不触发默认行为，
-//! 那部分只能靠 `--self-test` 的不变量与真人验收。
+//! 直接调 `node node_modules/vitest/vitest.mjs` 而不是 `pnpm test`：
+//! Windows 上 `Command::new("pnpm")` 找不到 `.cmd`，而 `.mjs` 入口是跨平台的。
 //!
-//! 没装 Node 时整组跳过（打印原因），不让缺工具链阻塞 Rust 侧的流水线。
+//! 没装 Node 或没装前端依赖时整组跳过（打印原因），不让缺工具链阻塞 Rust 流水线。
 
-use std::{path::PathBuf, process::Command};
+use std::{path::Path, path::PathBuf, process::Command};
+
+/// 七个纯逻辑模块仍是 `.js`（要被 node 直接加载），语法在这里单独查一遍。
+const PLAIN_SCRIPTS: [&str; 7] = [
+    "ime.js",
+    "caretline.js",
+    "selection.js",
+    "dragscroll.js",
+    "clipboard.js",
+    "outline.js",
+    "theme.js",
+];
+
+fn project_root() -> PathBuf {
+    // 测试二进制的 manifest 目录是 src-tauri/，项目根在其上一级。
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
+}
 
 fn web_dir() -> PathBuf {
-    // 测试二进制的 manifest 目录是 src-tauri/，编辑内核在其上一级的 src/editor/。
-    // 七个纯逻辑模块保持 .js，Node 可直接跑；Vite 产物在 dist/，两边互不干扰。
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/editor")
+    project_root().join("src/editor")
 }
 
 fn node_ready() -> bool {
@@ -31,10 +44,10 @@ fn node_ready() -> bool {
         .unwrap_or(false)
 }
 
-fn run_node(args: &[&str]) -> (bool, String) {
+fn run_node_at(cwd: &Path, args: &[&str]) -> (bool, String) {
     let out = Command::new("node")
         .args(args)
-        .current_dir(web_dir())
+        .current_dir(cwd)
         .output()
         .expect("node 应当可执行");
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -48,89 +61,43 @@ fn frontend_scripts_are_syntactically_valid() {
         eprintln!("跳过：本机没有 node");
         return;
     }
-    for script in [
-        "ime.js",
-        "ime.test.js",
-        "caretline.js",
-        "caretline.test.js",
-        "selection.js",
-        "selection.test.js",
-        "dragscroll.js",
-        "dragscroll.test.js",
-        "clipboard.js",
-        "outline.js",
-        "outline.test.js",
-        "theme.js",
-        "theme.test.js",
-    ] {
-        let (ok, output) = run_node(&["--check", script]);
+    for script in PLAIN_SCRIPTS {
+        let (ok, output) = run_node_at(&web_dir(), &["--check", script]);
         assert!(ok, "{script} 语法错误：\n{output}");
     }
 }
 
 #[test]
-fn ime_state_machine_passes_its_suite() {
+fn frontend_unit_suites_pass() {
     if !node_ready() {
         eprintln!("跳过：本机没有 node");
         return;
     }
-    let (ok, output) = run_node(&["ime.test.js"]);
-    assert!(ok, "输入法状态机测试失败：\n{output}");
-    // 断言用例确实跑了，避免文件被清空后「零项全过」的假绿
-    assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
-}
-
-#[test]
-fn vertical_motion_geometry_passes_its_suite() {
-    if !node_ready() {
-        eprintln!("跳过：本机没有 node");
+    let root = project_root();
+    let vitest = root.join("node_modules/vitest/vitest.mjs");
+    if !vitest.exists() {
+        eprintln!("跳过：没装前端依赖（先 `pnpm install`）");
         return;
     }
-    let (ok, output) = run_node(&["caretline.test.js"]);
-    assert!(ok, "上下移动几何测试失败：\n{output}");
-    assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
-}
-
-#[test]
-fn native_selection_rule_passes_its_suite() {
-    if !node_ready() {
-        eprintln!("跳过：本机没有 node");
-        return;
+    let (ok, output) = run_node_at(
+        &root,
+        &[
+            vitest.to_str().expect("路径应当可转成 UTF-8"),
+            "run",
+            "--project",
+            "unit",
+        ],
+    );
+    assert!(ok, "前端 unit 用例失败：\n{output}");
+    // 六套用例的文件名都该出现在汇总里，避免某个文件被漏掉而整体仍然绿
+    for suite in [
+        "ime.test.ts",
+        "caretline.test.ts",
+        "selection.test.ts",
+        "dragscroll.test.ts",
+        "outline.test.ts",
+        "theme.test.ts",
+    ] {
+        assert!(output.contains(suite), "没有跑到 {suite}：\n{output}");
     }
-    let (ok, output) = run_node(&["selection.test.js"]);
-    assert!(ok, "原生选区判据测试失败：\n{output}");
-    assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
-}
-
-#[test]
-fn drag_autoscroll_geometry_passes_its_suite() {
-    if !node_ready() {
-        eprintln!("跳过：本机没有 node");
-        return;
-    }
-    let (ok, output) = run_node(&["dragscroll.test.js"]);
-    assert!(ok, "边缘自动滚动测试失败：\n{output}");
-    assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
-}
-
-#[test]
-fn outline_sync_geometry_passes_its_suite() {
-    if !node_ready() {
-        eprintln!("跳过：本机没有 node");
-        return;
-    }
-    let (ok, output) = run_node(&["outline.test.js"]);
-    assert!(ok, "大纲联动几何测试失败：\n{output}");
-    assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
-}
-
-#[test]
-fn theme_resolution_passes_its_suite() {
-    if !node_ready() {
-        eprintln!("跳过：本机没有 node");
-        return;
-    }
-    let (ok, output) = run_node(&["theme.test.js"]);
-    assert!(ok, "主题解析测试失败：\n{output}");
-    assert!(output.contains("项全过"), "没有看到测试汇总：\n{output}");
 }

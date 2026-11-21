@@ -77,7 +77,7 @@ crates/
 ```
 
 前端工程根 = 仓库根：`src/`（Vite + Vue 3 + TypeScript）、`index.html`、`dist/`（构建产物，不入库）。
-`src/editor/editor.ts` 是编辑内核投影层（全量 TS，无 `@ts-nocheck`），契约类型在 `src/editor/ipc.ts`；七个纯逻辑模块（`ime/caretline/selection/dragscroll/clipboard/outline/theme`）保持 `.js` 原样（`node --test` 要能直接跑），与它同放 `src/editor/`；
+`src/editor/editor.ts` 是编辑内核投影层（全量 TS，无 `@ts-nocheck`），契约类型在 `src/editor/ipc.ts`；七个纯逻辑模块（`ime/caretline/selection/dragscroll/clipboard/outline/theme`）保持 `.js` 原样（要用例在 vitest 的 node project 里直接加载），与它同放 `src/editor/`；
 外壳（标题栏 / 菜单 / 状态栏 / toast）由 `src/components/*.vue` 渲染，经 `src/bridge.ts` 与内核单向通信。
 大纲与正文区是 Vue 覆盖层上的「洞」，不进任何组件模板。
 
@@ -232,8 +232,8 @@ byte   0  2  5  8  10
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-20（M1 + M2 + 表格子工程 + 前端工程化收尾）
-- 测试：**Rust 204 项全过**（app 76 / markdown 96 / desktop bin 13 + 前端守门 7 / core 5 / support 7），无编译告警；前端守门 7 项是 `node --check` 全部脚本（含 `clipboard.js`、`dragscroll.js`、`outline.js`、`theme.js`）+ 六套 Node 用例：`ime` 13 项、`caretline` 21 项、`selection` 4 项、`dragscroll` 16 项、`outline` 10 项、`theme` 7 项，共 71 项
+- 日期：2026-11-21（数据安全闭环 + 前端测试迁到 vitest）
+- 测试：**Rust 205 项全过**（app 80 / markdown 96 / desktop bin 15 + 前端守门 2 / core 5 / support 7），无编译告警。前端守门那 2 项是：`node --check` 七个 `.js` 模块 + 跑 vitest 的 unit project（6 文件 75 项：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11）。另有 **dom project 10 项**（真实 Chromium 里的内核启动与浏览器能力自检），由 `pnpm test:dom` 单独跑——它要拉一个浏览器实例，塞进 `cargo test` 会让 Rust 流水线变慢且依赖本机装没装 Chrome
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
 - 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 61/61」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 13 项**、**表格 8 项**、**打开文件 4 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
@@ -334,13 +334,12 @@ cargo run -p mdview-cli -- <file> html      # 阅读态 HTML
 pnpm tauri dev -- -- <file>                 # 起窗（Tauri 2 + Vite devUrl）
 pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test
                                             # 端到端自检（CWD=src-tauri/），跑完自动退出
-node src/ime.test.js  # 输入法状态机单测（cargo test 已含）
-node src/caretline.test.js  # 上下移动几何单测（cargo test 已含）
-node src/selection.test.js # 原生选区判据单测（cargo test 已含）
-node src/dragscroll.test.js # 边缘自动滚动几何单测（cargo test 已含）
+pnpm test                                   # 前端全部用例（unit + dom 两个 project）
+pnpm test:unit                              # 七个纯逻辑模块（node 环境，cargo test 已含这一支）
+pnpm test:dom                               # 真实浏览器里的内核启动用例（需本机有 Chrome/Edge）
 ```
 
-`--self-test` 会在真实 WebView2 里合成 composition 事件与方向键，把结果写进日志并以 0/1 退出，是唯一不需要人打字的端到端验证。它同时是唯一能验证「像素对齐」的地方——纯 Node 用例只能喂合成矩形。
+`--self-test` 会在真实 WebView2 里合成 composition 事件与方向键，把结果写进日志并以 0/1 退出，是唯一不需要人打字的端到端验证。它仍然是唯一跑在**真实 WebView2**里的验证——vitest 的 dom project 用的是系统 Chrome，能测真实布局（光标像素、点击落点、视口滚动），但内核最终要跑的那个 WebView2 环境只有自检覆盖得到。
 
 日志落在可执行文件同级 `logs/`：`mdview.log`（5×1MB 滚动）、`error.log`（error 独占，5×1MB）。只读目录自动回落到 `%LOCALAPPDATA%/mdview/logs`。
 
@@ -370,17 +369,18 @@ node src/dragscroll.test.js # 边缘自动滚动几何单测（cargo test 已含
 | **保存与另存为**（`Effect::NeedsPath` / `WriteFailed`、保存对话框只给路径不写盘） | `crates/mdview-app/src/state.rs`（`save_into`）、`src-tauri/src/main.rs`（`pick_save_path`）、`src/editor/editor.ts`（`requestSavePath`） |
 | **新建 / 关闭 / 换文档的守卫**（`new_file`、`ask_discard`、`CloseGuard` + `close-requested`） | `src-tauri/src/main.rs`、`src-tauri/src/session.rs`（`new_file` / `is_dirty`）、`src/editor/editor.ts`（`adoptSnapshot`、close 监听） |
 | **表格交互**（Tab 跨格、状态栏行列工具条、自检 6 项） | `src/editor/editor.ts`、`app.css` |
-| **大纲侧栏**（锚点判定 + 跳转，不碰 DOM，Node 可测） | `src/editor/outline.js`、`outline.test.js`、`editor.ts`（侧栏渲染/联动） |
-| **主题系统**（跟随系统 + 手动切换 + localStorage，不碰 DOM，Node 可测） | `src/editor/theme.js`、`theme.test.js`、`app.css`（CSS 变量） |
+| **大纲侧栏**（锚点判定 + 跳转，不碰 DOM，跑 unit project） | `src/editor/outline.js`、`outline.test.ts`、`editor.ts`（侧栏渲染/联动） |
+| **主题系统**（跟随系统 + 手动切换 + localStorage，不碰 DOM，跑 unit project） | `src/editor/theme.js`、`theme.test.ts`、`app.css`（CSS 变量） |
 | **编辑页**（停靠点 → 像素、按键 → 消息、增量应用、自检入口） | `src/editor/editor.ts` |
-| **输入法状态机**（不碰 DOM，Node 可测） | `src/editor/ime.js`、`ime.test.js` |
-| **上下移动几何**（视觉行判定 + 期望列，不碰 DOM，Node 可测） | `src/editor/caretline.js`、`caretline.test.js` |
-| **视口与原生选区**（滚多少才露头、哪些原生选区该清，不碰 DOM） | `src/editor/caretline.js`（`scrollDelta`）、`selection.js`、`selection.test.js` |
-| **拖选时的边缘自动滚动**（速度曲线、探针点压缩、自走帧循环，不碰 DOM） | `src/editor/dragscroll.js`、`dragscroll.test.js` |
+| **输入法状态机**（不碰 DOM，跑 unit project） | `src/editor/ime.js`、`ime.test.ts` |
+| **上下移动几何**（视觉行判定 + 期望列，不碰 DOM，跑 unit project） | `src/editor/caretline.js`、`caretline.test.ts` |
+| **视口与原生选区**（滚多少才露头、哪些原生选区该清，不碰 DOM） | `src/editor/caretline.js`（`scrollDelta`）、`selection.js`、`selection.test.ts` |
+| **拖选时的边缘自动滚动**（速度曲线、探针点压缩、自走帧循环，不碰 DOM） | `src/editor/dragscroll.js`、`dragscroll.test.ts` |
+| **浏览器里的内核启动用例**（铺 index.html 骨架 + mock IPC + 断言光标像素） | `src/editor/editor.dom.test.ts`、`env.dom.test.ts` |
 | 自检样张（必须是「一块一行」的文档） | `src-tauri/tests/fixtures/selftest.md` |
 | **剪贴板写入**（内核给文本、前端写系统剪贴板，`execCommand` 兜底） | `src/editor/clipboard.js` |
 | **键位契约**（`Ctrl+A/C/X` → `selectAll`/`copy`/`cut`，见 `editor.ts` 的 keydown） | `src/editor/editor.ts`、`src-tauri/src/session.rs` |
-| 前端守门测试（语法检查 + 跑六套 Node 用例） | `src-tauri/tests/web_ime.rs` |
+| 前端守门测试（语法检查七个 `.js` + 跑 vitest 的 unit project；dom project 不进 cargo test） | `src-tauri/tests/web_ime.rs`、`vitest.config.ts` |
 | **Vue 外壳入口**（挂载、单入口 import、UA 首帧判定、平台复核） | `src/main.ts`、`src/platform.ts` |
 | **状态桥**（只读快照 / `set` / `notify` / `dispatch` / `setTitle` / `nextTick`） | `src/bridge.ts` |
 | **标题栏 / 菜单 / 状态栏 / Toast**（模板复刻原 `id`/`class`） | `src/components/TitleBar.vue`、`MenuPopup.vue`、`StatusBar.vue`、`Toast.vue` |

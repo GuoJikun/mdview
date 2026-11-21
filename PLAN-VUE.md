@@ -127,8 +127,11 @@ Vue 画的标题栏/状态栏/toast 与现有同名 DOM 会**短暂共存**（�
 │  └─ editor/                           ← 编辑内核，与外壳分家（详见 P3.5）
 │     ├─ editor.ts                      停靠点 → 像素、按键 → 消息、增量应用、自检入口
 │     ├─ ipc.ts                         IPC 契约类型（对应 src-tauri/src/session.rs，P3.6）
-│     └─ ime.js / caretline.js / selection.js / dragscroll.js / clipboard.js
-│        outline.js / theme.js + 六套 *.test.js   ← 七个纯逻辑模块原样保留
+│     ├─ editor.dom.test.ts             真实浏览器里的内核启动用例（P3.7）
+│     ├─ env.dom.test.ts                浏览器能力自检（真实布局 / 命中 / 滚动，P3.7）
+│     ├─ ime.js / caretline.js / selection.js / dragscroll.js / clipboard.js
+│     ├─ outline.js / theme.js          ← 七个纯逻辑模块原样保留（.js）
+│     └─ 六套 *.test.ts                 ← unit project：node 环境，75 项
 ├─ dist/                                ← Vite 产物（gitignore）；frontendDist 指向它
 ├─ src-tauri/                           ← Rust crate（原 crates/mdview-desktop 内容整体挪入）
 │  ├─ Cargo.toml / build.rs
@@ -259,7 +262,7 @@ Vue 侧的菜单项、状态栏按钮点击后：`emit('action', name)` → `bri
 
 ## 6. 分阶段计划与过关线
 
-基线（迁移前，已实测）：**端到端自检 57/57** · **Rust 194 项全过** · **六套 Node 用例 71 项全过**。P0 后实测为 **自检 61/61**、**Rust 204 项全绿**。每阶段结束都必须回到这条线。
+基线（迁移前，已实测）：**端到端自检 57/57** · **Rust 194 项全过** · **六套 Node 用例 71 项全过**。P0 后实测为 **自检 61/61**、**Rust 204 项全绿**。P3.7 后为 **Rust 205 项**（守门从 7 项合并为 2 项）+ **vitest 85 项**（unit 75 + dom 10）。每阶段结束都必须回到这条线。
 
 | 阶段 | 状态 | 内容 | 过关线 |
 |---|---|---|---|
@@ -287,8 +290,9 @@ P0-a 独立成段是因为它和 Vue 无关、纯路径调整，先做能单独�
 8. **`frontendDist` / `build.rs` / workspace members 必须同改**：三者任一遗漏都会出现「跑的是旧产物」「编译期嵌入空目录」或「workspace 解析失败」。P0-a 后用自检和全量测试验证，不要靠肉眼。
 9. **相对路径基准变了**：conf、`build.rs`、守门测试的 CWD/基准目录都从 crate 根变成 `src-tauri/`，所有 `web` 相关路径都要重新核对；`generate_context!()` 和 capabilities 因随 conf 同目录而免疫。
 10. **脚本必须带 `type="module"` 才会被 Vite 打包**：早期 `index.html` 里那 9 个 `<script src="/src/xxx.js">` 若不写 `type="module"`，Vite 会警告「can't be bundled」并原样输出 `/src/` 路径，而 dist 里没有 `src/` 目录 → 运行时全部 404。现已收敛为单一入口 `<script type="module" src="/src/main.ts">`，纯逻辑模块由 `editor/editor.ts` 显式 import，不再依赖脚本标签顺序或 window 全局。
-11. **`"type": "module"` 与 CommonJS 测试的冲突（已解决）**：早期六套 `*.test.js` 用 `require('assert')`，靠 `src/package.json` 里的 `{"type":"commonjs"}` 让 Node 按 CommonJS 跑。现已把七个 `.js` 模块与六套测试全部改成 ES Module，局部 `src/package.json` 已删除，Node 直接继承根 `package.json` 的 `type: module`；文件名保持不变，守门测试里的清单无需改动。
+11. **`"type": "module"` 与 CommonJS 测试的冲突（已解决）**：早期六套 `*.test.js` 用 `require('assert')`，靠 `src/package.json` 里的 `{"type":"commonjs"}` 让 Node 按 CommonJS 跑。现已把七个 `.js` 模块与六套测试全部改成 ES Module，局部 `src/package.json` 已删除，Node 直接继承根 `package.json` 的 `type: module`。**P3.7 起**测试文件改为 `.test.ts` 并由 vitest 加载，守门清单与运行方式同步更新。
 12. **`dist/` 不入库，直接 `cargo build` 会失败**：`generate_context!()` 编译期读 `dist/index.html`，新 clone 或清理后它是空的。任何 `cargo` 直跑前先 `pnpm build`；`tauri dev/build` 有 before 命令兜底。`cargo test --workspace` 也会编译 desktop bin，所以首次跑测试前同样要先 build 前端。
+13. **vitest 浏览器模式的三个坑**：① `launchOptions` 是 **provider 级**选项（`playwright({ launchOptions })`），写到 `browser.instances[].launch` 会被**静默忽略**，随后转去下载 Playwright 自带的 Chromium——本机 `cdn.playwright.dev` 经代理 10 分钟零字节，表现为「卡住不动」；用 `channel: 'chrome'` 复用系统浏览器即可。② `optimizeDeps.include` 必须显式列出 `@tauri-apps/api/core` 与 `@tauri-apps/api/event`，否则首次 import 时 Vite 会中途 reload 测试（`Vite unexpectedly reloaded a test`），表现为偶发失败。③ `vi.mock` 的工厂会被提升，要引用的数据必须放进 `vi.hoisted`。另：`boot()` 末尾会 `invoke('ready')`，断言 IPC 调用序列时别漏这一条。
 
 ---
 
@@ -302,6 +306,12 @@ pnpm exec vue-tsc --noEmit
 
 # 全量测试（含守门测试；cargo 直接跑依赖上面的 dist）
 cargo test --workspace
+
+# 前端用例：unit（node 环境，75 项）+ dom（真实 Chromium，10 项）
+pnpm test                 # 两个 project 一起跑
+pnpm test:unit            # 只跑纯逻辑（cargo test 已含这一支）
+pnpm test:dom             # 只跑浏览器用（需本机装 Chrome 或 Edge）
+pnpm test:watch           # 改代码时盯着
 
 # 端到端自检 —— 推荐用 tauri dev（走 Vite devUrl 链路，窗口能拿到焦点）
 # 注意 CWD：tauri dev 把应用参数转给 cargo run 时，cwd 是 src-tauri/，
@@ -341,5 +351,6 @@ pnpm tauri dev -- -- tests/fixtures/selftest.md
 | 2026-11-20 | **P2-3 完成（TitleBar + MenuPopup）**：新增 `menu.ts`（菜单树 + 展开状态）与 `MenuPopup.vue`（子菜单 / 勾选态 / 键盘导航 / 定位）；`TitleBar.vue` 接管标题、窗口按钮、拖拽区与最大化图标；`titlebar.js` 的滚动条抽成 `scrollbars.ts`，`setTitle` 与 `close-window` 收进 bridge；删除 `src/titlebar.js` 并同步守门清单。自检里点菜单后补 `await nextTick()`。验证：`pnpm build` 通过、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |
 | 2026-11-20 | **P3 完成（单入口 + 文档收尾）**：`index.html` 只留 `<script type="module" src="/src/main.ts">`，九个旧脚本按序在 `main.ts` 里 `import`；首帧 UA 判定挪到 `platform.ts`，删除 `<head>` 内联脚本以符合 CSP；守门清单与注释早已随 P2-3 更新；主 `PLAN.md` 的结构、路径、测试数、命令与文件地图同步到 Vue 工程；真实窗口截图复核标题栏/菜单/状态栏/滚动条与正文让位。验证：`pnpm build` 通过、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |
 | 2026-11-20 | **合并**：`ui-vue-p1` 快进并入 `ui-vue`（`2062d3c`），主仓库工作树同步更新 |
+| 2026-11-21 | **P3.7 完成（测试迁到 vitest）**：六套 `node:test` 用例改写为 vitest（`.test.js` → `.test.ts`，`assert.*` → `expect`，断言语义逐条对齐，75 项数量不变）；新增 `vitest.config.ts` 分两个 project——`unit` 跑 node 环境，`dom` 跑真实 Chromium。dom 用 `playwright()` provider + `launchOptions: { channel: 'chrome' }` 复用系统 Chrome，不下载 Playwright 自带那份（`cdn.playwright.dev` 在本机经代理 10 分钟零字节）。新增 `editor.dom.test.ts`（铺 `index.html` 骨架 + mock `invoke`/`listen` + 动态 import 真 `editor.ts`，断言投影块、大纲条目与**光标像素**）与 `env.dom.test.ts`（真实布局/命中/滚动/CSS 变量等九项能力自检）。`web_ime.rs` 守门从 7 项合并为 2 项（`node --check` 七个 `.js` + 跑 unit project），dom project 不进 cargo test。`package.json` 补 `test` / `test:unit` / `test:dom` / `test:watch`。三个坑记在风险红线第 13 条。验证：`pnpm test` **85 项全过**（1.27s）、`cargo test --workspace` **205 项**、`vue-tsc` 0 错误 |
 | 2026-11-21 | **P3.6 完成（editor.ts 类型化）**：新增 `src/editor/ipc.ts`——`Wire`（23 种 `kind` 的可辨识联合，与 `session.rs` 的 `Wire` 枚举逐条对应）、`Reply` / `Snapshot` / `BlockDto` / `PatchDto` / `CaretDto`（保留 Rust 侧 `char_offset` / `old_len` 等原始字段名，不做 camelCase 改写）、`CaretPos` / `Box` / `Point` / `Check`，以及 `window.__mdviewSelfTest` 的全局声明；`editor.ts` 摘掉 `@ts-nocheck`，DOM 句柄按 `index.html` 骨架断言类型，状态、事件、自检逐处标注。七个纯逻辑模块仍是带 JSDoc 的 `.js`（`node --test` 要能直接跑），类型由 TS 从注释推断，仅在 `createIme` 的 `send: object` 处做一次收窄。顺带三处防御性修正：`selectionchange` 的 null 选区、paste 的两条 `clipboardData` 路径、滚动条节点缺失时改判否而不是抛异常。验证：`vue-tsc --noEmit` 0 错误、`pnpm build` 产物 126.23 KB/12.29 KB（与改动前持平）、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |
 | 2026-11-21 | **P3.5 完成（内核收敛）**：`src/app.js` → `src/editor/editor.ts`，与文档里一直写的 `editor.ts` 对齐；七个纯逻辑模块与六套用例同移入 `src/editor/`，`src/` 根只剩入口（`main.ts`/`index.html`）与外壳（`bridge.ts`/`menu.ts`/`platform.ts`/`scrollbars.ts`/`components/`）；`web_ime.rs` 的 `cwd` 改为 `../src/editor` 并从语法清单移除 `app.js`。改名后 `editor.ts` 首次进入 `tsconfig` 范围，暴露出 297 处隐式 `any`/可空错误——本次先加 `@ts-nocheck` 并写明待办（类型补齐另开一轮，避免混进纯结构重构）。同步修掉三处指向不存在文件的注释（`main.rs` / `session.rs` 的 `src/editor.ts`、`editor.ts` 里的 README、`StatusBar.vue` 里的 `titlebar.js`）。验证：`vue-tsc` 干净、`pnpm build` 通过、`cargo test --workspace` 204 项全绿、端到端自检 **OK 61/61** |

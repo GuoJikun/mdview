@@ -6,3 +6,5 @@
 /src-tauri/gen
 /dist
 node_modules
+# vitest 浏览器模式失败时自动截的图
+.vitest
