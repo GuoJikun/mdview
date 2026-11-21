@@ -122,9 +122,12 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ---- 自绘标题栏（Windows / Linux，参考 image-view）----------------
-   默认隐藏：macOS 用系统标题栏 + 系统菜单栏，由 <head> 里的平台判定决定
-   是否给 <html> 加 custom-titlebar。窗口 decorations 也按平台配置。 */
+/* ---- 标题栏 ---------------------------------------------------------
+   默认隐藏。Windows / Linux 走完整自绘（菜单 + 居中标题 + 窗口按钮）；
+   macOS 走覆盖式：系统只保留红黄绿灯和原生菜单栏，原生标题文字用
+   titleBarStyle: Overlay + hiddenTitle 隐藏，改由网页顶层画一条居中标题。
+   两种形态分别由 <html> 的 custom-titlebar / native-titlebar 类决定，
+   窗口配置见 tauri.{windows,linux,macos}.conf.json。 */
 #titlebar, #tb-menu-popup { display: none; }
 html.custom-titlebar #titlebar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 30;
@@ -134,6 +137,26 @@ html.custom-titlebar #titlebar {
   -webkit-user-select: none; user-select: none;
   font-family: var(--font-ui);
 }
+/* macOS 覆盖式标题条：webview 延伸到原生标题栏下方，这里盖住那一段，
+   只显示居中标题；红黄绿灯是系统视图，浮在这条之上。 */
+html.native-titlebar #titlebar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 30;
+  display: flex; align-items: center; height: 28px;
+  background: var(--bg); color: var(--text);
+  font-family: var(--font-ui);
+  -webkit-user-select: none; user-select: none;
+}
+/* Win/Linux 那套菜单与窗口按钮在 macOS 不出现，只留中间的标题 */
+html.native-titlebar .tb-left,
+html.native-titlebar .tb-right { display: none; }
+html.native-titlebar .tb-title {
+  max-width: 70%; font-size: 13px; font-weight: 600;
+  color: var(--text); opacity: .9;
+}
+/* 网页内容从标题条下方开始，避免被盖住 */
+html.native-titlebar #outline { top: 28px; }
+html.native-titlebar #doc { padding-top: calc(56px + 28px); }
+html.native-titlebar #source { top: 28px; }
 .tb-left, .tb-center, .tb-right { display: flex; align-items: center; height: 100%; }
 .tb-left { min-width: 0; }
 .tb-logo {
