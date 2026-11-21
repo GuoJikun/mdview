@@ -297,7 +297,7 @@ byte   0  2  5  8  10
 - ✅ **表格子工程**（2026-11-20）：仍是源码块，但解析层从 pulldown 事件抽出 `TableGrid / TableRow / TableCell / ColumnAlign`（行列、单元格 byte 区间、对齐），只服务于投影和导航、不替代源码真值。`preview.rs` 把同一组线性停靠点铺进真正的 `<table class="md-table">` 网格，保留全部 `data-b`/`data-a`，行尾换行改零宽标记。应用层新增 `TableMoveCell` / `TableInsertRow` / `TableDeleteRow` / `TableInsertColumn` / `TableDeleteColumn`，所有操作最终转成源码替换事务；表头行插行强制落在分隔行之后，删行禁止删表头/分隔行，删列至少保留一列。前端 Tab 跨格 + 状态栏行列工具条；阅读态 `to_html` 补 `<tr>/<th>/<td>` 与对齐 style（并修掉嵌套 `<table>`）。**表格默认带 1px 边框与 4px 圆角**：根因是桌面端 `app.css` 完全没有表格样式（网格 CSS 只写在 CLI 验证页的 `preview.rs`），已补齐并用主题变量 `--rule`/`--code-bg` 适配深浅色；CLI 验证页与阅读态内联样式同步统一。Rust 单测 + 会话测试 + 端到端自检（新增 8 项）全过
 - ✅ 大纲数据层（`ParseResult::outline`）
 - ✅ **外链打开**（2026-11-21）：投影里的链接字符只带 `data-href`，**不产出 `<a href>`**——有锚点的话点一下 webview 就把整个应用导航走，且没有后退可言（中键、拖拽、右键菜单都能绕过 click 拦截，所以干脆不给出可导航的锚点）。前端在 `#doc` 上接管 click：编辑态 Ctrl/Cmd+Click、阅读态单击，转成 `open_url` 命令落到系统 shell（Windows 直调 `ShellExecuteW`，macOS `open`，Linux `xdg-open`，不引 opener 插件）。三个必须的细节：① URL 白名单只放行 `http(s)` / `mailto`，因为 `[x](javascript:...)` 是合法 Markdown，`dest_url` 会原样落进属性；② 链接的每个字符各挂一份 `data-href`，点击命中的是单个字符元素、与同链接其它字符是平级兄弟，`closest` 读不到邻居身上的属性；③ 拖选之后浏览器也会补发一次 click，位移超过 4px 视为选字。编辑态不让单击跟随链接是硬要求：正文整块都是可编辑区，抢走单击等于废掉「点哪儿光标落哪儿」
-- ⬜ 代码高亮（建议 `syntect` 或 `tree-sitter-highlight`，仅在阅读态启用）
+- ✅ **代码高亮**（2026-11-21）：解析层新增 `highlight.rs`，用自带的轻量词法扫描给围栏代码块产出 byte 区间 token（关键字 / 类型 / 字面量 / 字符串 / 注释 / 数字 / 函数 / 变量 / 标签 / 属性 / 运算符），覆盖 Rust、JS/TS、Python、JSON、HTML/XML、CSS、Shell、Go、C/C++、Java/C#、SQL、YAML、TOML、Markdown。**不引 `syntect` / `tree-sitter-highlight`**：前者要背整套语法包，后者是 C grammar，都会破坏 `mdview-markdown` 的纯 Rust 零依赖约束；这里只需要粗粒度着色，自带扫描更可控。token 挂在 `Block::tokens`，渲染时按字符停靠点查表加 `tk-*` class——编辑态与阅读态共用同一套 DOM，**停靠点集合、光标、选区、增量 patch 全不变**；阅读态 `to_html` 另按 token 切段包 `<span class="tk …">`。未知语言不着色，按原文显示
 - ⬜ 链接/图片行内编辑
 - ⬜ 粘贴 HTML 规范化（sanitize 后转 Markdown，不能直接注入）
 - ⬜ 脚注、数学公式
@@ -336,8 +336,8 @@ byte   0  2  5  8  10
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-21（数据安全闭环 + 前端测试迁到 vitest；自检 65/65 已复跑）
-- 测试：**Rust 205 项全过**（app 80 / markdown 96 / desktop bin 15 + 前端守门 2 / core 5 / support 7），无编译告警。前端守门那 2 项是：`node --check` 七个 `.js` 模块 + 跑 vitest 的 unit project（7 文件 81 项：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6）。另有 **dom project 10 项**（真实 Chromium 里的内核启动与浏览器能力自检），由 `pnpm test:dom` 单独跑——它要拉一个浏览器实例，塞进 `cargo test` 会让 Rust 流水线变慢且依赖本机装没装 Chrome
+- 日期：2026-11-21（新增代码高亮；数据安全闭环 + 前端测试迁到 vitest。自检 65/65 为上次结果，本次未重跑）
+- 测试：**Rust 230 项全过**（app 81 / markdown 114 / desktop bin 21 + 前端守门 2 / core 5 / support 7），`mdview-markdown` clippy 无告警。前端守门那 2 项是：`node --check` 七个 `.js` 模块 + 跑 vitest 的 unit project（7 文件 81 项：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6）。另有 **dom project 10 项**（真实 Chromium 里的内核启动与浏览器能力自检），由 `pnpm test:dom` 单独跑——它要拉一个浏览器实例，塞进 `cargo test` 会让 Rust 流水线变慢且依赖本机装没装 Chrome
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
 - 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 65/65」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 8 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
@@ -382,7 +382,8 @@ byte   0  2  5  8  10
   - `test(frontend): 前端用例统一迁到 vitest，按是否需要真实布局分环境`
   - `chore(tooling): 提交 mise.toml，锁定 node 与 pnpm 版本`
   - `test(editor): 用例收进 src/editor/__tests__，与实现按目录分开`
-- 分支：`ui-vue`（基于 `defbbf7`）已完成并快进并入 `main`，前端工程化无遗留分支；当前 `main` 含表格子工程、Vue 外壳、vitest 迁移
+  - `feat(markdown): 围栏代码块按语言语法高亮`
+- 分支：`feat-code-highlight` 承载代码高亮（基于 `main`）；`ui-vue`（基于 `defbbf7`）已完成并快进并入 `main`，当前 `main` 含表格子工程、Vue 外壳、vitest 迁移
 
 ---
 
@@ -475,6 +476,7 @@ pnpm test:watch                             # 改代码时盯着
 | 块切分（含末尾空段落） | `crates/mdview-markdown/src/split.rs` |
 | 片段模型、`align`、HTML、**标记配对表**（`Block::markers`） | `crates/mdview-markdown/src/block.rs` |
 | 投影（差集、图片原子化、内联代码内缩、标记配对推导、**表格结构抽出**） | `crates/mdview-markdown/src/project.rs` |
+| **代码块词法着色**（token → `tk-*` class，覆盖常见语言） | `crates/mdview-markdown/src/highlight.rs` |
 | **表格结构化模型**（`TableGrid` / 单元格 byte / 对齐 / 跨格导航 / 阅读态 `<tr>/<th>/<td>`） | `crates/mdview-markdown/src/block.rs` |
 | **视觉布局与停靠点** | `crates/mdview-markdown/src/layout.rs` |
 | **分块帧与增量 patch**（`block_frames` / `diff_frames`）+ 验证页 + **表格网格渲染** | `crates/mdview-markdown/src/preview.rs` |

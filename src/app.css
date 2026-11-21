@@ -10,6 +10,18 @@
   --border: #eaecef;
   --code-bg: #f6f8fa;
   --inline-code-bg: #eff1f3;
+  /* 代码高亮：GitHub 浅色配色 */
+  --tk-comment: #6e7781;
+  --tk-keyword: #cf222e;
+  --tk-type: #953800;
+  --tk-literal: #0550ae;
+  --tk-string: #0a3069;
+  --tk-number: #0550ae;
+  --tk-function: #8250df;
+  --tk-variable: #953800;
+  --tk-tag: #116329;
+  --tk-attribute: #0550ae;
+  --tk-operator: #57606a;
   --quote-border: #dfe2e5;
   --link: #0969da;
   --rule: #d0d7de;
@@ -56,6 +68,18 @@
   --border: #30363d;
   --code-bg: #161b22;
   --inline-code-bg: #21262d;
+  /* 代码高亮：GitHub 深色配色 */
+  --tk-comment: #8b949e;
+  --tk-keyword: #ff7b72;
+  --tk-type: #ffa657;
+  --tk-literal: #79c0ff;
+  --tk-string: #a5d6ff;
+  --tk-number: #79c0ff;
+  --tk-function: #d2a8ff;
+  --tk-variable: #ffa657;
+  --tk-tag: #7ee787;
+  --tk-attribute: #79c0ff;
+  --tk-operator: #c9d1d9;
   --quote-border: #3d444d;
   --link: #58a6ff;
   --rule: #484f58;
@@ -386,6 +410,19 @@ html[data-view="reading"] #doc {
   font-family: "Cascadia Code", Consolas, monospace; font-size: .9em;
   background: var(--inline-code-bg); border-radius: 3px;
 }
+/* 代码块语法着色。class 由 mdview-markdown 的 highlight.rs 写进每个字符的
+   span，停靠点与选区逻辑完全不变；非代码块不会带这些类。 */
+#doc .tk-comment { color: var(--tk-comment); font-style: italic; }
+#doc .tk-keyword { color: var(--tk-keyword); }
+#doc .tk-type { color: var(--tk-type); }
+#doc .tk-literal { color: var(--tk-literal); }
+#doc .tk-string { color: var(--tk-string); }
+#doc .tk-number { color: var(--tk-number); }
+#doc .tk-function { color: var(--tk-function); }
+#doc .tk-variable { color: var(--tk-variable); }
+#doc .tk-tag { color: var(--tk-tag); }
+#doc .tk-attribute { color: var(--tk-attribute); }
+#doc .tk-operator { color: var(--tk-operator); }
 #doc .a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
 /* 阅读态单击链接就打开；编辑态单击属于光标定位，指针仍是文本光标 */
 html[data-view="reading"] #doc .a { cursor: pointer; }

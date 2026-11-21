@@ -18,6 +18,7 @@ use crate::block::{
     Block, BlockId, BlockKind, ColumnAlign, ListInfo, ListItem, MarkerPair, OutlineItem,
     ParseResult, Span, SpanKind, Style, TableCell, TableGrid, TableRow,
 };
+use crate::highlight::highlight;
 use crate::split::split_blocks;
 
 /// Markdown 解析入口。所有区间均为 byte offset（与 `into_offset_iter` 一致）。
@@ -464,6 +465,21 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
         let list = matches!(kind, BlockKind::List { .. })
             .then(|| ListInfo { items: list_items })
             .filter(|info| !info.items.is_empty());
+        // 代码块在投影完成后做一次词法着色。区间取可见片段的并集，围栏本身
+        // 落在 `hidden` 里，不会被当成代码。
+        let tokens = match &kind {
+            BlockKind::CodeBlock { info } => {
+                let content = spans
+                    .iter()
+                    .filter(|s| s.byte.start < s.byte.end)
+                    .map(|s| s.byte.clone())
+                    .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end));
+                content
+                    .map(|range| highlight(info.as_deref(), src, range))
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
         let block = Block {
             id: BlockId(index),
             kind,
@@ -473,6 +489,7 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
             markers,
             table,
             list,
+            tokens,
         };
         let block = if heading_is_bare(src, &block) {
             demote_to_paragraph(src, block)
@@ -537,6 +554,7 @@ fn demote_to_paragraph(src: &str, block: Block) -> Block {
         markers: Vec::new(),
         table: None,
         list: None,
+        tokens: Vec::new(),
     }
 }
 
@@ -911,6 +929,37 @@ mod tests {
         assert!(visible.contains("let a = 1;"));
         let hidden: String = block.hidden.iter().map(|r| &src[r.clone()]).collect();
         assert!(hidden.contains("```"));
+    }
+
+    #[test]
+    fn code_block_tokens_cover_only_the_body() {
+        let src = "```rust\nlet a = 1; // 说明\n```";
+        let block = first_block(src);
+        assert!(!block.tokens.is_empty(), "代码块没有产出着色片段");
+        assert!(
+            block
+                .tokens
+                .iter()
+                .any(|t| t.kind == crate::highlight::TokenKind::Keyword),
+            "缺少关键字着色: {:?}",
+            block.tokens
+        );
+        let body_start = src.find('\n').unwrap() + 1;
+        let body_end = src.rfind("```").unwrap();
+        for token in &block.tokens {
+            assert!(
+                body_start <= token.byte.start && token.byte.end <= body_end,
+                "着色片段越过围栏: {:?}",
+                token.byte
+            );
+        }
+    }
+
+    #[test]
+    fn non_code_blocks_have_no_tokens() {
+        let src = "# 标题\n\n普通段落\n";
+        let parsed = parse(src, MarkdownParser::gfm().options());
+        assert!(parsed.blocks.iter().all(|b| b.tokens.is_empty()));
     }
 
     #[test]

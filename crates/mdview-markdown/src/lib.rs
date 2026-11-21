@@ -12,6 +12,7 @@
 
 mod asset;
 mod block;
+mod highlight;
 mod layout;
 mod preview;
 mod project;
@@ -23,6 +24,7 @@ pub use block::{
     Block, BlockId, BlockKind, ColumnAlign, ListInfo, ListItem, OutlineItem, ParseResult, Span,
     SpanKind, Style, TableCell, TableGrid, TableRow, align,
 };
+pub use highlight::{Token, TokenKind};
 pub use layout::{Caret, DocumentLayout, Gravity, Layout, Selection, Stop};
 pub use preview::{BlockFrame, Patch, block_frames, diff_frames, preview_html};
 pub use project::{MarkdownParser, parse};

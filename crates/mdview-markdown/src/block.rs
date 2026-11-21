@@ -1,4 +1,7 @@
+use std::fmt::Write as _;
 use std::ops::Range;
+
+use crate::highlight::Token;
 
 /// 块在文档内的序号。编辑后按位置重排，不做跨版本持久化。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -252,6 +255,8 @@ pub struct Block {
     pub table: Option<TableGrid>,
     /// 列表项的结构化投影。只有 `BlockKind::List` 才有值。
     pub list: Option<ListInfo>,
+    /// 代码块的词法着色片段。非代码块恒为空，不影响停靠点。
+    pub tokens: Vec<Token>,
 }
 
 impl Block {
@@ -357,6 +362,10 @@ impl Block {
             None if matches!(self.kind, BlockKind::Table) => {
                 "<table style=\"border-collapse:separate;border-spacing:0;border:1px solid #d0d7de;border-radius:4px;overflow:hidden\">".to_owned()
             }
+            // 代码块的着色靠 `tk-*` 片段 class，外壳给一个稳定的钩子方便挂样式
+            None if matches!(self.kind, BlockKind::CodeBlock { .. }) => {
+                "<pre class=\"md-code\">".to_owned()
+            }
             None => format!("<{tag}>"),
         };
         let is_list = matches!(self.kind, BlockKind::List { .. });
@@ -419,13 +428,18 @@ impl Block {
         if is_list {
             out.push_str(&list_li_open(self.first_list_depth()));
         }
+        let is_code = matches!(self.kind, BlockKind::CodeBlock { .. });
         for span in &self.spans {
             if is_list && is_item_boundary(self, span) {
                 out.push_str("</li>");
                 out.push_str(&list_li_open(self.list_depth_after(span.byte.start)));
                 continue;
             }
-            self.push_span(&mut out, span);
+            if is_code && !self.tokens.is_empty() && matches!(span.kind, SpanKind::Text) {
+                self.push_code_span(&mut out, src, span);
+            } else {
+                self.push_span(&mut out, span);
+            }
         }
         if is_list {
             out.push_str("</li>");
@@ -482,6 +496,42 @@ impl Block {
                     out.push_str("</strong>");
                 }
             }
+        }
+    }
+
+    /// 代码块的文本片段：按 [`Token`] 切段包 `<span class="tk tk-*">`。
+    ///
+    /// 只有「片段文本 == 源码切片」时才按 byte 对齐；代码块里一般成立，万一
+    /// 不成立（例如将来引入实体转义）就退回纯文本，宁可不上色也不能错位。
+    fn push_code_span(&self, out: &mut String, src: &str, span: &Span) {
+        let Some(raw) = src.get(span.byte.clone()) else {
+            out.push_str(&escape(&span.text));
+            return;
+        };
+        if raw != span.text {
+            out.push_str(&escape(&span.text));
+            return;
+        }
+        let mut pos = span.byte.start;
+        for token in &self.tokens {
+            let start = token.byte.start.max(span.byte.start);
+            let end = token.byte.end.min(span.byte.end);
+            if end <= pos || start >= span.byte.end {
+                continue;
+            }
+            if start > pos {
+                out.push_str(&escape(&src[pos..start]));
+            }
+            let _ = write!(
+                out,
+                "<span class=\"tk {}\">{}</span>",
+                token.kind.class(),
+                escape(&src[start..end])
+            );
+            pos = end;
+        }
+        if pos < span.byte.end {
+            out.push_str(&escape(&src[pos..span.byte.end]));
         }
     }
 }
@@ -700,5 +750,19 @@ mod tests {
         assert!(html.contains("text-align:left"), "左对齐丢失: {html}");
         assert!(html.contains("text-align:center"), "居中丢失: {html}");
         assert!(html.contains("text-align:right"), "右对齐丢失: {html}");
+    }
+
+    #[test]
+    fn reading_html_wraps_code_tokens() {
+        let src = "```rust\nlet a = 1;\n```";
+        let parsed = crate::parse(src, crate::MarkdownParser::gfm().options());
+        let html = parsed.to_html(src);
+        assert!(html.contains("<pre class=\"md-code\">"), "{html}");
+        assert!(html.contains("tk-keyword"), "缺关键字着色: {html}");
+        assert!(html.contains("tk-number"), "缺数字着色: {html}");
+        assert!(
+            html.contains("<span class=\"tk tk-keyword\">let</span>"),
+            "关键字未按片段包起来: {html}"
+        );
     }
 }

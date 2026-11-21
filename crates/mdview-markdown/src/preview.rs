@@ -436,7 +436,7 @@ fn write_segment(
                 );
                 return;
             }
-            let class = char_class(block, span_index);
+            let class = char_class(block, span_index, stop.byte);
             // 链接字符带上目标地址：URL 在投影里是折叠的（`.mk`），前端拿不到
             // 它就无从知道该打开哪里。**每个字符各挂一份**——点击命中的是单个
             // 字符元素，它和同链接的其它字符是平级兄弟，`closest` 只向上找，
@@ -479,7 +479,7 @@ fn push_item_marker(out: &mut String, src: &str, start: usize) {
     }
 }
 
-fn char_class(block: &Block, span_index: usize) -> String {
+fn char_class(block: &Block, span_index: usize, byte: usize) -> String {
     let span = &block.spans[span_index];
     let style = &span.style;
     let mut class = String::new();
@@ -498,7 +498,20 @@ fn char_class(block: &Block, span_index: usize) -> String {
     if style.link.is_some() && !matches!(span.kind, SpanKind::Image) {
         class.push_str("a ");
     }
+    // 代码块的词法着色。`Block::tokens` 只对 CodeBlock 非空，其它块查不到，
+    // 因此不需要在这里再判一次块类型。
+    if let Some(token) = token_class(block, byte) {
+        class.push_str(token);
+        class.push(' ');
+    }
     class.trim_end().to_owned()
+}
+
+/// byte 落在哪个高亮片段里。`tokens` 按 byte 升序且互不重叠。
+fn token_class(block: &Block, byte: usize) -> Option<&'static str> {
+    let index = block.tokens.partition_point(|t| t.byte.end <= byte);
+    let token = block.tokens.get(index)?;
+    (token.byte.start <= byte).then(|| token.kind.class())
 }
 
 fn wrapper(kind: &BlockKind) -> (&'static str, &'static str) {
@@ -639,6 +652,18 @@ body {
   font-family: "Cascadia Code", Consolas, monospace; font-size: .9em;
   background: #eff1f3; border-radius: 3px;
 }
+/* 代码块语法着色（与桌面端 app.css 同一套 class） */
+#doc .tk-comment { color: #6e7781; font-style: italic; }
+#doc .tk-keyword { color: #cf222e; }
+#doc .tk-type { color: #953800; }
+#doc .tk-literal { color: #0550ae; }
+#doc .tk-string { color: #0a3069; }
+#doc .tk-number { color: #0550ae; }
+#doc .tk-function { color: #8250df; }
+#doc .tk-variable { color: #953800; }
+#doc .tk-tag { color: #116329; }
+#doc .tk-attribute { color: #0550ae; }
+#doc .tk-operator { color: #57606a; }
 #doc .a { color: #0969da; text-decoration: underline; text-underline-offset: 2px; }
 #doc .mk { color: transparent; }
 #doc .eob, #doc .mk { user-select: none; }
@@ -863,6 +888,15 @@ mod tests {
         assert!(!html.contains("<script>alert"));
         assert!(html.contains("&lt;"));
         assert!(html.contains("&gt;"));
+    }
+
+    #[test]
+    fn code_block_chars_carry_token_classes() {
+        let html = preview_html("```rust\nlet a = 1;\n```");
+        assert!(html.contains("tk-keyword"), "缺关键字着色: {html}");
+        assert!(html.contains("tk-number"), "缺数字着色: {html}");
+        // 着色只加 class，不改变停靠点：`let a = 1;` 仍是 10 个逐字符元素
+        assert_eq!(html.matches("class=\"ch ").count(), 10);
     }
 
     #[test]
