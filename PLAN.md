@@ -319,6 +319,7 @@ byte   0  2  5  8  10
 ## 10. 命令速查
 
 ```bash
+mise install                                # 首次：按 mise.toml 拉齐 node 26.13.0 / pnpm 12.18.0
 pnpm install                                # 首次
 pnpm build                                  # 构建前端（含 vue-tsc --noEmit）；dist/ 不入库
 cargo test --workspace                      # 全量测试（依赖上面的 dist）
