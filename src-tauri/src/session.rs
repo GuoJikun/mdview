@@ -215,6 +215,21 @@ impl Session {
         }
     }
 
+    /// 换成一份空文档（未命名）。
+    ///
+    /// 走和启动同一条构造路径：解析、指纹、光标归零、脏标记清零都一致。
+    /// 调用方负责在 `dirty` 时先问过用户——这里不做确认，内核不认识对话框。
+    pub fn new_file(&self) -> Snapshot {
+        let fresh = AppState::open("", None, &self.files);
+        *self.state.lock().expect("状态锁中毒") = fresh;
+        self.snapshot()
+    }
+
+    /// 是否有未保存的改动。关窗与换文档前的守卫据此决定要不要问一句。
+    pub fn is_dirty(&self) -> bool {
+        self.state.lock().is_ok_and(|app| app.dirty)
+    }
+
     /// 打开磁盘上的另一个文件，整体替换当前文档状态。
     ///
     /// 复用 `AppState::open` 走和启动同一条构造路径（解析、指纹、光标归零都一致）；
@@ -576,6 +591,28 @@ mod tests {
         let snap = session.snapshot();
         assert_eq!(snap.blocks.len(), 2);
         assert_eq!(snap.caret.unwrap().block, Some(1));
+    }
+
+    /// 新建：文档回到未命名空态，脏标记清零，保存随即要求路径。
+    #[test]
+    fn new_file_resets_to_an_untitled_document() {
+        let session = session("甲");
+        session.dispatch(Wire::InsertText {
+            text: "乙".into(),
+        });
+        assert!(session.is_dirty(), "输入之后应当是脏的");
+
+        let snap = session.new_file();
+        assert_eq!(snap.path, None, "新文档没有路径");
+        assert!(!snap.dirty);
+        assert_eq!(session.text(), "");
+        assert!(snap.stops >= 1, "空文档也要有一个可落光标的段落");
+        assert!(!session.is_dirty());
+
+        // 新建之后按保存必须问路径，而不是假装写过了
+        let reply = session.dispatch(Wire::Save);
+        assert!(reply.needs_path);
+        assert!(!reply.saved);
     }
 
     /// 走完整条链路：IPC 消息 → 内核写盘 → 改绑路径 → 回包带新路径。

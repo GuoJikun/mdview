@@ -16,12 +16,23 @@ mod session;
 use std::{
     path::{Path, PathBuf},
     process,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use mdview_app::Watcher;
 use session::{Reply, Session, Snapshot, Wire};
-use tauri::{Emitter, Manager};
-use tauri_plugin_dialog::DialogExt;
+use tauri::{Emitter, Manager, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+
+/// 关窗守卫：`CloseRequested` 里发现未保存改动时拦住，交给前端确认。
+///
+/// 原生对话框不能在窗口事件回调里阻塞（Windows 上是嵌套消息循环，macOS/Linux
+/// 上会死锁），所以回调只负责拦截 + 发事件，真正的询问走 `confirm_discard` 命令。
+#[derive(Default)]
+struct CloseGuard {
+    /// 用户已确认丢弃改动：下一次 `CloseRequested` 直接放行，不再拦。
+    allowed: AtomicBool,
+}
 
 /// 前端资源的内容指纹，由 `build.rs` 注入。
 ///
@@ -102,6 +113,64 @@ fn selftest(app: tauri::AppHandle, report: String) {
     }
 }
 
+/// 「未保存的改动」确认框。返回 `true` 表示可以继续——要么本来就不脏，
+/// 要么用户点了「继续」（认了这次丢失）。
+///
+/// 自检模式一律放行：自检会反复换文档，弹框会直接把它挂死。
+fn ask_discard(app: &tauri::AppHandle, what: &str) -> bool {
+    if app.state::<RunMode>().self_test {
+        return true;
+    }
+    if !app.state::<Session>().is_dirty() {
+        return true;
+    }
+    app.dialog()
+        .message(format!("{what}会丢失当前未保存的改动。"))
+        .title("有未保存的改动")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "继续".to_string(),
+            "取消".to_string(),
+        ))
+        .blocking_show()
+}
+
+/// 关窗前确认。`action` 只决定文案：`close` 是关窗，其余按换文档处理。
+#[tauri::command]
+async fn confirm_discard(app: tauri::AppHandle, action: String) -> bool {
+    let what = if action == "close" {
+        "关闭窗口"
+    } else {
+        "打开另一个文件"
+    };
+    ask_discard(&app, what)
+}
+
+/// 用户已在确认框里点了「继续」：置放行标志再关窗，`CloseRequested` 不再拦。
+#[tauri::command]
+fn force_close(app: tauri::AppHandle, guard: tauri::State<'_, CloseGuard>) {
+    guard.allowed.store(true, Ordering::SeqCst);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.close();
+    }
+}
+
+/// 文件 → 新建：换成未命名空文档。
+///
+/// 有未保存改动时先问一句；用户取消返回 `Ok(None)`，前端什么都不做。
+///
+/// 返回 `Result` 是 Tauri 对「带引用的 async 命令」的硬性要求（见 open_file）。
+#[tauri::command]
+async fn new_file(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, Session>,
+) -> Result<Option<Snapshot>, String> {
+    if !ask_discard(&app, "新建文档") {
+        return Ok(None);
+    }
+    log::info!("新建文档：切到未命名空文档");
+    Ok(Some(session.new_file()))
+}
+
 /// 文件 → 打开文件：弹原生对话框选 .md，读盘后整体替换文档。
 ///
 /// 用 async command 承载 blocking_pick_file（对话框会阻塞），避免卡住主 UI 线程。
@@ -115,6 +184,11 @@ async fn open_file(
     session: tauri::State<'_, Session>,
     path: Option<PathBuf>,
 ) -> Result<Option<Snapshot>, String> {
+    // 先问再选文件：已经决定要换文档了，别让用户选完才发现不让开。
+    // 没有未保存改动时这一步直接放行，不打扰。
+    if !ask_discard(&app, "打开另一个文件") {
+        return Ok(None);
+    }
     let path = match path {
         Some(p) => p,
         None => {
@@ -169,6 +243,7 @@ fn menu_action(id: &str) -> Option<&'static str> {
         "open-file" => "open-file",
         "save" => "save",
         "save-as" => "save-as",
+        "new-file" => "new-file",
         "undo" => "undo",
         "redo" => "redo",
         "cut" => "cut",
@@ -210,6 +285,7 @@ fn build_native_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<
         .build()?;
 
     let file_menu = SubmenuBuilder::new(app, "文件")
+        .item(&item("new-file", "新建")?)
         .item(&item("open-file", "打开文件…")?)
         .item(&item("save", "保存")?)
         .item(&item("save-as", "另存为…")?)
@@ -339,6 +415,25 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(session)
         .manage(RunMode { self_test })
+        .manage(CloseGuard::default())
+        // 关窗守卫：有未保存改动就拦住，让前端问一句再放行。
+        // 标题栏的 ×、Alt+F4、菜单里的「关闭窗口」最后都走这里，一处拦全部。
+        .on_window_event(|window, event| {
+            let WindowEvent::CloseRequested { api, .. } = event else {
+                return;
+            };
+            let app = window.app_handle();
+            // swap 而不是 load：放行标志是**一次性**的。万一这次关闭后来没成
+            // （比如被别的插件拦下），下一次关窗还得重新问，不能永久放开。
+            if app.state::<CloseGuard>().allowed.swap(false, Ordering::SeqCst) {
+                return;
+            }
+            if !app.state::<Session>().is_dirty() {
+                return;
+            }
+            api.prevent_close();
+            let _ = window.emit("close-requested", ());
+        })
         .invoke_handler(tauri::generate_handler![
             snapshot,
             dispatch,
@@ -346,6 +441,9 @@ fn main() {
             ready,
             selftest,
             open_file,
+            new_file,
+            confirm_discard,
+            force_close,
             pick_save_path,
             use_custom_titlebar
         ])

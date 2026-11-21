@@ -458,16 +458,22 @@ function requestSavePath() {
 /** 菜单动作统一入口：Windows/Linux 的自绘菜单、macOS 的原生菜单栏共用。 */
 function runAction(action: string) {
   switch (action) {
+    case 'new-file':
+      // 内核在有未保存改动时会先问一句；取消返回 null，这里什么都不做。
+      queue = queue.then(async () => {
+        const snap = await invoke<Snapshot | null>('new_file');
+        if (!snap) return;
+        adoptSnapshot(snap);
+        toast('已新建文档');
+      }).catch((err) => toast('新建失败：' + err));
+      break;
     case 'open-file':
       // 先等在途 dispatch 回包，否则旧 revision 的 reply 会盖掉刚打开的文档。
-      // 对话框由 Rust 侧弹；用户取消返回 null，什么都不动。
+      // 对话框与「未保存改动」确认都由 Rust 侧弹；用户取消返回 null，什么都不动。
       queue = queue.then(async () => {
         const snap = await invoke<Snapshot | null>('open_file');
         if (!snap) return;
-        applySnapshot(snap);
-        window.scrollTo(0, 0);
-        if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
-        if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+        adoptSnapshot(snap);
         toast('已打开文件');
       }).catch((err) => toast('打开文件失败：' + err));
       break;
@@ -622,6 +628,19 @@ function applySnapshot(snap: Snapshot) {
 }
 
 /**
+ * 换文档后的统一收尾：全量重绘、回到顶部、刷新滚动条、把焦点还给输入框。
+ *
+ * 「打开文件」「新建」「二次启动转入文件」三条路都要做同样四件事，
+ * 收在这里免得哪天加一条路又漏掉某一步（漏掉焦点，键盘就再也打不进字）。
+ */
+function adoptSnapshot(snap: Snapshot) {
+  applySnapshot(snap);
+  window.scrollTo(0, 0);
+  if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
+  if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+}
+
+/**
  * 事件负载里取动作名。Rust 侧既可能 emit 纯字符串，也可能 emit `{ action }`，
  * 两种都在用（原生菜单 / 单例插件），所以统一在这里收口。
  */
@@ -648,6 +667,16 @@ async function boot() {
     listen('external-change', () => {
       toast('文件已被外部修改，请重新打开以载入最新内容');
     }).catch(() => {});
+    // 关窗被内核拦下了（有未保存改动）：问一句，确认后放行这一次关闭。
+    // 原生对话框不能放在窗口事件回调里，所以由这里用 async 命令去弹。
+    listen('close-requested', () => {
+      invoke<boolean>('confirm_discard', { action: 'close' })
+        .then((ok) => {
+          if (ok) return invoke('force_close');
+          return undefined;
+        })
+        .catch((err) => toast('关闭确认失败：' + err));
+    }).catch(() => {});
     // macOS 原生菜单栏点选后，Rust 侧把动作名 emit 过来，和自绘菜单走同一条路
     listen<unknown>('menu-action', (event) => {
       const action = actionOf(event.payload);
@@ -661,10 +690,7 @@ async function boot() {
       queue = queue.then(async () => {
         const snap = await invoke<Snapshot | null>('open_file', { path });
         if (!snap) return;
-        applySnapshot(snap);
-        window.scrollTo(0, 0);
-        if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
-        if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+        adoptSnapshot(snap);
         toast('已打开文件');
       }).catch((err) => toast('打开文件失败：' + err));
     }).catch(() => {});
@@ -736,6 +762,7 @@ window.addEventListener('keydown', (event) => {
       send({ kind: 'setCaret', stop: key === 'home' ? 0 : maxStop, extend: event.shiftKey });
       return;
     }
+    if (key === 'n') { event.preventDefault(); runAction('new-file'); return; }
     if (key === 'o') { event.preventDefault(); runAction('open-file'); return; }
     // Ctrl+S 在未命名文档上会由内核回 needs_path，前端再弹保存对话框；
     // Ctrl+Shift+S 是明确的「另存为」，总是弹框。
@@ -1484,6 +1511,9 @@ window.__mdviewSelfTest = async function () {
       const saveAsItem = document.querySelector('#tb-menu-popup button[data-action="save-as"]');
       check('文件菜单有另存为项', !!saveAsItem,
         saveAsItem ? saveAsItem.textContent : '无');
+      const newItem = document.querySelector('#tb-menu-popup button[data-action="new-file"]');
+      check('文件菜单有新建项', !!newItem,
+        newItem ? newItem.textContent : '无');
       fileMenu.click(); // 收起
     } else {
       check('文件菜单有打开文件项', false, '无文件菜单');
@@ -1506,6 +1536,26 @@ window.__mdviewSelfTest = async function () {
       }
     } catch (err) {
       check('open_file 注入路径可用', false, String(err));
+    }
+
+    // 新建 + 未命名保存：验证「没有路径时必须问，而不是假装写过」这条链路。
+    // 这里直接 invoke('dispatch') 而不走 send/applyReply——后者收到 needs_path
+    // 会真的弹出保存对话框，把自检挂住。
+    try {
+      const fresh = await invoke<Snapshot | null>('new_file');
+      check('新建得到未命名空文档',
+        !!fresh && fresh.path === null && !fresh.dirty && fresh.stops >= 1,
+        fresh ? 'path=' + fresh.path + ' stops=' + fresh.stops : 'null');
+      if (fresh) adoptSnapshot(fresh);
+      // 先敲一个字让它变脏，再看保存是否如实要求路径（而不是回「已保存」）
+      send({ kind: 'insertText', text: '草' });
+      await queue;
+      const reply = await invoke<Reply>('dispatch', { message: { kind: 'save' } });
+      check('未命名保存要求路径',
+        reply.needs_path === true && reply.saved === false && reply.dirty === true,
+        'needs_path=' + reply.needs_path + ' saved=' + reply.saved + ' dirty=' + reply.dirty);
+    } catch (err) {
+      check('新建链路可用', false, String(err));
     }
   } catch (err) {
     check('自检未抛异常', false, String(err));
