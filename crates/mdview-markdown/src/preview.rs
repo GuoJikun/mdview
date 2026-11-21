@@ -437,9 +437,19 @@ fn write_segment(
                 return;
             }
             let class = char_class(block, span_index);
+            // 链接字符带上目标地址：URL 在投影里是折叠的（`.mk`），前端拿不到
+            // 它就无从知道该打开哪里。**每个字符各挂一份**——点击命中的是单个
+            // 字符元素，它和同链接的其它字符是平级兄弟，`closest` 只向上找，
+            // 挂在一处、指望邻居读到是不成立的。
+            let href = match span.style.link.as_deref() {
+                Some(url) if !url.is_empty() => {
+                    format!(" data-href=\"{}\"", escape_attr(url))
+                }
+                _ => String::new(),
+            };
             let _ = write!(
                 out,
-                "<span class=\"ch {class}\" data-b=\"{global}\" data-a=\"{next}\" \
+                "<span class=\"ch {class}\"{href} data-b=\"{global}\" data-a=\"{next}\" \
                  data-byte=\"{}\" data-block=\"{block_id}\">{}</span>",
                 stop.byte,
                 escape(&ch.to_string())
@@ -959,6 +969,42 @@ mod tests {
             &frames_of("甲\n\n丁戊\n\n丙\n"),
         );
         assert_eq!(patch.replace, 1..3);
+    }
+
+    #[test]
+    fn link_chars_carry_their_target() {
+        // URL 在投影里是折叠的，字符必须自带目标地址——前端没有它就无从知道
+        // 该打开哪里。链接里的**每个字符各挂一份**：点击命中的是单个字符元素，
+        // 它和同链接的其它字符是平级兄弟，`closest` 只向上找，读不到邻居。
+        let html: String = frames_of("[示例](https://example.com/a?b=1)\n")
+            .iter()
+            .map(|f| f.html.as_str())
+            .collect();
+        assert_eq!(
+            html.matches("data-href=\"https://example.com/a?b=1\"")
+                .count(),
+            2
+        );
+        // 普通正文不能凭空长出 href
+        let plain: String = frames_of("普通文字\n")
+            .iter()
+            .map(|f| f.html.as_str())
+            .collect();
+        assert!(!plain.contains("data-href"), "{plain}");
+    }
+
+    #[test]
+    fn link_target_is_attribute_escaped() {
+        // 引号若原样落进属性，文档内容就能提前闭合并改写投影出来的 DOM 结构
+        let html: String = frames_of("[x](<https://example.com/?q=\">)\n")
+            .iter()
+            .map(|f| f.html.as_str())
+            .collect();
+        assert!(
+            html.contains("data-href=\"https://example.com/?q=&quot;\""),
+            "{html}"
+        );
+        assert!(!html.contains("?q=\">"), "{html}");
     }
 
     #[test]

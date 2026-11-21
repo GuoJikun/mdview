@@ -28,15 +28,21 @@ const h = vi.hoisted(() => {
     outline: [{ level: 1, title: '你好世界', block: 0 }],
     source: '# 你好世界\n\n**粗体** 正文',
   };
-  return { snapshot, calls: [] as string[], dispatchCalls: [] as Record<string, unknown>[] };
+  return {
+    snapshot,
+    calls: [] as string[],
+    dispatchCalls: [] as Record<string, unknown>[],
+    openUrls: [] as string[],
+  };
 });
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(async (cmd: string, args?: { message?: unknown }) => {
+  invoke: vi.fn(async (cmd: string, args?: { message?: unknown; url?: string }) => {
     h.calls.push(cmd);
     if (cmd === 'dispatch' && args?.message) {
       h.dispatchCalls.push(args.message as Record<string, unknown>);
     }
+    if (cmd === 'open_url' && args?.url) h.openUrls.push(args.url);
     return cmd === 'snapshot' ? h.snapshot : {};
   }),
 }));
@@ -128,4 +134,29 @@ it('editor.ts 能在浏览器模式里启动并投影出 DOM', async () => {
   run('mode-wysiwyg');
   expect(html.dataset.view).toBe('wysiwyg');
   expect(window.__mdviewMode).toBe('wysiwyg');
+
+  // 外链：投影里的链接字符只带 data-href（没有 <a href>，否则 webview 会就地导航）
+  const link = document.createElement('span');
+  link.className = 'ch a';
+  link.dataset.href = 'https://example.com/a?b=1';
+  link.textContent = '链';
+  doc.appendChild(link);
+
+  // 编辑态单击属于光标定位，不能顺手把浏览器拉起来
+  h.calls.length = 0;
+  link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  expect(h.openUrls).toEqual([]);
+
+  // Ctrl+Click 才是「跟随链接」
+  link.dispatchEvent(
+    new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }),
+  );
+  expect(h.openUrls).toEqual(['https://example.com/a?b=1']);
+
+  // 阅读态没有「编辑光标」这回事，单击直接打开
+  run('mode-reading');
+  h.openUrls.length = 0;
+  link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  expect(h.openUrls).toEqual(['https://example.com/a?b=1']);
+  run('mode-wysiwyg');
 });

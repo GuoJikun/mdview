@@ -387,6 +387,8 @@ html[data-view="reading"] #doc {
   background: var(--inline-code-bg); border-radius: 3px;
 }
 #doc .a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+/* 阅读态单击链接就打开；编辑态单击属于光标定位，指针仍是文本光标 */
+html[data-view="reading"] #doc .a { cursor: pointer; }
 /* 折叠的标记仍然占位，只是不可见：它是停靠点之间的「跨栏」 */
 /* 表格网格。边框与 4px 圆角由最外层 table 承担；内部线只画右边和下边，
    否则 separate 模型下相邻两格各画一条，看起来是 2px。overflow 负责把

@@ -1145,6 +1145,32 @@ docEl.addEventListener('mousedown', (event) => {
   send({ kind: 'setCaret', stop, extend: event.shiftKey });
 });
 
+/**
+ * 外链的打开方式：编辑态 Ctrl/Cmd+Click，阅读态单击。
+ *
+ * 投影里不产出 `<a href>`（链接字符只带 `data-href`，见 `preview.rs`），
+ * 所以不存在「webview 自己把应用导航走」的问题。编辑态必须把单击留给
+ * 光标定位——正文整块都是可编辑区，抢走单击等于废掉「点哪儿光标落哪儿」。
+ */
+let linkPress: { x: number; y: number } | null = null;
+
+docEl.addEventListener('mousedown', (event) => {
+  linkPress = { x: event.clientX, y: event.clientY };
+});
+
+docEl.addEventListener('click', (event) => {
+  const start = linkPress;
+  linkPress = null;
+  const el = (event.target as Element | null)?.closest<HTMLElement>('[data-href]');
+  const url = el?.dataset.href;
+  if (!url) return;
+  // 拖选之后浏览器也会补发一次 click。位移超过阈值说明这次是选字，不是点链接。
+  if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+  if (window.__mdviewMode !== 'reading' && !(event.ctrlKey || event.metaKey)) return;
+  event.preventDefault();
+  invoke('open_url', { url }).catch((err) => toast('打不开链接：' + err));
+});
+
 window.addEventListener('mousemove', (event) => {
   if (!dragging) return;
   // 在窗口外松手时 `mouseup` 收不到，靠这个兜底，否则指针一回到正文里

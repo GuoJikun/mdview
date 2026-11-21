@@ -296,6 +296,7 @@ byte   0  2  5  8  10
 ### M4 细节 🔶
 - ✅ **表格子工程**（2026-11-20）：仍是源码块，但解析层从 pulldown 事件抽出 `TableGrid / TableRow / TableCell / ColumnAlign`（行列、单元格 byte 区间、对齐），只服务于投影和导航、不替代源码真值。`preview.rs` 把同一组线性停靠点铺进真正的 `<table class="md-table">` 网格，保留全部 `data-b`/`data-a`，行尾换行改零宽标记。应用层新增 `TableMoveCell` / `TableInsertRow` / `TableDeleteRow` / `TableInsertColumn` / `TableDeleteColumn`，所有操作最终转成源码替换事务；表头行插行强制落在分隔行之后，删行禁止删表头/分隔行，删列至少保留一列。前端 Tab 跨格 + 状态栏行列工具条；阅读态 `to_html` 补 `<tr>/<th>/<td>` 与对齐 style（并修掉嵌套 `<table>`）。**表格默认带 1px 边框与 4px 圆角**：根因是桌面端 `app.css` 完全没有表格样式（网格 CSS 只写在 CLI 验证页的 `preview.rs`），已补齐并用主题变量 `--rule`/`--code-bg` 适配深浅色；CLI 验证页与阅读态内联样式同步统一。Rust 单测 + 会话测试 + 端到端自检（新增 8 项）全过
 - ✅ 大纲数据层（`ParseResult::outline`）
+- ✅ **外链打开**（2026-11-21）：投影里的链接字符只带 `data-href`，**不产出 `<a href>`**——有锚点的话点一下 webview 就把整个应用导航走，且没有后退可言（中键、拖拽、右键菜单都能绕过 click 拦截，所以干脆不给出可导航的锚点）。前端在 `#doc` 上接管 click：编辑态 Ctrl/Cmd+Click、阅读态单击，转成 `open_url` 命令落到系统 shell（Windows 直调 `ShellExecuteW`，macOS `open`，Linux `xdg-open`，不引 opener 插件）。三个必须的细节：① URL 白名单只放行 `http(s)` / `mailto`，因为 `[x](javascript:...)` 是合法 Markdown，`dest_url` 会原样落进属性；② 链接的每个字符各挂一份 `data-href`，点击命中的是单个字符元素、与同链接其它字符是平级兄弟，`closest` 读不到邻居身上的属性；③ 拖选之后浏览器也会补发一次 click，位移超过 4px 视为选字。编辑态不让单击跟随链接是硬要求：正文整块都是可编辑区，抢走单击等于废掉「点哪儿光标落哪儿」
 - ⬜ 代码高亮（建议 `syntect` 或 `tree-sitter-highlight`，仅在阅读态启用）
 - ⬜ 链接/图片行内编辑
 - ⬜ 粘贴 HTML 规范化（sanitize 后转 Markdown，不能直接注入）

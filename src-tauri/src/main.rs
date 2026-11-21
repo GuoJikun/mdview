@@ -11,6 +11,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod link;
 mod session;
 mod update;
 
@@ -465,6 +466,7 @@ fn main() {
             snapshot,
             dispatch,
             load_image,
+            link::open_url,
             ready,
             selftest,
             open_file,
