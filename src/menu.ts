@@ -35,6 +35,7 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
   file: [
     { action: 'open-file', label: '打开文件…', acc: 'Ctrl+O' },
     { action: 'save', label: '保存', acc: 'Ctrl+S' },
+    { action: 'save-as', label: '另存为…', acc: 'Ctrl+Shift+S' },
     { sep: true },
     { action: 'close-window', label: '关闭窗口', acc: 'Alt+F4', danger: true },
   ],

@@ -1,4 +1,7 @@
-use std::{ops::Range, path::PathBuf};
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
 use log::{info, warn};
 use mdview_core::Document;
@@ -50,7 +53,11 @@ pub enum Message {
     Undo,
     Redo,
     SetMode(ViewMode),
+    /// 保存到当前路径。没有路径时**不写任何东西**，回一条 `Effect::NeedsPath`，
+    /// 由宿主去问用户要路径，再补一条 [`Message::SaveTo`]。
     Save,
+    /// 另存为：把当前内容写到 `path`，并把文档改绑到该路径。
+    SaveTo { path: PathBuf },
     /// byte offset（Markdown / DOM 语义）
     Click { byte_offset: usize },
     /// 全局停靠点序号。前端已持有「停靠点 → 像素」映射，点击/拖动直接报停靠点，
@@ -86,7 +93,15 @@ pub enum Effect {
     /// 增量重绘：用 `patch.html` 替换第 `patch.replace` 段块节点。
     /// 编辑一律走增量，前端拿到它就不必重建整页。
     Patch { revision: u64, patch: Patch },
+    /// 已经写进磁盘，`dirty` 也已清零。
     Persist,
+    /// 没有落盘路径，写不了。**发出它时什么都没发生**：`dirty` 保留、指纹不动。
+    /// 早先这里直接 `Persist`，等于对用户谎称已保存——内容哪儿都没写，脏标记
+    /// 还被清掉，关窗即永久丢失。
+    NeedsPath,
+    /// 写盘失败（磁盘满、只读、父目录被删）。与 `Conflict` 是两回事：
+    /// 那个表示「磁盘上的版本变了」，这个表示「这次写没成功」，重试方式也不同。
+    WriteFailed { message: String },
     MoveCursor {
         /// 光标所在的全局停靠点序号。前端用它找 `data-b` / `data-a` 节点定像素。
         stop: usize,
@@ -207,6 +222,28 @@ impl AppState {
         }
     }
 
+    /// 写盘并刷新路径/指纹/脏标记。`Save` 与 `SaveTo` 共用这一段。
+    ///
+    /// 写成功才改绑路径：失败时文档仍指向原文件，用户可以换个地方再存，
+    /// 也不会因为一次失败的另存为把标题栏改成别人的名字。
+    fn save_into(&mut self, path: &Path, files: &impl FileStore) -> Vec<Effect> {
+        if let Err(err) = files.save(path, &self.document.text()) {
+            warn!("写入失败 {}: {err}", path.display());
+            return vec![Effect::WriteFailed {
+                message: format!("保存失败：{err}"),
+            }];
+        }
+        info!(
+            "已保存 {}（revision={}）",
+            path.display(),
+            self.document.revision().0
+        );
+        self.path = Some(path.to_path_buf());
+        self.saved_fingerprint = files.fingerprint(path).ok();
+        self.dirty = false;
+        vec![Effect::Persist]
+    }
+
     pub fn update(&mut self, msg: Message, files: &impl FileStore) -> Vec<Effect> {
         let is_undo = matches!(&msg, Message::Undo);
         match msg {
@@ -253,7 +290,8 @@ impl AppState {
             }
             Message::Save => {
                 let Some(path) = self.path.clone() else {
-                    return vec![Effect::Persist];
+                    // 没有路径 ≠ 保存成功。什么都不动，等宿主拿到路径补发 SaveTo。
+                    return vec![Effect::NeedsPath];
                 };
                 if let Some(expected) = self.saved_fingerprint {
                     if files.fingerprint(&path).ok() != Some(expected) {
@@ -261,15 +299,11 @@ impl AppState {
                         return vec![Effect::Conflict];
                     }
                 }
-                if let Err(err) = files.save(&path, &self.document.text()) {
-                    warn!("写入失败 {}: {err}", path.display());
-                    return vec![Effect::Conflict];
-                }
-                info!("已保存 {}（revision={}）", path.display(), self.document.revision().0);
-                self.saved_fingerprint = files.fingerprint(&path).ok();
-                self.dirty = false;
-                vec![Effect::Persist]
+                self.save_into(&path, files)
             }
+            // 另存为：目标文件原有内容不参与冲突判定。可能覆盖什么，宿主
+            // 在对话框阶段已经问过用户了，内核再拦一次只会让人没法另存。
+            Message::SaveTo { path } => self.save_into(&path, files),
             Message::Click { byte_offset } => {
                 // 点击点可能落在被折叠的标记里（`**` 的中间），先吸附到可见停靠点，
                 // 否则光标会被塞进标记内部，下一次输入就把 `**` 拆散。
@@ -1156,7 +1190,7 @@ mod tests {
         app.update(Message::Click { byte_offset: byte }, files);
     }
 
-    fn type_text(app: &mut AppState, files: &InMemoryFileStore, text: &str) {
+    fn type_text(app: &mut AppState, files: &impl FileStore, text: &str) {
         app.update(
             Message::InsertText {
                 text: text.to_owned(),
@@ -1644,6 +1678,90 @@ mod tests {
         app.update(Message::Edit { span: 0..0, insert: "> ".into() }, &files);
         assert_eq!(app.update(Message::Save, &files), vec![Effect::Persist]);
         assert!(!app.dirty);
+    }
+
+    #[test]
+    fn saving_without_a_path_asks_for_one_instead_of_pretending() {
+        let files = InMemoryFileStore::default();
+        let mut app = AppState::open("", None, &files);
+        type_text(&mut app, &files, "草稿");
+
+        assert_eq!(app.update(Message::Save, &files), vec![Effect::NeedsPath]);
+        assert!(app.dirty, "没写盘就不能清脏标记");
+        assert!(app.path.is_none(), "路径不该被凭空造出来");
+    }
+
+    #[test]
+    fn save_to_writes_the_file_and_rebinds_the_path() {
+        let files = InMemoryFileStore::default();
+        let mut app = AppState::open("", None, &files);
+        type_text(&mut app, &files, "草稿");
+
+        let effects = app.update(
+            Message::SaveTo {
+                path: PathBuf::from("新稿.md"),
+            },
+            &files,
+        );
+        assert_eq!(effects, vec![Effect::Persist]);
+        assert_eq!(app.path.as_deref(), Some(Path::new("新稿.md")));
+        assert!(!app.dirty);
+        assert_eq!(files.load(Path::new("新稿.md")).unwrap(), "草稿");
+    }
+
+    /// 另存为可以覆盖已有文件：用户已经点了「保存」，内核不再拿冲突拦一次。
+    #[test]
+    fn save_to_overwrites_an_existing_target() {
+        let mut files = InMemoryFileStore::default();
+        files.insert("旧.md", "旧内容");
+        let mut app = AppState::open("新内容", None, &files);
+
+        let effects = app.update(
+            Message::SaveTo {
+                path: PathBuf::from("旧.md"),
+            },
+            &files,
+        );
+        assert_eq!(effects, vec![Effect::Persist]);
+        assert_eq!(files.load(Path::new("旧.md")).unwrap(), "新内容");
+    }
+
+    /// 只读替身：`save` 必失败，用来验证写盘错误不会被说成「外部修改」。
+    struct ReadOnlyStore(InMemoryFileStore);
+
+    impl FileStore for ReadOnlyStore {
+        fn load(&self, path: &Path) -> Result<String, crate::AppError> {
+            self.0.load(path)
+        }
+        fn save(&self, _path: &Path, _content: &str) -> Result<(), crate::AppError> {
+            Err(crate::AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "只读",
+            )))
+        }
+        fn fingerprint(&self, path: &Path) -> Result<Fingerprint, crate::AppError> {
+            self.0.fingerprint(path)
+        }
+    }
+
+    #[test]
+    fn write_failure_is_reported_as_itself_not_as_a_conflict() {
+        let files = ReadOnlyStore(InMemoryFileStore::default());
+        let mut app = AppState::open("", None, &files);
+        type_text(&mut app, &files, "草稿");
+
+        let effects = app.update(
+            Message::SaveTo {
+                path: PathBuf::from("x.md"),
+            },
+            &files,
+        );
+        assert!(
+            matches!(effects.as_slice(), [Effect::WriteFailed { .. }]),
+            "写盘失败必须是 WriteFailed，不能是 Conflict：{effects:?}"
+        );
+        assert!(app.dirty, "没写成功就要保持脏");
+        assert!(app.path.is_none(), "写失败不能改绑路径");
     }
 
     // ---- 编辑闭环 -------------------------------------------------------

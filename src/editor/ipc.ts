@@ -24,6 +24,11 @@ export type Wire =
   | { kind: 'undo' }
   | { kind: 'redo' }
   | { kind: 'save' }
+  /**
+   * 另存为：路径由宿主弹框问到后回传。
+   * 与 `save` 分开——「写哪个文件」这个决定只有窗口层能做。
+   */
+  | { kind: 'saveTo'; path: string }
   | { kind: 'selectAll' }
   | { kind: 'copy' }
   | { kind: 'cut' }
@@ -86,6 +91,12 @@ export interface Reply {
   clipboard?: string | null;
   conflict: boolean;
   saved: boolean;
+  /** 内核没有落盘路径，需要弹保存对话框。置位时 dirty/saved 都不动。 */
+  needs_path: boolean;
+  /** 写盘失败的原因（磁盘满、只读、父目录被删）。与 conflict 是两回事。 */
+  error?: string | null;
+  /** 回包时的文档路径；另存为成功后前端据此更新标题栏。 */
+  path?: string | null;
   outline?: OutlineDto[] | null;
 }
 

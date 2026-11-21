@@ -50,6 +50,11 @@ pub enum Wire {
     Undo,
     Redo,
     Save,
+    /// 另存为：前端在弹出的保存对话框里拿到路径后补发这条。
+    /// 与 `Save` 分开，是因为「写哪个文件」这个决定只有宿主能做。
+    SaveTo {
+        path: String,
+    },
     /// 全选（Ctrl+A）。原生选区已被清掉（见 `selection.js`），全选只能走内核
     SelectAll,
     Copy,
@@ -91,6 +96,9 @@ impl Wire {
             Wire::Undo => Message::Undo,
             Wire::Redo => Message::Redo,
             Wire::Save => Message::Save,
+            Wire::SaveTo { path } => Message::SaveTo {
+                path: PathBuf::from(path),
+            },
             Wire::SelectAll => Message::SelectAll,
             Wire::Copy => Message::Copy,
             Wire::Cut => Message::Cut,
@@ -153,6 +161,13 @@ pub struct Reply {
     pub clipboard: Option<String>,
     pub conflict: bool,
     pub saved: bool,
+    /// 内核没有落盘路径，需要宿主先问用户要一个（另存为）。
+    /// 置位时 `dirty` / `saved` 都不动：什么都没发生。
+    pub needs_path: bool,
+    /// 写盘失败的原始原因。与 `conflict` 分开，前端据此给不同提示。
+    pub error: Option<String>,
+    /// 回包时的文档路径。另存为成功后前端据此更新标题栏。
+    pub path: Option<String>,
     /// 大纲随每次编辑回包，前端据此增量更新侧栏
     pub outline: Option<Vec<OutlineDto>>,
 }
@@ -250,9 +265,10 @@ impl Session {
         let mut reply = Reply {
             revision: app.document.revision().0,
             dirty: app.dirty,
-            caret: Some(caret_of(&app).unwrap_or_default()),
+            caret: caret_of(&app),
             selection: selection_of(&app),
             outline: Some(outline_of(&app)),
+            path: app.path.as_ref().map(|p| p.display().to_string()),
             ..Reply::default()
         };
         for effect in effects {
@@ -281,6 +297,8 @@ impl Session {
                     });
                 }
                 Effect::Persist => reply.saved = true,
+                Effect::NeedsPath => reply.needs_path = true,
+                Effect::WriteFailed { message } => reply.error = Some(message),
                 Effect::Conflict => reply.conflict = true,
                 Effect::Clipboard { text } => reply.clipboard = Some(text),
                 // 增量解析调度由内核内部实现；选区高亮随 Reply 顶层字段一起下发
@@ -560,12 +578,49 @@ mod tests {
         assert_eq!(snap.caret.unwrap().block, Some(1));
     }
 
+    /// 走完整条链路：IPC 消息 → 内核写盘 → 改绑路径 → 回包带新路径。
+    /// 用临时目录，跑完清掉，不留垃圾。
     #[test]
-    fn saving_untitled_document_still_reports_persisted() {
+    fn save_to_writes_the_file_and_reports_the_new_path() {
+        let dir = std::env::temp_dir().join("mdview-save-as");
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("新稿.md");
+        let _ = std::fs::remove_file(&target);
+        let target_str = target.display().to_string();
+
         let session = session("甲");
-        let reply = session.dispatch(Wire::Save);
-        assert!(reply.saved, "无路径时不写盘，但仍要清 dirty");
+        session.dispatch(Wire::InsertText {
+            text: "乙".into(),
+        });
+        let reply = session.dispatch(Wire::SaveTo {
+            path: target_str.clone(),
+        });
+
+        assert!(reply.saved, "写成功要报 saved");
+        assert_eq!(reply.path.as_deref(), Some(target_str.as_str()), "回包要带新路径");
         assert!(!reply.dirty);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "乙甲", "光标在文首，新字插在前面");
+        assert_eq!(session.snapshot().path.as_deref(), Some(target_str.as_str()));
+
+        let _ = std::fs::remove_file(&target);
+    }
+
+    /// 无路径保存必须如实说「我不知道往哪写」。
+    ///
+    /// 这条测试此前断言的是相反的行为（`assert!(reply.saved)` + 清 dirty），
+    /// 等于把「界面说已保存、实际什么都没写」固定成了规格——任何人来修这个
+    /// 坑都会先被它挡住。现在改为要求宿主补一条 `SaveTo`。
+    #[test]
+    fn saving_an_untitled_document_asks_for_a_path() {
+        let session = session("甲");
+        session.dispatch(Wire::InsertText {
+            text: "乙".into(),
+        });
+        let reply = session.dispatch(Wire::Save);
+        assert!(reply.needs_path, "无路径应要求宿主补一个路径");
+        assert!(!reply.saved, "没写盘就不能报已保存");
+        assert!(reply.dirty, "脏标记必须保留，否则关窗时会以为没改动");
+        assert!(reply.path.is_none());
     }
 
     #[test]

@@ -297,7 +297,7 @@ byte   0  2  5  8  10
 15. **滚动与光标跟随的边界**：页面滚动时只重画光标像素、不再「保证可见」；落点没变也不追视口（不然任何一次重绘回包都会抵消用户的滚动）。这条无法用 `--self-test` 回归：合成出来的滚动是程序化滚动，Chromium 会抑制滚动期间的脚本滚动，有没有这层修复都测不出差别；能测的只有 `scrollDelta` 的几何（`caretline.test.js`）与「按键后光标重新可见」。
 16. **剪贴板写入可能在无焦点窗口里挂起**：`navigator.clipboard.writeText` 在窗口没拿到焦点时，Chromium 会把请求挂住等一个不会来的授权，Promise 永远不 settle。生产里只影响「复制好像没反应」，但**自检会整条卡死**——所以自检里对它的等待必须自带 `Promise.race` 超时。另外 `execCommand('copy')` 兜底会短暂抢走 `#ime` 的焦点，调用方要还回去，否则输入法组合被中断。
 17. **其它块级标记的同类抖动未处理**：`>`（引用）与 `***`／`---`（分隔线）也会在敲完最后一个字符的瞬间改变块类型。它们不涉及字号跳变，先不动；若将来统一处理，应复用同一套「成形」判定。
-18. **菜单没有「新建 / 打开」**：VSCode 的 File 菜单以这两个开头，但项目还没接 `tauri-plugin-dialog`，放进去只能是空壳，所以当前文件菜单只有「保存 / 关闭窗口」。要补齐得引入 dialog 插件，并让 `Session` 支持换文档。
+18. **菜单没有「新建」**：文件菜单现在有「打开文件… / 保存 / 另存为… / 关闭窗口」，唯独缺「新建」。内核侧 `Session::open(None)` 已经是空文档，补一个 `new_file` 命令 + 菜单项即可，成本很低；真正的价值在于**当前唯一的未命名文档来自「启动不带参数」**（双击图标就是这样），用户无法主动新开一份。**已修的相邻缺口（2026-11-21）**：未命名文档按 Ctrl+S 不再谎称「已保存」——内核回 `Effect::NeedsPath`，前端弹保存对话框，拿到路径后发 `saveTo` 让内核写盘并改绑路径；同时把写盘失败从 `Conflict` 里拆出来（`Effect::WriteFailed`），磁盘满/只读不再被说成「文件已被外部修改」。
 
 ---
 
@@ -364,8 +364,9 @@ node src/dragscroll.test.js # 边缘自动滚动几何单测（cargo test 已含
 | 外部修改提示（前端 listen + toast） | `src/editor/editor.ts`（boot） |
 | 日志滚动 | `crates/mdview-support/src/logging.rs` |
 | 命令行入口（含 `demo edit` 回放） | `crates/mdview-cli/src/main.rs` |
-| **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包、大纲下发、**表格操作**） | `src-tauri/src/session.rs` |
+| **IPC 契约**（前端 `kind` → `Message`、`Patch`/光标回包、大纲下发、**表格操作**、**保存/另存为**） | `src-tauri/src/session.rs` |
 | **IPC 契约的前端类型**（`Wire` / `Reply` / `Snapshot` / `CaretDto`，字段名与 serde 输出逐一对齐） | `src/editor/ipc.ts` |
+| **保存与另存为**（`Effect::NeedsPath` / `WriteFailed`、保存对话框只给路径不写盘） | `crates/mdview-app/src/state.rs`（`save_into`）、`src-tauri/src/main.rs`（`pick_save_path`）、`src/editor/editor.ts`（`requestSavePath`） |
 | **表格交互**（Tab 跨格、状态栏行列工具条、自检 6 项） | `src/editor/editor.ts`、`app.css` |
 | **大纲侧栏**（锚点判定 + 跳转，不碰 DOM，Node 可测） | `src/editor/outline.js`、`outline.test.js`、`editor.ts`（侧栏渲染/联动） |
 | **主题系统**（跟随系统 + 手动切换 + localStorage，不碰 DOM，Node 可测） | `src/editor/theme.js`、`theme.test.js`、`app.css`（CSS 变量） |

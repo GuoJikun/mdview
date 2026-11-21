@@ -423,6 +423,38 @@ function toast(text: string) {
   if (window.__mdviewBridge) window.__mdviewBridge.notify(text);
 }
 
+/** 路径里的文件名部分（Windows 与 POSIX 两种分隔符都要认）。 */
+function baseName(path: string): string {
+  const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return cut >= 0 ? path.slice(cut + 1) : path;
+}
+
+/**
+ * 要一个保存路径，再让内核写到那里。
+ *
+ * 两个入口共用：Ctrl+S 时内核回 `needs_path`（未命名文档还没有路径），
+ * 或用户主动点「另存为…」。**写盘仍然在内核里完成**——这里只负责弹框，
+ * 因为「写哪个文件」是唯一一件内核自己决定不了的事。
+ */
+let saveDialogOpen = false;
+
+function requestSavePath() {
+  if (saveDialogOpen) return;   // 连按 Ctrl+S 不该叠出多个对话框
+  saveDialogOpen = true;
+  const suggested = meta.path ? baseName(meta.path) : '未命名.md';
+  invoke<string | null>('pick_save_path', { suggested })
+    .then((path) => {
+      // 取消：内核那边什么都没动（dirty 还在、路径还是空），不用收尾
+      if (path) send({ kind: 'saveTo', path });
+    })
+    .catch((err) => toast('保存对话框打不开：' + err))
+    .finally(() => {
+      saveDialogOpen = false;
+      // 对话框关掉后焦点可能停在系统窗口上，不还回去就再也打不进字
+      if (document.activeElement !== imeEl) imeEl.focus({ preventScroll: true });
+    });
+}
+
 /** 菜单动作统一入口：Windows/Linux 的自绘菜单、macOS 的原生菜单栏共用。 */
 function runAction(action: string) {
   switch (action) {
@@ -442,6 +474,7 @@ function runAction(action: string) {
     case 'undo': send({ kind: 'undo' }); break;
     case 'redo': send({ kind: 'redo' }); break;
     case 'save': send({ kind: 'save' }); break;
+    case 'save-as': requestSavePath(); break;
     case 'copy': send({ kind: 'copy' }); break;
     case 'cut': send({ kind: 'cut' }); break;
     case 'select-all': send({ kind: 'selectAll' }); break;
@@ -545,9 +578,14 @@ function applyReply(reply: Reply) {
   paintSelection(reply.selection ?? null);
   meta.revision = reply.revision;
   meta.dirty = reply.dirty;
+  // 另存为成功后内核会把文档改绑到新路径，标题栏要跟着换名字
+  if (reply.path) meta.path = reply.path;
   if (typeof reply.clipboard === 'string') writeClipboard(reply.clipboard);
   if (reply.conflict) toast('文件已被外部修改，保存被拒');
+  else if (reply.error) toast(reply.error);
   if (reply.saved) toast('已保存');
+  // 内核没有路径：弹框问用户要一个，拿到后补发 saveTo
+  if (reply.needs_path) requestSavePath();
   renderStatus();
   if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
 }
@@ -699,7 +737,14 @@ window.addEventListener('keydown', (event) => {
       return;
     }
     if (key === 'o') { event.preventDefault(); runAction('open-file'); return; }
-    if (key === 's') { event.preventDefault(); send({ kind: 'save' }); return; }
+    // Ctrl+S 在未命名文档上会由内核回 needs_path，前端再弹保存对话框；
+    // Ctrl+Shift+S 是明确的「另存为」，总是弹框。
+    if (key === 's') {
+      event.preventDefault();
+      if (event.shiftKey) requestSavePath();
+      else send({ kind: 'save' });
+      return;
+    }
     if (key === 'z') { event.preventDefault(); send({ kind: event.shiftKey ? 'redo' : 'undo' }); return; }
     if (key === 'y') { event.preventDefault(); send({ kind: 'redo' }); return; }
     // 全选、复制、剪切都必须走内核：原生选区已被清掉（见 selection.js），
@@ -1436,6 +1481,9 @@ window.__mdviewSelfTest = async function () {
       const openItem = document.querySelector('#tb-menu-popup button[data-action="open-file"]');
       check('文件菜单有打开文件项', !!openItem,
         openItem ? openItem.textContent : '无');
+      const saveAsItem = document.querySelector('#tb-menu-popup button[data-action="save-as"]');
+      check('文件菜单有另存为项', !!saveAsItem,
+        saveAsItem ? saveAsItem.textContent : '无');
       fileMenu.click(); // 收起
     } else {
       check('文件菜单有打开文件项', false, '无文件菜单');

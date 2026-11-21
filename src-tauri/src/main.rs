@@ -135,6 +135,25 @@ async fn open_file(
     session.open_file(path).map(Some)
 }
 
+/// 保存对话框：只在「内核说没有路径」或用户主动另存为时调用。
+///
+/// 只负责要一个路径，**不写盘**——写盘、改绑路径、刷新指纹都在内核里，
+/// 那里才有原子替换与冲突判定。取消返回 `None`，此时内核状态一动不动。
+///
+/// `suggested` 是对话框里的预填文件名（未命名文档给「未命名.md」）。
+#[tauri::command]
+async fn pick_save_path(app: tauri::AppHandle, suggested: Option<String>) -> Option<PathBuf> {
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("保存 Markdown 文件")
+        .add_filter("Markdown", &["md", "markdown"]);
+    if let Some(name) = suggested {
+        dialog = dialog.set_file_name(name);
+    }
+    dialog.blocking_save_file()?.into_path().ok()
+}
+
 /// 前端据此决定显示自绘标题栏还是让位给系统标题栏。
 /// 必须和 tauri.{windows,linux}.conf.json 的 `decorations` 保持一致。
 #[tauri::command]
@@ -149,6 +168,7 @@ fn menu_action(id: &str) -> Option<&'static str> {
     Some(match id {
         "open-file" => "open-file",
         "save" => "save",
+        "save-as" => "save-as",
         "undo" => "undo",
         "redo" => "redo",
         "cut" => "cut",
@@ -192,6 +212,7 @@ fn build_native_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<
     let file_menu = SubmenuBuilder::new(app, "文件")
         .item(&item("open-file", "打开文件…")?)
         .item(&item("save", "保存")?)
+        .item(&item("save-as", "另存为…")?)
         .separator()
         .close_window_with_text("关闭窗口")
         .build()?;
@@ -325,6 +346,7 @@ fn main() {
             ready,
             selftest,
             open_file,
+            pick_save_path,
             use_custom_titlebar
         ])
         .setup(move |app| {

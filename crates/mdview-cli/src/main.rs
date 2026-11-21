@@ -409,6 +409,8 @@ fn effect_name(effect: &Effect) -> &'static str {
         Effect::Render => "Render",
         Effect::Patch { .. } => "Patch",
         Effect::Persist => "Persist",
+        Effect::NeedsPath => "NeedsPath",
+        Effect::WriteFailed { .. } => "WriteFailed",
         Effect::MoveCursor { .. } => "MoveCursor",
         Effect::Selection { .. } => "Selection",
         Effect::Clipboard { .. } => "Clipboard",
