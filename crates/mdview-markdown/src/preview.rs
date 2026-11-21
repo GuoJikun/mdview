@@ -318,7 +318,20 @@ fn block_html(src: &str, block: &Block, doc: &DocumentLayout, images: ImageMode)
         out.push_str(open);
     }
     for index in 0..stops.len().saturating_sub(1) {
+        // 块级公式的字符套一层 `.md`：编辑态/阅读态共用这一份 DOM，
+        // 让 `$$\n…\n$$` 视觉上成一块居中区域，而不是散在行内的源码字符。
+        // 包裹层不带 data-b，不参与停靠点与选区。
+        let cur_math = is_display_math(block, stops[index].byte);
+        if cur_math && (index == 0 || !is_display_math(block, stops[index - 1].byte)) {
+            out.push_str("<span class=\"md\">");
+        }
         write_segment(&mut out, src, block, stops, index, first + index, images);
+        if cur_math
+            && (index + 1 == stops.len().saturating_sub(1)
+                || !is_display_math(block, stops[index + 1].byte))
+        {
+            out.push_str("</span>");
+        }
     }
     // 块尾锚点：最后一个停靠点没有对应字符，单独给一个零宽元素供光标停靠
     let _ = write!(
@@ -514,6 +527,14 @@ fn push_item_marker(out: &mut String, src: &str, start: usize) {
     }
 }
 
+/// 这个 byte 是否落在块级公式的可见源码里。用于在 DOM 里套一层包裹元素，
+/// 让 `$$…$$` 与行内 `$…$` 在视觉上分开；不影响任何停靠点。
+fn is_display_math(block: &Block, byte: usize) -> bool {
+    block
+        .span_at(byte)
+        .is_some_and(|i| matches!(block.spans[i].kind, SpanKind::Math { display: true }))
+}
+
 fn char_class(block: &Block, span_index: usize, byte: usize) -> String {
     let span = &block.spans[span_index];
     let style = &span.style;
@@ -532,6 +553,11 @@ fn char_class(block: &Block, span_index: usize, byte: usize) -> String {
     }
     if style.link.is_some() && !matches!(span.kind, SpanKind::Image) {
         class.push_str("a ");
+    }
+    // 公式字符逐字可寻址：只加样式类，不当原子控件，光标/选区逻辑不变。
+    // 块级公式的 `.md` 包裹由 block_html 统一套，这里只负责逐字着色。
+    if matches!(span.kind, SpanKind::Math { .. }) {
+        class.push_str("m ");
     }
     // 代码块的词法着色。`Block::tokens` 只对 CodeBlock 非空，其它块查不到，
     // 因此不需要在这里再判一次块类型。
@@ -697,6 +723,12 @@ body {
   font-family: "Cascadia Code", Consolas, monospace; font-size: .9em;
   background: #eff1f3; border-radius: 3px;
 }
+/* 数学公式：定界符折叠，源码用衬线斜体 + 淡底，和行内代码区分 */
+#doc .m {
+  font-family: "Cambria Math", "Times New Roman", serif; font-style: italic;
+  color: #8250df; background: #f6f8fa; border-radius: 3px;
+}
+#doc .md { display: block; text-align: center; padding: .25em 0; margin: .3em 0; }
 /* 代码块语法着色（与桌面端 app.css 同一套 class） */
 #doc .tk-comment { color: #6e7781; font-style: italic; }
 #doc .tk-keyword { color: #cf222e; }

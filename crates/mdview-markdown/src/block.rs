@@ -65,6 +65,11 @@ pub enum SpanKind {
         checked: bool,
     },
     FootnoteReference,
+    /// 数学公式：`$…$` / `$$…$$`。定界符折叠掉，公式源码逐字符可见、可编辑。
+    /// `display` 标记是否为 `$$` 块级公式，只影响阅读态的排版，停靠点不变。
+    Math {
+        display: bool,
+    },
 }
 
 /// 一个可见片段。
@@ -475,6 +480,15 @@ impl Block {
             SpanKind::FootnoteReference => {
                 out.push_str(&format!("<sup>{}</sup>", escape(&span.text)))
             }
+            SpanKind::Math { display } => {
+                // 阅读态给出稳定钩子，由 CSS 区分行内/块级排版。源码原样输出，
+                // 不引 JS 排版库：离线桌面端不依赖网络，公式在源码视图同样可见。
+                let cls = if *display { "m md" } else { "m" };
+                out.push_str(&format!(
+                    "<code class=\"{cls}\">{}</code>",
+                    escape(&span.text)
+                ));
+            }
             SpanKind::Text => {
                 if span.style.strong {
                     out.push_str("<strong>");
@@ -750,6 +764,17 @@ mod tests {
         assert!(html.contains("text-align:left"), "左对齐丢失: {html}");
         assert!(html.contains("text-align:center"), "居中丢失: {html}");
         assert!(html.contains("text-align:right"), "右对齐丢失: {html}");
+    }
+
+    #[test]
+    fn reading_html_renders_math_spans() {
+        let src = "行内 $E=mc^2$ 与块级 $$\n\\int x\\,dx\n$$。\n";
+        let parsed = crate::parse(src, crate::MarkdownParser::gfm().options());
+        let html = parsed.to_html(src);
+        assert!(html.contains("<code class=\"m\">E=mc^2</code>"), "{html}");
+        // 块级公式的源码可能含首尾换行（pulldown 原样保留），只校验钩子与内容
+        assert!(html.contains("<code class=\"m md\">"), "{html}");
+        assert!(html.contains("\\int x\\,dx"), "{html}");
     }
 
     #[test]

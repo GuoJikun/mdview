@@ -10,6 +10,8 @@
   --border: #eaecef;
   --code-bg: #f6f8fa;
   --inline-code-bg: #eff1f3;
+  --math-fg: #8250df;
+  --math-bg: #f6f8fa;
   /* 代码高亮：GitHub 浅色配色 */
   --tk-comment: #6e7781;
   --tk-keyword: #cf222e;
@@ -68,6 +70,8 @@
   --border: #30363d;
   --code-bg: #161b22;
   --inline-code-bg: #21262d;
+  --math-fg: #d2a8ff;
+  --math-bg: #21262d;
   /* 代码高亮：GitHub 深色配色 */
   --tk-comment: #8b949e;
   --tk-keyword: #ff7b72;
@@ -444,6 +448,13 @@ html[data-view="reading"] #doc {
   font-family: "Cascadia Code", Consolas, monospace; font-size: .9em;
   background: var(--inline-code-bg); border-radius: 3px;
 }
+/* 数学公式：定界符折叠，源码逐字符保留停靠点。衬线斜体 + 淡底与行内代码区分。
+   块级公式的字符由投影层套一层 `.md` 包裹；阅读态 to_html 直接给 `<code>` 加同款类。 */
+#doc .m {
+  font-family: "Cambria Math", "Times New Roman", serif; font-style: italic;
+  color: var(--math-fg); background: var(--math-bg); border-radius: 3px;
+}
+#doc .md { display: block; text-align: center; padding: .25em 0; margin: .3em 0; }
 /* 代码块语法着色。class 由 mdview-markdown 的 highlight.rs 写进每个字符的
    span，停靠点与选区逻辑完全不变；非代码块不会带这些类。 */
 #doc .tk-comment { color: var(--tk-comment); font-style: italic; }

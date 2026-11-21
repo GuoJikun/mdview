@@ -300,7 +300,8 @@ byte   0  2  5  8  10
 - ✅ **代码高亮**（2026-11-21）：解析层新增 `highlight.rs`，用自带的轻量词法扫描给围栏代码块产出 byte 区间 token（关键字 / 类型 / 字面量 / 字符串 / 注释 / 数字 / 函数 / 变量 / 标签 / 属性 / 运算符），覆盖 Rust、JS/TS、Python、JSON、HTML/XML、CSS、Shell、Go、C/C++、Java/C#、SQL、YAML、TOML、Markdown。**不引 `syntect` / `tree-sitter-highlight`**：前者要背整套语法包，后者是 C grammar，都会破坏 `mdview-markdown` 的纯 Rust 零依赖约束；这里只需要粗粒度着色，自带扫描更可控。token 挂在 `Block::tokens`，渲染时按字符停靠点查表加 `tk-*` class——编辑态与阅读态共用同一套 DOM，**停靠点集合、光标、选区、增量 patch 全不变**；阅读态 `to_html` 另按 token 切段包 `<span class="tk …">`。未知语言不着色，按原文显示
 - ⬜ 链接/图片行内编辑
 - ⬜ 粘贴 HTML 规范化（sanitize 后转 Markdown，不能直接注入）
-- ⬜ 脚注、数学公式
+- ✅ **数学公式**（2026-11-21）：`MarkdownParser::gfm()` 开启 `ENABLE_MATH`，`project.rs` 把 `InlineMath` / `DisplayMath` 落成 `SpanKind::Math { display }`，定界符按「恰好 want 个 `$`」内缩进 `hidden` 并登记为 `MarkerPair`（退格可整对抽掉，与行内代码同一套逻辑）。编辑态每个公式字符带 `.m`、保留全部 `data-b/data-a` 停靠点；阅读态 `to_html` 输出 `<code class="m">` / `<code class="m md">`，后者由 CSS 居中排版。`app.css` 与 CLI 验证页同步配色，明暗主题各有变量。Rust 单测 4 项 + 应用层配对删除 1 项全过
+- ⬜ 脚注（引用已有 `<sup>`，但定义标签被折叠、无底部脚注区/编号/回链）
 - ⬜ 大文档虚拟化（5 万字以下不做；DOM 节点数与跨块选区天然冲突）
 
 ### M5 前端工程化（Vite + Vue 外壳）✅
@@ -413,6 +414,7 @@ byte   0  2  5  8  10
 17. **其它块级标记的同类抖动未处理**：`>`（引用）与 `***`／`---`（分隔线）也会在敲完最后一个字符的瞬间改变块类型。它们不涉及字号跳变，先不动；若将来统一处理，应复用同一套「成形」判定。
 18. ~~**菜单没有「新建」**~~ **已修（2026-11-21）**：文件菜单补齐「新建 / 打开文件… / 保存 / 另存为… / 关闭窗口」，`Ctrl+N` 可用。新建**不在硬盘上落文件**——只在内存里换成未命名空文档（`Session::new_file` → `AppState::open("", None)`），与「双击图标启动」是同一条状态路径；首次 Ctrl+S 才弹保存对话框落盘，这样既不会留下空文件，也不用维护两套入口语义。
     - 同批修掉的两个丢稿缺口：① 未命名文档按 Ctrl+S 不再谎称「已保存」（`Effect::NeedsPath` → 弹框 → `saveTo`），写盘失败从 `Conflict` 拆成 `Effect::WriteFailed`；② 关窗与换文档前检查 dirty——`CloseRequested` 由 `on_window_event` 拦截（`CloseGuard` 放行标志 + `close-requested` 事件），`open_file` / `new_file` 前用 `ask_discard` 问一句。自检模式下确认框一律放行，否则会挂死。
+19. **块级公式内含空行时不被识别**：pulldown-cmark 把 math 的定界符跟踪限制在单个块内，`$$\na\n\nb\n$$` 中的 `$$` 会退化成字面文本（mdview 的 `split_blocks` 同样按空行切块，行为一致）。多段公式请把空行去掉，或用多个 `$$…$$`。
 
 ---
 
@@ -475,11 +477,11 @@ pnpm test:watch                             # 改代码时盯着
 | 文本与撤销 | `crates/mdview-core/src/document.rs`、`transaction.rs` |
 | 块切分（含末尾空段落） | `crates/mdview-markdown/src/split.rs` |
 | 片段模型、`align`、HTML、**标记配对表**（`Block::markers`） | `crates/mdview-markdown/src/block.rs` |
-| 投影（差集、图片原子化、内联代码内缩、标记配对推导、**表格结构抽出**） | `crates/mdview-markdown/src/project.rs` |
+| 投影（差集、图片原子化、内联代码/公式定界符内缩、标记配对推导、**表格结构抽出**） | `crates/mdview-markdown/src/project.rs` |
 | **代码块词法着色**（token → `tk-*` class，覆盖常见语言） | `crates/mdview-markdown/src/highlight.rs` |
 | **表格结构化模型**（`TableGrid` / 单元格 byte / 对齐 / 跨格导航 / 阅读态 `<tr>/<th>/<td>`） | `crates/mdview-markdown/src/block.rs` |
 | **视觉布局与停靠点** | `crates/mdview-markdown/src/layout.rs` |
-| **分块帧与增量 patch**（`block_frames` / `diff_frames`）+ 验证页 + **表格网格渲染** | `crates/mdview-markdown/src/preview.rs` |
+| **分块帧与增量 patch**（`block_frames` / `diff_frames`）+ 验证页 + **表格网格渲染** + 公式 `.m` 样式 | `crates/mdview-markdown/src/preview.rs` |
 | **编辑闭环**（输入 → 事务 → 光标回填 → patch）+ **表格跨格 / 行列增删** | `crates/mdview-app/src/state.rs` |
 | 端口（FileStore 原子写 / RenderSink / **NotifyWatcher**） | `crates/mdview-app/src/ports.rs` |
 | 外部修改监听线程 + `external-change` emit | `src-tauri/src/main.rs`（setup 钩子） |

@@ -1968,6 +1968,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn math_delimiters_collapse_on_backspace_like_code() {
+        // 数学定界符与行内代码走同一套配对：删空内容后 `$` 也一起收掉
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "前$E=mc^2$后");
+        // 只选中公式内容（byte 区间），标记留在原处
+        app.update(
+            Message::Select {
+                anchor: 4,
+                head: 10,
+            },
+            &files,
+        );
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "前后");
+    }
+
     /// 词首的 Delete 必须删字，不能变成「整对去格式」。
     ///
     /// 块首 `**` 的左右两端落在同一视觉列上，若两个停靠点都保留，

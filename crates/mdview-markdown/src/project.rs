@@ -32,14 +32,15 @@ impl MarkdownParser {
         Self { options }
     }
 
-    /// CommonMark + 表格 / 脚注 / 删除线 / 任务列表。
-    /// 不启用 ENABLE_RAW_HTML：原始 HTML 退化为普通文本，杜绝脚本注入。
+    /// CommonMark + 表格 / 脚注 / 删除线 / 任务列表 / 数学公式。
+    /// 不启用 RAW_HTML：原始 HTML 退化为普通文本，杜绝脚本注入。
     pub fn gfm() -> Self {
         Self::new(
             Options::ENABLE_TABLES
                 | Options::ENABLE_FOOTNOTES
                 | Options::ENABLE_STRIKETHROUGH
-                | Options::ENABLE_TASKLISTS,
+                | Options::ENABLE_TASKLISTS
+                | Options::ENABLE_MATH,
         )
     }
 
@@ -176,7 +177,12 @@ fn collect_markers(
         }
     }
 
-    for span in spans.iter().filter(|s| s.kind == SpanKind::Code) {
+    // 行内代码与数学公式都没有容器事件（都是单点事件），只能靠片段边缘反推；
+    // 配对后，退格落在 `$` 上会整对抽掉定界符、留下公式源码。
+    for span in spans
+        .iter()
+        .filter(|s| matches!(s.kind, SpanKind::Code | SpanKind::Math { .. }))
+    {
         let open = hidden.iter().find(|h| h.end == span.byte.start);
         let close = hidden.iter().find(|h| h.start == span.byte.end);
         if let (Some(open), Some(close)) = (open, close) {
@@ -435,7 +441,12 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
                     accs[owner].covered.push(range);
                 }
             }
-            Event::InlineMath(_) | Event::DisplayMath(_) => {}
+            Event::InlineMath(text) => {
+                push_math(src, &ranges, &mut accs, range, false, &text, &style)
+            }
+            Event::DisplayMath(text) => {
+                push_math(src, &ranges, &mut accs, range, true, &text, &style)
+            }
         }
     }
 
@@ -597,6 +608,48 @@ fn code_inner(src: &str, range: &Range<usize>) -> Range<usize> {
         (range.start + delims)..(range.end - delims)
     } else {
         range.clone()
+    }
+}
+
+/// 去掉数学事件的 `$` / `$$` 定界符，只留公式源码。
+///
+/// 与 `code_inner` 同理：pulldown 的事件区间含定界符，不内缩的话 `$` 会被当成
+/// 可见文字、差集里反而没有折叠标记。这里只砍固定长度的定界符，不数连续 `$`，
+/// 这样 `$$ $x$ $$` 这类内容本身就以 `$` 开头/结尾的公式也能正确内缩。
+fn math_inner(src: &str, range: &Range<usize>, display: bool) -> Range<usize> {
+    let want = if display { 2 } else { 1 };
+    let Some(raw) = src.get(range.clone()) else {
+        return range.clone();
+    };
+    let bytes = raw.as_bytes();
+    let has_open = bytes.iter().take(want).all(|b| *b == b'$') && bytes.len() >= want;
+    let has_close = bytes.iter().rev().take(want).all(|b| *b == b'$') && bytes.len() >= want;
+    if has_open && has_close && bytes.len() >= want * 2 {
+        (range.start + want)..(range.end - want)
+    } else {
+        range.clone()
+    }
+}
+
+/// 把一个数学事件落成可见片段 + 折叠定界符。
+fn push_math(
+    src: &str,
+    ranges: &[Range<usize>],
+    accs: &mut [Acc],
+    range: Range<usize>,
+    display: bool,
+    text: &str,
+    style: &Style,
+) {
+    if let Some(owner) = owner_of(ranges, range.start) {
+        let inner = math_inner(src, &range, display);
+        accs[owner].spans.push(Span {
+            kind: SpanKind::Math { display },
+            byte: inner.clone(),
+            text: text.to_owned(),
+            style: style.clone(),
+        });
+        accs[owner].covered.push(inner);
     }
 }
 
@@ -1181,6 +1234,48 @@ mod tests {
             .filter(|s| matches!(s.kind, SpanKind::Break { hard: true }))
             .count();
         assert_eq!(breaks, 1, "表头与数据行之间应有 1 个换行");
+    }
+
+    #[test]
+    fn inline_math_folds_delimiters_and_keeps_source() {
+        let src = "公式 $E=mc^2$ 结束";
+        let block = first_block(src);
+        let math: Vec<_> = block
+            .spans
+            .iter()
+            .filter(|s| matches!(s.kind, SpanKind::Math { .. }))
+            .collect();
+        assert_eq!(math.len(), 1);
+        assert_eq!(math[0].text, "E=mc^2");
+        assert_eq!(&src[math[0].byte.clone()], "E=mc^2");
+        assert!(matches!(math[0].kind, SpanKind::Math { display: false }));
+        // 定界符进差集，且被登记为一对，退格时能整对抽掉
+        assert!(block.hidden.iter().any(|r| &src[r.clone()] == "$"));
+        assert_eq!(block.markers.len(), 1);
+    }
+
+    #[test]
+    fn display_math_folds_double_dollars() {
+        let src = "$$\n\\int_0^1 x\\,dx\n$$";
+        let block = first_block(src);
+        let math: Vec<_> = block
+            .spans
+            .iter()
+            .filter(|s| matches!(s.kind, SpanKind::Math { .. }))
+            .collect();
+        assert_eq!(math.len(), 1);
+        assert!(matches!(math[0].kind, SpanKind::Math { display: true }));
+        assert!(math[0].text.contains("\\int_0^1"));
+        assert_eq!(&src[math[0].byte.clone()], math[0].text);
+        assert!(block.markers.len() >= 1);
+    }
+
+    #[test]
+    fn math_inner_trims_exactly_the_declared_delimiters() {
+        // 即使内容两端也是 `$`，也只砍固定层数的定界符，不多吃内容的 `$`
+        let src = "$$ $x$ $$";
+        let inner = math_inner(src, &(0..src.len()), true);
+        assert_eq!(&src[inner], " $x$ ");
     }
 
     #[test]
