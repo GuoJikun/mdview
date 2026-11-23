@@ -233,7 +233,7 @@ byte   0  2  5  8  10
 - ✅ **Tauri 2 外壳**（`src-tauri/`）：`frontendDist` 指向 Vite 产物 `../dist`，`session.rs` 隔离 IPC 契约（前端 `kind` 字符串 → `Message`），窗口创建与 IPC 已用启动探针在日志中验证
 - ✅ 前端渲染：按块落地、增量应用 `Patch`、用停靠点 `data-b`/`data-a` 的左右边缘量出 caret 像素、点击/拖动报停靠点
 - ✅ **主题系统**（2026-11-20）：`app.css` 颜色全部改为 CSS 变量，`[data-theme="dark"]` 覆盖为深色。`theme.js` 默认跟随系统 `prefers-color-scheme`，手动切换存 localStorage、可恢复跟随系统。状态栏按钮一键切换。7 项单测 + 自检验证
-- ✅ **大纲侧栏**（2026-11-20）：`Snapshot` / `Reply` 经 `OutlineDto` 下发标题表（`level`/`title`/`block`）；`src/outline.js` 按锚点实际坐标判定当前节（硬约束 10：不用滚动百分比），侧栏点击按锚点位置跳转。10 项单测 + 自检验证
+- ✅ **大纲侧栏**（2026-11-20）：`Snapshot` / `Reply` 经 `OutlineDto` 下发标题表（`level`/`title`/`block`）；`src/outline.js` 按锚点实际坐标判定当前节（硬约束 10：不用滚动百分比），侧栏点击按锚点位置跳转。10 项单测 + 自检验证。**点击后高亮要钉住点击项**（`outlinePinned`）：文末标题受最大滚动位置限制，永远越不过 80px 基准线，按位置判定会把高亮还给上一个标题；只有滚轮 / 触摸 / 导航键 / 拖自绘滚动条这些真实输入才撤钉，`scroll` 事件本身不能撤（平滑滚动期间一直在发）
   - **图片高度**（2026-11-23 修）：图片是异步加载的，撑开后所有标题下移。`hydrateImages` 的 `load` / `error` 回调里重测一次锚点；`jumpToOutline` 点击时再现场量一次 `getBoundingClientRect()`，不只依赖缓存——两层保险，图片无论何时加载完都不会让跳转差出一张图的高度。dom 用例 `outline-image` 固定住了 0 → 400px 的回归
 - ✅ **同步滚动（锚点插值）**（2026-11-20）：滚动正文时按 `activeIndex(锚点, 阅读基准线)` 高亮当前节，侧栏自动把高亮项滚进视野；resize / 编辑后重测锚点。纯函数 `outline.js` 可在 Node 下测，判定依据是标题块真实纵坐标而非序号均分
 - ✅ **跨平台标题栏与菜单**（2026-11-20）：

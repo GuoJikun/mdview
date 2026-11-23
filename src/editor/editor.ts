@@ -90,6 +90,9 @@ let revealedStop: number | null = null;     // 上一次把光标滚进视口时
 let outline: OutlineDto[] = [];             // 大纲项 [{ level, title, block }]
 let outlineAnchors: { top: number }[] = []; // 与 outline 同序的锚点，文档坐标系
 let activeOutlineIdx = -1;                  // 当前高亮的大纲项
+// 点击大纲后「钉住」的高亮项：文末标题滚不到基准线，按滚动位置判定会落回
+// 上一个标题，所以点击后先按点击项高亮，等用户自己滚动再交还给滚动跟随。
+let outlinePinned: number | null = null;
 let lastTitleKey: string | null = null;     // 标题栏去重：path + 脏标记
 /** 最近一次绘制的选区（停靠点区间）。查找的「仅在选区内」按它换算字节范围。 */
 let selectionStops: [number, number] | null = null;
@@ -282,6 +285,8 @@ const OUTLINE_LINE = 80;
  */
 function rebuildOutline(items: OutlineDto[]) {
   outline = items || [];
+  // 大纲整棵重建（换文档 / 结构变化）时点击意图已经失效
+  outlinePinned = null;
   if (!outline.length) {
     outlineEl.innerHTML = '<div class="oc-title">大纲</div><div class="oc-empty">（无标题）</div>';
     outlineAnchors = [];
@@ -318,9 +323,15 @@ function refreshOutlineAnchors() {
 /** 按滚动位置高亮当前节。 */
 function updateActiveOutline() {
   if (!outline.length) return;
+  // 点击大纲后高亮钉在点击项上：文末标题受最大滚动位置限制，永远越不过
+  // 基准线，按位置判定会把高亮还给上一个标题。
+  if (outlinePinned !== null) return;
   const scrollY = window.scrollY || window.pageYOffset || 0;
-  const line = scrollY + OUTLINE_LINE;
-  const idx = outlineActiveIndex(outlineAnchors, line);
+  setActiveOutline(outlineActiveIndex(outlineAnchors, scrollY + OUTLINE_LINE));
+}
+
+/** 把高亮设到第 `idx` 项（-1 表示不高亮），并把侧栏里的该项滚进可见区。 */
+function setActiveOutline(idx: number) {
   if (idx === activeOutlineIdx) return;
   activeOutlineIdx = idx;
   const links = outlineEl.querySelectorAll<HTMLElement>('a[data-idx]');
@@ -336,6 +347,18 @@ function updateActiveOutline() {
   pushShellState();
 }
 
+/**
+ * 用户自己滚动了：撤掉点击大纲时钉住的高亮，交还给「按滚动位置判定」。
+ *
+ * 只认真正的滚动输入（滚轮、触摸、导航键、拖自绘滚动条），不认 `scroll`
+ * 事件本身——平滑滚动过程中也一直在发 `scroll`，按它撤钉会立刻打回原形。
+ */
+function releaseOutlinePin() {
+  if (outlinePinned === null) return;
+  outlinePinned = null;
+  updateActiveOutline();
+}
+
 /** 点击大纲项：按锚点实际位置把该标题滚到阅读基准线处。 */
 function jumpToOutline(idx: number) {
   // 现场量一次而不是用缓存：图片可能刚加载完、字体可能刚替换，
@@ -346,6 +369,8 @@ function jumpToOutline(idx: number) {
     ? el.getBoundingClientRect().top + (window.scrollY || window.pageYOffset || 0)
     : outlineAnchors[idx]?.top;
   if (top === undefined || !isFinite(top)) return;
+  outlinePinned = idx;
+  setActiveOutline(idx);
   const target = outlineScrollToAnchor(top, OUTLINE_LINE);
   window.scrollTo({ top: target, behavior: 'smooth' });
 }
@@ -1302,6 +1327,8 @@ async function dispatchOne(message: Wire) {
 }
 
 function applyReply(reply: Reply) {
+  // 内容/结构变了：点击大纲时的意图过期，高亮交还给滚动位置判定
+  if (reply.full || reply.patch || reply.outline) outlinePinned = null;
   if (reply.full) {
     renderAll(reply.full);
   } else if (reply.patch) {
@@ -1988,6 +2015,29 @@ window.addEventListener('mousemove', (event) => {
 window.addEventListener('mouseup', endDrag);
 // 切走窗口时既收不到 mouseup，也不会有 mousemove，必须自己收尾
 window.addEventListener('blur', endDrag);
+
+// 用户自己滚动的信号。只认输入事件，不认 `scroll`：平滑滚动期间 scroll 一直在
+// 发，按它撤钉等于点击后立刻打回原形（见 releaseOutlinePin）。
+window.addEventListener('wheel', releaseOutlinePin, { passive: true });
+window.addEventListener('touchmove', releaseOutlinePin, { passive: true });
+// 拖自绘滚动条：pointerdown 落在轨道或滑块上都算用户接管
+window.addEventListener(
+  'pointerdown',
+  (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (target && target.closest('.tb-vscroll, .tb-hscroll')) releaseOutlinePin();
+  },
+  { passive: true },
+);
+// 键盘导航（PageDown / Home / End…）。空格在正文里是输入，不算滚动。
+window.addEventListener(
+  'keydown',
+  (event) => {
+    const nav = ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'];
+    if (nav.indexOf(event.key) >= 0) releaseOutlinePin();
+  },
+  { passive: true },
+);
 
 // 滚动时**不能**把光标拉回视口：光标是文档坐标，自己会跟着走。
 // 这里只刷新像素（元素可能被 patch 换掉），滚动意图完全交给用户；
