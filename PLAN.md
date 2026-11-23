@@ -318,6 +318,7 @@ byte   0  2  5  8  10
   - `StatusBar.vue` 用 `<Teleport to="#bar">` 接管状态栏内容，`editor.ts` 不再拼 `innerHTML`
   - `Toast.vue` 接管 `#toast`，显隐与计时统一由 `bridge.notify` 管
   - `TitleBar.vue` + `MenuPopup.vue` + `menu.ts` 接管标题、菜单、窗口按钮、拖拽区与最大化图标；滚动条抽到 `scrollbars.ts`；删除 `titlebar.js`
+- ✅ **图标库 Lucide**（2026-11-23）：`lucide-vue-next@1` 按名导入，包声明 `sideEffects: false`，Vite 生产构建只留用到的图标——实测 4 个图标（ChevronRight / Check / TriangleAlert + 单选点）原始体积只增约 2.2 KB、gzip 约 130 B，产物里搜不到未使用的图标名。菜单箭头、勾选与更新弹窗已替换为 SVG；字体字符图标不再受字号与系统字体影响
 - ✅ **单入口**：`index.html` 只留 `<script type="module" src="/src/main.ts">`，九个旧脚本按序在 `main.ts` 里 `import`；首帧 UA 判定挪到 `platform.ts`，满足 CSP（不再需要内联脚本）
 - ✅ **编辑内核收敛**（P3.5）：`src/app.js` → `src/editor/editor.ts`，七个纯逻辑模块与用例一起挪进 `src/editor/`，`web_ime.rs` 的守门清单与 `cwd` 同步
 - ✅ **`editor.ts` 全量类型化**（P3.6）：新增 `src/editor/ipc.ts` 承载 `Wire`（23 种 `kind`，与 `session.rs` 逐条对应）/ `Reply` / `Snapshot` / `BlockDto` / `PatchDto` / `CaretDto`（保留 `char_offset` 等 Rust 字段名，不做 camelCase），摘掉 `@ts-nocheck`

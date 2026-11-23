@@ -233,13 +233,12 @@ html.custom-titlebar #tb-menu-popup {
 #tb-menu-popup button.danger:hover .label,
 #tb-menu-popup button.danger.focused .label { color: #fff; }
 #tb-menu-popup .chev {
-  margin-left: auto; align-self: center;
-  /* 实心三角：6×12px。原先的 › 字形在 14px 字号下只有 3×5px，太细太小 */
-  width: 0; height: 0;
-  border-left: 6px solid currentColor;
-  border-top: 6px solid transparent;
-  border-bottom: 6px solid transparent;
+  margin-left: auto; display: flex; align-items: center; flex: none;
   color: var(--text3);
+}
+#tb-menu-popup .chev svg { display: block; }
+#tb-menu-popup .gutter .dot {
+  width: 5px; height: 5px; border-radius: 50%; background: currentColor;
 }
 #tb-menu-popup button:hover .chev,
 #tb-menu-popup button.focused .chev { color: #fff; }

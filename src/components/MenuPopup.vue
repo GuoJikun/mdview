@@ -24,7 +24,9 @@
         >
           <span class="gutter"></span>
           <span class="label">{{ entry.sub.label }}</span>
-          <span class="chev" aria-hidden="true"></span>
+          <span class="chev" aria-hidden="true">
+            <ChevronRight :size="15" :stroke-width="2.25" />
+          </span>
         </button>
         <div v-if="openSubIndex === i" class="tb-submenu" role="menu">
           <template v-for="(item, j) in entry.sub.items" :key="j">
@@ -40,7 +42,10 @@
               @pointerenter.stop
               @click="run(item.action)"
             >
-              <span class="gutter">{{ isChecked(item) ? (item.mark === 'dot' ? '•' : '✓') : '' }}</span>
+              <span class="gutter">
+                <Check v-if="isChecked(item) && item.mark !== 'dot'" :size="14" :stroke-width="2.4" />
+                <span v-else-if="isChecked(item)" class="dot"></span>
+              </span>
               <span class="label">{{ item.label }}</span>
               <span v-if="item.acc" class="acc">{{ item.acc }}</span>
             </button>
@@ -59,7 +64,10 @@
         @pointerenter="openSubIndex = null"
         @click="run(entry.action)"
       >
-        <span class="gutter">{{ isChecked(entry) ? (entry.mark === 'dot' ? '•' : '✓') : '' }}</span>
+        <span class="gutter">
+          <Check v-if="isChecked(entry) && entry.mark !== 'dot'" :size="14" :stroke-width="2.4" />
+          <span v-else-if="isChecked(entry)" class="dot"></span>
+        </span>
         <span class="label">{{ entry.label }}</span>
         <span v-if="entry.acc" class="acc">{{ entry.acc }}</span>
       </button>
@@ -69,6 +77,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { Check, ChevronRight } from 'lucide-vue-next';
 import { dispatch, state } from '../bridge';
 import { MENUS, anchorOf, closeMenu, menuState, switchMenu, type MenuEntry } from '../menu';
 import { update } from '../update';

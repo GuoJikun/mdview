@@ -31,7 +31,7 @@
 
         <!-- 已是最新 -->
         <div v-else-if="update.phase === 'up-to-date'" class="update-status">
-          <span class="check-mark" aria-hidden="true">✓</span>
+          <span class="check-mark" aria-hidden="true"><Check :size="14" :stroke-width="3" /></span>
           <span>当前已是最新版本。</span>
         </div>
 
@@ -65,7 +65,7 @@
 
         <!-- 下载完成 -->
         <div v-else-if="update.phase === 'ready'" class="update-status">
-          <span class="check-mark" aria-hidden="true">✓</span>
+          <span class="check-mark" aria-hidden="true"><Check :size="14" :stroke-width="3" /></span>
           <div>
             <strong>更新已就绪</strong>
             <p class="ready-hint">点击「安装并重启」完成更新。</p>
@@ -74,7 +74,7 @@
 
         <!-- 失败 -->
         <div v-else-if="update.phase === 'error'" class="update-status update-error">
-          <span class="error-mark" aria-hidden="true">⚠</span>
+          <span class="error-mark" aria-hidden="true"><TriangleAlert :size="14" :stroke-width="2.4" /></span>
           <div>
             <strong>检查更新失败</strong>
             <p>{{ update.error }}</p>
@@ -121,6 +121,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { Check, TriangleAlert } from 'lucide-vue-next';
 import {
   cancelDownload,
   check,
