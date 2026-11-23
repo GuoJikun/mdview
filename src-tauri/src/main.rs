@@ -13,6 +13,7 @@
 
 mod link;
 mod recent;
+mod release_notes;
 mod session;
 mod update;
 

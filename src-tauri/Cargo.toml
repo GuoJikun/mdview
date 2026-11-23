@@ -13,6 +13,8 @@ base64 = "0.23"
 log = { workspace = true }
 mdview-app = { workspace = true }
 mdview-markdown = { workspace = true }
+# 更新说明（Release 正文）的 Markdown → HTML 渲染。
+pulldown-cmark = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }

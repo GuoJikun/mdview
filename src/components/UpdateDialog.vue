@@ -40,10 +40,10 @@
           <div class="update-status">
             <strong class="update-new">发现新版本 — {{ update.info.version }}</strong>
           </div>
-          <div v-if="notes" class="update-notes-block">
+          <div v-if="notesHtml" class="update-notes-block">
             <h3>更新内容</h3>
-            <!-- Release 正文是 Markdown；这里按纯文本排版，不注入 HTML。 -->
-            <div class="update-notes" @wheel.stop>{{ notes }}</div>
+            <!-- Release 正文由后端渲染成安全 HTML：文本已转义，链接只有 data-href。 -->
+            <div class="update-notes" @wheel.stop @click="onNotesClick" v-html="notesHtml"></div>
           </div>
         </template>
 
@@ -128,6 +128,7 @@ import {
   closeUpdateDialog,
   download,
   install,
+  openNotesLink,
   update,
 } from '../update';
 import { formatBytes, progressPercent } from '../update-format';
@@ -135,8 +136,15 @@ import { useModalDialog } from '../dialog-modal';
 
 const closeButton = ref<HTMLButtonElement | null>(null);
 
-const notes = computed(() => (update.info?.body ?? '').trim());
+const notesHtml = computed(() => (update.info?.bodyHtml ?? '').trim());
 const percent = computed(() => progressPercent(update.received, update.total));
+
+/** 说明里的链接只认 `data-href`，交给后端校验后开系统浏览器。 */
+function onNotesClick(event: MouseEvent): void {
+  const target = event.target instanceof Element ? event.target.closest('[data-href]') : null;
+  const href = target instanceof HTMLElement ? target.dataset.href : undefined;
+  if (href) void openNotesLink(href);
+}
 
 /** 下载中不允许直接关窗：要么等它完成，要么显式点「取消」。 */
 function requestClose(): void {
@@ -274,19 +282,159 @@ useModalDialog(closeButton);
   color: var(--text);
 }
 
-/* 说明较长时在弹窗内部滚动，不把对话框撑高。 */
+/* 说明较长时在弹窗内部滚动，不把对话框撑高；正文按 HTML 排版而不是纯文本。 */
 .update-notes {
-  max-height: min(240px, 40vh);
-  overflow-y: auto;
-  padding: 8px 10px;
+  max-height: min(260px, 42vh);
+  overflow: auto;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--code-bg);
   color: var(--text2);
   font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
+  line-height: 1.65;
   overflow-wrap: anywhere;
+}
+
+/* v-html 生成的节点不在 scoped 的作用域里，只能靠 :deep 命中。 */
+.update-notes :deep(p) {
+  margin: 0 0 8px;
+}
+
+.update-notes :deep(p:last-child),
+.update-notes :deep(ul:last-child),
+.update-notes :deep(ol:last-child),
+.update-notes :deep(pre:last-child),
+.update-notes :deep(table:last-child) {
+  margin-bottom: 0;
+}
+
+.update-notes :deep(h1),
+.update-notes :deep(h2),
+.update-notes :deep(h3),
+.update-notes :deep(h4),
+.update-notes :deep(h5),
+.update-notes :deep(h6) {
+  margin: 12px 0 6px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* Release 正文里 h1/h2 是版本号与文档标题，比小节（### 分类）高半档。 */
+.update-notes :deep(h1),
+.update-notes :deep(h2) {
+  font-size: 13.5px;
+}
+
+.update-notes :deep(h1:first-child),
+.update-notes :deep(h2:first-child),
+.update-notes :deep(h3:first-child) {
+  margin-top: 0;
+}
+
+.update-notes :deep(ul),
+.update-notes :deep(ol) {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.update-notes :deep(li) {
+  margin: 2px 0;
+}
+
+.update-notes :deep(blockquote) {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  border-left: 3px solid var(--border);
+  color: var(--text3);
+}
+
+.update-notes :deep(code) {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.update-notes :deep(pre) {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  overflow-x: auto;
+}
+
+.update-notes :deep(pre code) {
+  padding: 0;
+  background: none;
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.update-notes :deep(a[data-href]) {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.update-notes :deep(a[data-href]:hover) {
+  text-decoration: underline;
+}
+
+.update-notes :deep(img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+.update-notes :deep(table) {
+  margin: 0 0 8px;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+.update-notes :deep(th),
+.update-notes :deep(td) {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.update-notes :deep(th) {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.update-notes :deep(.al) {
+  text-align: left;
+}
+
+.update-notes :deep(.ac) {
+  text-align: center;
+}
+
+.update-notes :deep(.ar) {
+  text-align: right;
+}
+
+.update-notes :deep(hr) {
+  margin: 10px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.update-notes :deep(del) {
+  opacity: 0.7;
+}
+
+.update-notes :deep(.notes-task) {
+  margin-right: 4px;
+  color: var(--text3);
 }
 
 </style>

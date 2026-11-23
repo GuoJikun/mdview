@@ -2185,6 +2185,7 @@ dependencies = [
  "log",
  "mdview-app",
  "mdview-markdown",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "tauri",

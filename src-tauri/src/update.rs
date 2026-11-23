@@ -10,6 +10,20 @@
 //!
 //! 签名公钥在 `tauri.conf.json` 的 `plugins.updater.pubkey`，私钥只在发布机上
 //! （`TAURI_SIGNING_PRIVATE_KEY`），拿不到私钥伪造的包会在 install 阶段被拒。
+//!
+//! ## 代理
+//!
+//! 清单与安装包都由插件内部的 `reqwest` 客户端拉取。项目没有配
+//! `plugins.updater.proxy`，也没有调 `no_proxy()`，所以走 **`reqwest` 的默认
+//! 系统代理**（`system-proxy` 特性默认启用）：Windows 读注册表
+//! `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` 的
+//! `ProxyEnable` / `ProxyServer` / `ProxyOverride`——就是「Internet 选项 →
+//! 连接 → 局域网设置」那个代理，Clash、v2rayN 打开「系统代理」时写的正是它；
+//! macOS 读系统网络配置。`HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` 环境变量
+//! 优先级更高，已有值时不会被系统设置覆盖。**不支持 PAC**（`AutoConfigURL`）：
+//! 只开了 PAC 的机器上更新请求是直连的。插件也没启用 `reqwest` 的 `socks`
+//! 特性，系统代理写成 `socks5://` 同样不生效——Clash 这类默认写的是 HTTP 代理，
+//! 不受影响。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -29,7 +43,10 @@ use tokio::sync::watch;
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {
     pub version: String,
+    /// Release 正文的原始 Markdown：留着排查渲染问题，弹窗排版只用 `body_html`。
     pub body: String,
+    /// `body` 渲染后的安全 HTML 片段，弹窗直接 `v-html`（见 [`crate::release_notes`]）。
+    pub body_html: String,
     pub date: Option<String>,
 }
 
@@ -126,9 +143,11 @@ pub async fn check_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, U
         return Ok(None);
     };
 
+    let body = update.body.as_deref().unwrap_or_default();
     let info = UpdateInfo {
         version: update.version.clone(),
-        body: update.body.clone().unwrap_or_default(),
+        body: body.to_owned(),
+        body_html: crate::release_notes::render(body),
         date: update.date.map(|date| date.to_string()),
     };
     *state.update.lock().unwrap() = Some(update);

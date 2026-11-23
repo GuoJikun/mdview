@@ -20,7 +20,10 @@ export type UpdatePhase =
 /** 与 `src-tauri/src/update.rs` 的 `UpdateInfo` 对应。 */
 export interface UpdateInfo {
   version: string;
+  /** Release 正文原文（Markdown）。 */
   body: string;
+  /** 正文渲染后的安全 HTML 片段，后端已转义并过滤。 */
+  bodyHtml: string;
   date: string | null;
 }
 
@@ -173,6 +176,21 @@ export async function install(): Promise<void> {
   } catch (error) {
     update.error = normalizeError(error).message;
     update.phase = 'error';
+  }
+}
+
+/**
+ * 打开更新说明里的链接。
+ *
+ * 说明 HTML 由后端渲染，链接只带 `data-href`（不带 `href`），点击后走这里——
+ * 和正文的链接同一条路：WebView 自己导航会把整个应用带走。
+ * 打不开不该打断「检查更新」的主流程，静默失败。
+ */
+export async function openNotesLink(href: string): Promise<void> {
+  try {
+    await invoke('open_url', { url: href });
+  } catch {
+    // 静默：弹窗里没有 toast 通道，不能因为一个链接把状态机翻成 error。
   }
 }
 
