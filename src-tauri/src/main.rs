@@ -17,9 +17,13 @@ mod session;
 mod update;
 
 use std::{
+    collections::HashMap,
     path::PathBuf,
     process,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
 use mdview_app::Watcher;
@@ -32,10 +36,118 @@ use tauri_plugin_window_state::StateFlags;
 ///
 /// 原生对话框不能在窗口事件回调里阻塞（Windows 上是嵌套消息循环，macOS/Linux
 /// 上会死锁），所以回调只负责拦截 + 发事件，真正的询问走 `confirm_discard` 命令。
-#[derive(Default)]
-struct CloseGuard {
-    /// 用户已确认丢弃改动：下一次 `CloseRequested` 直接放行，不再拦。
-    allowed: AtomicBool,
+///
+/// 每个窗口一份：多窗口下 A 窗口的「丢弃并关闭」不能顺手放行 B 窗口。
+#[derive(Clone, Default)]
+struct CloseGuards(Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>);
+
+impl CloseGuards {
+    /// 取某个窗口的放行标志，没有就补一个。回调里只做一次 swap，不能到处建。
+    fn of(&self, label: &str) -> Arc<AtomicBool> {
+        let mut map = self.0.lock().expect("关窗守卫锁中毒");
+        map.entry(label.to_string())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone()
+    }
+
+    fn remove(&self, label: &str) {
+        if let Ok(mut map) = self.0.lock() {
+            map.remove(label);
+        }
+    }
+}
+
+/// 窗口标签 → 编辑会话。
+///
+/// `Session` 内部是 `Arc<Mutex<AppState>>`，克隆只复制句柄，命令拿到的是
+/// 同一份文档。用注册表而不是 Tauri 的全局 `State<Session>`，是因为
+/// `Manager::manage` 只有应用级作用域，没有「每个窗口一份」的容器。
+#[derive(Clone, Default)]
+struct Sessions(Arc<Mutex<HashMap<String, Session>>>);
+
+impl Sessions {
+    fn insert(&self, label: impl Into<String>, session: Session) {
+        if let Ok(mut map) = self.0.lock() {
+            map.insert(label.into(), session);
+        }
+    }
+
+    fn get(&self, label: &str) -> Option<Session> {
+        self.0.lock().ok()?.get(label).cloned()
+    }
+
+    fn remove(&self, label: &str) {
+        if let Ok(mut map) = self.0.lock() {
+            map.remove(label);
+        }
+    }
+
+    /// 快照一份给 watcher 线程遍历，避免持锁做文件 I/O。
+    fn entries(&self) -> Vec<(String, Session)> {
+        self.0
+            .lock()
+            .map(|map| {
+                map.iter()
+                    .map(|(label, session)| (label.clone(), session.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// 外部修改轮询：一个线程看所有窗口。
+///
+/// 每个窗口的文档路径可能不同（各自打开的文件），所以按 label 各建一个
+/// `NotifyWatcher`；路径变了就重建（NotifyWatcher 绑定构造时的路径）。
+/// 事件只发给对应窗口，不能广播——否则 B 窗口会提示 A 文件被改了。
+fn watch_loop(app: tauri::AppHandle, sessions: Sessions) {
+    let mut active: HashMap<String, (PathBuf, mdview_app::NotifyWatcher)> = HashMap::new();
+    loop {
+        let entries = sessions.entries();
+        let alive: std::collections::HashSet<String> =
+            entries.iter().map(|(label, _)| label.clone()).collect();
+
+        for (label, session) in &entries {
+            let target = session.watch_path();
+            let unchanged = active
+                .get(label)
+                .is_some_and(|(path, _)| Some(path) == target.as_ref());
+            if !unchanged {
+                active.remove(label);
+                if let Some(path) = target {
+                    match mdview_app::NotifyWatcher::new(&path) {
+                        Ok(watcher) => {
+                            log::info!("窗口 {label} 启动外部修改监听：{}", path.display());
+                            active.insert(label.clone(), (path, watcher));
+                        }
+                        Err(err) => {
+                            log::warn!("窗口 {label} 文件监听未启动（不影响编辑）：{err}");
+                        }
+                    }
+                }
+            }
+            if let Some((path, watcher)) = active.get_mut(label)
+                && !watcher.poll().is_empty()
+                && session.externally_modified()
+                && let Some(window) = app.get_webview_window(label)
+            {
+                log::info!("窗口 {label} 检测到外部修改：{}", path.display());
+                let _ = window.emit("external-change", path.to_string_lossy());
+            }
+        }
+
+        // 窗口已关：连同它的监听一起撤掉，别让线程继续握着旧文件
+        active.retain(|label, _| alive.contains(label));
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+}
+
+/// 取调用窗口的会话。标签在注册表里找不到，说明窗口正在销毁（或注册前就发起了
+/// IPC），命令如实报错，不去碰别的窗口。
+fn session_of(label: &str, sessions: &Sessions) -> Result<Session, String> {
+    sessions
+        .get(label)
+        .ok_or_else(|| format!("窗口 {label} 没有对应的文档会话"))
 }
 
 /// 前端资源的内容指纹，由 `build.rs` 注入。
@@ -46,27 +158,34 @@ struct CloseGuard {
 const WEB_STAMP: &str = env!("MDVIEW_WEB_STAMP");
 
 #[tauri::command]
-fn snapshot(session: tauri::State<'_, Session>) -> Snapshot {
-    session.snapshot()
+fn snapshot(
+    window: tauri::Window,
+    sessions: tauri::State<'_, Sessions>,
+) -> Result<Snapshot, String> {
+    Ok(session_of(window.label(), &sessions)?.snapshot())
 }
 
 #[tauri::command]
-fn dispatch(app: tauri::AppHandle, session: tauri::State<'_, Session>, message: Wire) -> Reply {
+fn dispatch(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    sessions: tauri::State<'_, Sessions>,
+    message: Wire,
+) -> Result<Reply, String> {
     // 另存为会把文档改绑到一个新路径：这条路径要进最近列表。
     // 先留一份，`message` 之后会被 move 进内核。
     let saved_to = match &message {
         Wire::SaveTo { path } => Some(PathBuf::from(path)),
         _ => None,
     };
-    let reply = session.dispatch(message);
+    let reply = session_of(window.label(), &sessions)?.dispatch(message);
     if reply.saved
         && let Some(path) = saved_to
     {
-        recent::remember(&app, &path);
-        // macOS 原生菜单是静态快照，另存为后要把新路径补进「最近打开」
-        refresh_native_menu(&app);
+        // 最近列表是应用级数据：记一条并通知所有窗口刷新菜单
+        remember_recent(&app, &path);
     }
-    reply
+    Ok(reply)
 }
 
 /// 最近打开文件列表，最近的在前。文件菜单据此渲染子菜单。
@@ -80,6 +199,8 @@ fn recent_files(app: tauri::AppHandle) -> Vec<String> {
 fn clear_recent_files(app: tauri::AppHandle) {
     recent::clear(&app);
     refresh_native_menu(&app);
+    // 其它窗口的最近菜单也要立刻变成空
+    let _ = app.emit("recent-changed", ());
 }
 
 /// 前端遇到 Markdown 里的本地图片时调用。
@@ -87,7 +208,12 @@ fn clear_recent_files(app: tauri::AppHandle) {
 /// 路径解析在 Session 里完成并限制在文档目录内；这里只做读盘与 data URL 编码，
 /// 不把任意路径暴露给 webview。超过上限的文件直接拒绝，避免大图撑爆 IPC。
 #[tauri::command]
-fn load_image(url: String, session: tauri::State<'_, Session>) -> Option<String> {
+fn load_image(
+    window: tauri::Window,
+    sessions: tauri::State<'_, Sessions>,
+    url: String,
+) -> Option<String> {
+    let session = session_of(window.label(), &sessions).ok()?;
     image_data_url(&session, &url)
 }
 
@@ -112,24 +238,35 @@ fn image_data_url(session: &Session, url: &str) -> Option<String> {
 /// 已经构造、DOM 已经挂好，合成事件才有意义。
 #[tauri::command]
 fn ready(
-    app: tauri::AppHandle,
-    session: tauri::State<'_, Session>,
+    window: tauri::WebviewWindow,
+    sessions: tauri::State<'_, Sessions>,
     mode: tauri::State<'_, RunMode>,
 ) -> usize {
-    let snap = session.snapshot();
-    log::info!(
-        "前端就绪：{} 块 / {} 停靠点 / 路径={:?}",
-        snap.blocks.len(),
-        snap.stops,
-        snap.path
-    );
+    let snapshot = session_of(window.label(), &sessions).map(|session| session.snapshot());
+    let blocks = match &snapshot {
+        Ok(snap) => {
+            log::info!(
+                "前端就绪：窗口={} / {} 块 / {} 停靠点 / 路径={:?}",
+                window.label(),
+                snap.blocks.len(),
+                snap.stops,
+                snap.path
+            );
+            snap.blocks.len()
+        }
+        Err(err) => {
+            log::warn!("前端就绪，但{err}");
+            0
+        }
+    };
     if mode.self_test {
         log::info!("自检：开始跑输入法合成事件");
-        if let Some(window) = app.get_webview_window("main") {
+        // 自检只跑主窗口；多窗口下别把合成事件打到别的窗口上
+        if window.label() == "main" {
             let _ = window.eval("window.__mdviewSelfTest && window.__mdviewSelfTest()");
         }
     }
-    snap.blocks.len()
+    blocks
 }
 
 /// 自检回包。报告以 `OK` 开头视为通过，其余一律非零退出。
@@ -148,11 +285,19 @@ fn selftest(app: tauri::AppHandle, report: String) {
 /// 要么用户点了「继续」（认了这次丢失）。
 ///
 /// 自检模式一律放行：自检会反复换文档，弹框会直接把它挂死。
-fn ask_discard(app: &tauri::AppHandle, what: &str) -> bool {
+fn ask_discard(
+    app: &tauri::AppHandle,
+    window: &tauri::Window,
+    sessions: &Sessions,
+    what: &str,
+) -> bool {
     if app.state::<RunMode>().self_test {
         return true;
     }
-    if !app.state::<Session>().is_dirty() {
+    let dirty = sessions
+        .get(window.label())
+        .is_some_and(|session| session.is_dirty());
+    if !dirty {
         return true;
     }
     app.dialog()
@@ -167,22 +312,26 @@ fn ask_discard(app: &tauri::AppHandle, what: &str) -> bool {
 
 /// 关窗前确认。`action` 只决定文案：`close` 是关窗，其余按换文档处理。
 #[tauri::command]
-async fn confirm_discard(app: tauri::AppHandle, action: String) -> bool {
+async fn confirm_discard(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    sessions: tauri::State<'_, Sessions>,
+    action: String,
+) -> Result<bool, String> {
     let what = if action == "close" {
         "关闭窗口"
     } else {
         "打开另一个文件"
     };
-    ask_discard(&app, what)
+    Ok(ask_discard(&app, &window, &sessions, what))
 }
 
 /// 用户已在确认框里点了「继续」：置放行标志再关窗，`CloseRequested` 不再拦。
 #[tauri::command]
-fn force_close(app: tauri::AppHandle, guard: tauri::State<'_, CloseGuard>) {
-    guard.allowed.store(true, Ordering::SeqCst);
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.close();
-    }
+fn force_close(window: tauri::Window, guards: tauri::State<'_, CloseGuards>) {
+    // 放行标志按窗口存：这里只放行正在关闭的这一个
+    guards.of(window.label()).store(true, Ordering::SeqCst);
+    let _ = window.close();
 }
 
 /// 文件 → 新建：换成未命名空文档。
@@ -193,12 +342,14 @@ fn force_close(app: tauri::AppHandle, guard: tauri::State<'_, CloseGuard>) {
 #[tauri::command]
 async fn new_file(
     app: tauri::AppHandle,
-    session: tauri::State<'_, Session>,
+    window: tauri::Window,
+    sessions: tauri::State<'_, Sessions>,
 ) -> Result<Option<Snapshot>, String> {
-    if !ask_discard(&app, "新建文档") {
+    let session = session_of(window.label(), &sessions)?;
+    if !ask_discard(&app, &window, &sessions, "新建文档") {
         return Ok(None);
     }
-    log::info!("新建文档：切到未命名空文档");
+    log::info!("新建文档：窗口={} 切到未命名空文档", window.label());
     Ok(Some(session.new_file()))
 }
 
@@ -212,12 +363,14 @@ async fn new_file(
 #[tauri::command]
 async fn open_file(
     app: tauri::AppHandle,
-    session: tauri::State<'_, Session>,
+    window: tauri::Window,
+    sessions: tauri::State<'_, Sessions>,
     path: Option<PathBuf>,
 ) -> Result<Option<Snapshot>, String> {
+    let session = session_of(window.label(), &sessions)?;
     // 先问再选文件：已经决定要换文档了，别让用户选完才发现不让开。
     // 没有未保存改动时这一步直接放行，不打扰。
-    if !ask_discard(&app, "打开另一个文件") {
+    if !ask_discard(&app, &window, &sessions, "打开另一个文件") {
         return Ok(None);
     }
     let path = match path {
@@ -236,14 +389,137 @@ async fn open_file(
                 .map_err(|_| "选中的文件路径无效".to_string())?
         }
     };
-    log::info!("打开文件：{}", path.display());
+    log::info!("打开文件：{}（窗口={}）", path.display(), window.label());
     let snap = session.open_file(path.clone())?;
     // 自检反复打开样张，不该污染用户的最近列表。
     if !app.state::<RunMode>().self_test {
-        recent::remember(&app, &path);
-        refresh_native_menu(&app);
+        remember_recent(&app, &path);
     }
     Ok(Some(snap))
+}
+
+/// 新窗口标签序号。`main` 留给启动窗口，新开的一律 `doc-N`。
+static WINDOW_SEQ: AtomicUsize = AtomicUsize::new(1);
+
+fn next_window_label() -> String {
+    format!("doc-{}", WINDOW_SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
+/// 标题栏先按文件名给一个，页面 boot 后会经 bridge 改成「脏标记 + 文件名」。
+fn window_title(path: Option<&std::path::Path>) -> String {
+    path.and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .map(|name| format!("{name} — mdview"))
+        .unwrap_or_else(|| "未命名 — mdview".to_string())
+}
+
+/// 开一个新窗口，并给它配一份独立会话。
+///
+/// 会话必须先入注册表、再建窗口：页面 boot 会立刻 `invoke('snapshot')`，
+/// 反过来的话那个 IPC 会找不到窗口对应的文档。
+///
+/// 窗口形态要与 `tauri.*.conf.json` 里的主窗口一致（Windows/Linux 自绘标题栏、
+/// macOS 用 Overlay + 隐藏标题），否则新窗口会突然长出系统标题栏。
+/// 几何交给 window-state 插件按标签恢复；没有记录时用主窗口同款 960×760。
+fn create_window(
+    app: &tauri::AppHandle,
+    path: Option<PathBuf>,
+) -> Result<tauri::WebviewWindow, String> {
+    let label = next_window_label();
+    let session = Session::open(path.clone())?;
+    app.state::<Sessions>().insert(label.clone(), session);
+
+    let url = tauri::WebviewUrl::App("index.html".into());
+    let mut builder = tauri::WebviewWindowBuilder::new(app, label.clone(), url)
+        .title(window_title(path.as_deref()))
+        .inner_size(960.0, 760.0)
+        .min_inner_size(680.0, 360.0)
+        // 先隐藏、恢复完几何再露出来，和主窗口同一条路径
+        .visible(false);
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder = builder.decorations(false);
+    }
+
+    let window = match builder.build() {
+        Ok(window) => window,
+        Err(err) => {
+            // 窗口没建成，会话不能留在表里，否则 watcher 会一直盯着一份幽灵文档
+            app.state::<Sessions>().remove(&label);
+            return Err(format!("创建窗口失败：{err}"));
+        }
+    };
+    if let Err(err) = window.show() {
+        log::warn!("新窗口显示失败：{err}");
+    }
+    let _ = window.set_focus();
+
+    if let Some(path) = &path
+        && !app.state::<RunMode>().self_test
+    {
+        remember_recent(app, path);
+    }
+    log::info!("新建窗口：标签={label} 路径={:?}", path.as_deref());
+    Ok(window)
+}
+
+/// 菜单动作只发给当前窗口。
+///
+/// 原生菜单是应用级的，如果 `app.emit` 广播，所有窗口都会执行同一条命令
+/// （比如「撤销」在每个窗口各撤一次）。优先焦点窗口，退而求其次取任意一个。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn emit_menu_action(app: &tauri::AppHandle, action: &str) {
+    let windows = app.webview_windows();
+    let target = windows
+        .values()
+        .find(|window| window.is_focused().unwrap_or(false))
+        .or_else(|| windows.values().next());
+    if let Some(window) = target {
+        let _ = window.emit("menu-action", action);
+    }
+}
+
+/// 记一条最近打开，并让所有窗口与原生菜单同步。
+///
+/// 最近列表是应用级数据，多窗口下 A 窗口打开文件后 B 窗口的菜单也应立刻更新，
+/// 所以额外广播一次 `recent-changed`，前端收到后重新 `recent_files`。
+fn remember_recent(app: &tauri::AppHandle, path: &std::path::Path) {
+    recent::remember(app, path);
+    refresh_native_menu(app);
+    let _ = app.emit("recent-changed", ());
+}
+
+/// 聚焦任意一个还活着的窗口。返回 false 表示一个窗口都没有。
+fn focus_any_window(app: &tauri::AppHandle) -> bool {
+    match app.webview_windows().values().next() {
+        Some(window) => {
+            let _ = window.set_focus();
+            true
+        }
+        None => false,
+    }
+}
+
+/// 文件 → 新建窗口。前端只发一条无参消息。
+///
+/// 必须是 async：同步命令在主线程执行，而 `WebviewWindowBuilder::build` 要等
+/// 主线程的消息循环把 webview 建出来——在命令处理器里直接建窗会死锁。
+/// 这里退回 async 线程池，再用 `run_on_main_thread` 把建窗动作排进主循环。
+#[tauri::command]
+async fn new_window(app: tauri::AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        if let Err(err) = create_window(&handle, None) {
+            log::error!("新建窗口失败：{err}");
+        }
+    })
+    .map_err(|err| format!("新建窗口失败：{err}"))
 }
 
 /// 保存对话框：只在「内核说没有路径」或用户主动另存为时调用。
@@ -328,6 +604,7 @@ fn menu_action(id: &str) -> Option<&'static str> {
         "save" => "save",
         "save-as" => "save-as",
         "new-file" => "new-file",
+        "new-window" => "new-window",
         "undo" => "undo",
         "redo" => "redo",
         "cut" => "cut",
@@ -408,6 +685,7 @@ fn build_native_menu(
 
     let file_menu = SubmenuBuilder::new(app, "文件")
         .item(&item("new-file", "新建")?)
+        .item(&item("new-window", "新建窗口")?)
         .item(&item("open-file", "打开文件…")?)
         .item(&recent_menu)
         .item(&item("save", "保存")?)
@@ -537,31 +815,43 @@ fn main() {
         process::exit(1);
     });
 
-    // 外部修改监听：起一个后台线程 poll Watcher。命中的事件还要经 Session
-    // 用指纹二次确认（挡掉自己保存产生的事件），再 emit 给前端提示。
+    // 外部修改监听：起一个后台线程轮询所有窗口的 Watcher。命中的事件还要经
+    // Session 用指纹二次确认（挡掉自己保存产生的事件），再 emit 给对应窗口。
     // 自检模式不开监听——自检样张是临时文件，且不应受外部事件干扰。
-    // 线程每轮读 Session 的当前路径：打开文件后路径变了，就重建 Watcher，
+    // 线程每轮读每个会话的当前路径：打开文件后路径变了就重建 Watcher，
     // 否则会继续盯着旧文件。NotifyWatcher 的回调绑定构造时的路径，必须重建。
-    let watch_session = session.clone();
 
     let mut builder = tauri::Builder::default();
 
     // 单例插件必须第一个注册：它要在其它插件之前抢占实例锁。
     // 回调运行在「已经活着」的那个实例里，第二个实例已被引擎拦截并退出。
     builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-        // 有文件参数就交给已运行实例打开，否则新实例带着文档启动会「没反应」。
+        // 有文件参数就新开一个窗口打开它——这是多窗口的核心：第二个实例不是
+        // 把文件塞进现有窗口（那会顶掉用户正在编辑的文档），而是各窗口各一份会话。
         // 跳过 --self-test 这类开关，只认 Markdown 扩展名的路径。
         let paths: Vec<PathBuf> = args
             .iter()
             .filter(|arg| !arg.starts_with('-'))
             .map(PathBuf::from)
             .collect();
-        if let Some(path) = first_markdown(&paths) {
-            log::info!("单例收到打开请求：{}", path.display());
-            let _ = app.emit("single-instance-open", path.to_string_lossy().to_string());
-        }
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.set_focus();
+        let target = first_markdown(&paths).cloned();
+        let handle = app.clone();
+        // 窗口创建必须在主线程；回调线程由插件决定，统一投递。
+        if let Err(err) = app.run_on_main_thread(move || {
+            if let Some(path) = target {
+                log::info!("单例收到打开请求：{}", path.display());
+                if let Err(err) = create_window(&handle, Some(path)) {
+                    log::error!("{err}");
+                    focus_any_window(&handle);
+                }
+            } else if !focus_any_window(&handle) {
+                // 所有窗口都关了（macOS 常见）：新开一个，不然没有任何界面
+                if let Err(err) = create_window(&handle, None) {
+                    log::error!("{err}");
+                }
+            }
+        }) {
+            log::error!("投递单例打开请求失败：{err}");
         }
     }));
 
@@ -586,9 +876,10 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         // 更新：清单拉取与签名校验都在 Rust 侧，前端只调自定义命令。
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(session)
+        // 会话按窗口标签存；关窗守卫同理。启动窗口的会话在 setup 里登记。
+        .manage(Sessions::default())
+        .manage(CloseGuards::default())
         .manage(RunMode { self_test })
-        .manage(CloseGuard::default())
         .manage(update::UpdateState::new())
         // 关窗守卫：有未保存改动就拦住，让前端问一句再放行。
         // 标题栏的 ×、Alt+F4、菜单里的「关闭窗口」最后都走这里，一处拦全部。
@@ -598,17 +889,28 @@ fn main() {
                 // swap 而不是 load：放行标志是**一次性**的。万一这次关闭后来没成
                 // （比如被别的插件拦下），下一次关窗还得重新问，不能永久放开。
                 if app
-                    .state::<CloseGuard>()
-                    .allowed
+                    .state::<CloseGuards>()
+                    .of(window.label())
                     .swap(false, Ordering::SeqCst)
                 {
                     return;
                 }
-                if !app.state::<Session>().is_dirty() {
+                // 会话缺失说明窗口正在销毁，直接放行，别拦成关不掉的窗口
+                let dirty = app
+                    .state::<Sessions>()
+                    .get(window.label())
+                    .is_some_and(|session| session.is_dirty());
+                if !dirty {
                     return;
                 }
                 api.prevent_close();
                 let _ = window.emit("close-requested", ());
+            }
+            // 窗口真的销毁了：把会话与守卫从注册表摘掉，watcher 下一轮也会撤监听。
+            WindowEvent::Destroyed => {
+                let app = window.app_handle();
+                app.state::<Sessions>().remove(window.label());
+                app.state::<CloseGuards>().remove(window.label());
             }
             // 拖放打开：只在真正的 Drop 上发一次事件，落点/悬停只用来做视觉反馈。
             // 打开动作仍走前端 → `open_file` 命令，未保存改动的确认与菜单打开同一条路径。
@@ -645,6 +947,7 @@ fn main() {
             selftest,
             open_file,
             new_file,
+            new_window,
             confirm_discard,
             force_close,
             pick_save_path,
@@ -655,6 +958,9 @@ fn main() {
             update::install_update
         ])
         .setup(move |app| {
+            // 启动窗口由 conf 创建，先给它登记会话，页面 boot 才查得到。
+            app.state::<Sessions>().insert("main", session);
+
             // 窗口按 conf 以隐藏状态创建，插件在创建时就恢复了尺寸/位置/最大化，
             // 这里才让它露面——顺序反了就会看到窗口先小后大地跳一下。
             // 注意：这一步早于页面加载，所以可能有极短的白底；若将来要消掉，
@@ -679,9 +985,9 @@ fn main() {
                     let id = event.id().as_ref();
                     // 最近打开是运行时生成的 id，静态动作表里没有，直接透传
                     if is_recent_menu_id(id) {
-                        let _ = app.emit("menu-action", id);
+                        emit_menu_action(app, id);
                     } else if let Some(action) = menu_action(id) {
-                        let _ = app.emit("menu-action", action);
+                        emit_menu_action(app, action);
                     }
                 });
             }
@@ -690,47 +996,85 @@ fn main() {
                 return Ok(());
             }
             let handle = app.handle().clone();
-            let session = watch_session.clone();
-            std::thread::spawn(move || {
-                // current 是 watcher 当前绑定的路径；None 表示没有有效监听。
-                let mut current: Option<(PathBuf, mdview_app::NotifyWatcher)> = None;
-                loop {
-                    let target = session.watch_path();
-                    if current.as_ref().map(|(p, _)| p) != target.as_ref() {
-                        // 路径变了（打开文件 / 未命名 / 初次启动）：重建或撤掉监听。
-                        current =
-                            target
-                                .as_ref()
-                                .and_then(|p| match mdview_app::NotifyWatcher::new(p) {
-                                    Ok(w) => {
-                                        log::info!("已启动外部修改监听：{}", p.display());
-                                        Some((p.clone(), w))
-                                    }
-                                    Err(err) => {
-                                        log::warn!("文件监听未启动（不影响编辑）：{err}");
-                                        None
-                                    }
-                                });
-                    }
-                    if let Some((path, watcher)) = current.as_mut()
-                        && !watcher.poll().is_empty()
-                        && session.externally_modified()
-                    {
-                        log::info!("检测到外部修改：{}", path.display());
-                        let _ = handle.emit("external-change", path.to_string_lossy());
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(400));
-                }
-            });
+            let sessions = app.state::<Sessions>().inner().clone();
+            std::thread::spawn(move || watch_loop(handle, sessions));
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("窗口启动失败");
+        .build(tauri::generate_context!())
+        .expect("窗口启动失败")
+        .run(|app, event| {
+            // macOS：所有窗口关掉后应用不退出，点 Dock 图标会收到 Reopen，
+            // 这时必须补一个窗口，否则「点开没反应」。
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } = event
+                && !has_visible_windows
+                && let Err(err) = create_window(app, None)
+            {
+                log::error!("重开窗口失败：{err}");
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sessions_are_scoped_by_window_label() {
+        let sessions = Sessions::default();
+        sessions.insert("main", Session::from_text("甲", None));
+        sessions.insert("doc-1", Session::from_text("乙", None));
+
+        assert_eq!(sessions.get("main").unwrap().snapshot().source, "甲");
+        assert_eq!(sessions.get("doc-1").unwrap().snapshot().source, "乙");
+        assert!(sessions.get("doc-2").is_none(), "没登记的窗口不应拿到会话");
+
+        // 关掉一个窗口不能影响另一个
+        sessions.remove("doc-1");
+        assert!(sessions.get("doc-1").is_none());
+        assert_eq!(sessions.get("main").unwrap().snapshot().source, "甲");
+    }
+
+    #[test]
+    fn close_guards_are_per_window() {
+        let guards = CloseGuards::default();
+        guards.of("main").store(true, Ordering::SeqCst);
+        assert!(guards.of("main").load(Ordering::SeqCst));
+        assert!(
+            !guards.of("doc-1").load(Ordering::SeqCst),
+            "一个窗口的放行标志不能顺带放行别的窗口"
+        );
+
+        guards.remove("main");
+        assert!(
+            !guards.of("main").load(Ordering::SeqCst),
+            "清除后重建的守卫必须是干净的一次性标志"
+        );
+    }
+
+    #[test]
+    fn window_labels_are_unique_and_never_main() {
+        let first = next_window_label();
+        let second = next_window_label();
+        assert_ne!(first, second);
+        assert!(first.starts_with("doc-"));
+        assert!(second.starts_with("doc-"));
+        assert_ne!(first, "main", "main 永远留给启动窗口");
+    }
+
+    #[test]
+    fn window_title_prefers_the_file_name() {
+        assert_eq!(
+            window_title(Some(std::path::Path::new("/a/b/稿.md"))),
+            "稿.md — mdview"
+        );
+        assert_eq!(window_title(None), "未命名 — mdview");
+    }
 
     #[test]
     fn recent_menu_entries_use_basenames_and_stable_ids() {

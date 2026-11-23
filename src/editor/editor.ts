@@ -1151,6 +1151,10 @@ function runAction(action: string) {
     return;
   }
   switch (action) {
+    case 'new-window':
+      // 宿主负责开窗、建独立会话；本窗口不换文档，也不抢新窗口的焦点
+      invoke('new_window').catch((err) => toast('新建窗口失败：' + err));
+      return;
     case 'new-file':
       // 内核在有未保存改动时会先问一句；取消返回 null，这里什么都不做。
       queue = queue.then(async () => {
@@ -1416,12 +1420,8 @@ async function boot() {
       if (window.__mdviewBridge) window.__mdviewBridge.dispatch(action);
       else runAction(action);
     }).catch(() => {});
-    // 二次启动的实例被单例插件拦下后，把命令行里的文档路径转到这里。
-    // 复用 open_file 的注入路径分支，不弹对话框；走 queue 避免覆盖在途编辑。
-    listen<unknown>('single-instance-open', (event) => {
-      const path = typeof event.payload === 'string' ? event.payload : null;
-      if (path) openPath(path);
-    }).catch(() => {});
+    // 别的窗口打开/另存/清空过文件：本窗口的「最近打开」也要跟着刷新
+    listen('recent-changed', () => refreshRecent()).catch(() => {});
     // 拖放打开：宿主只负责判定「落进来的是不是 Markdown」，打开仍走 open_file，
     // 这样未保存改动的确认、最近列表的更新都与菜单打开完全一致。
     listen<unknown>('drop-open', (event) => {
@@ -1544,7 +1544,11 @@ window.addEventListener('keydown', (event) => {
         else { flushSource(); send({ kind: 'save' }); }
         return;
       }
-      if (key === 'n') { event.preventDefault(); runAction('new-file'); return; }
+      if (key === 'n') {
+        event.preventDefault();
+        runAction(event.shiftKey ? 'new-window' : 'new-file');
+        return;
+      }
       if (key === 'o') { event.preventDefault(); runAction('open-file'); return; }
     }
     return;
@@ -1559,7 +1563,11 @@ window.addEventListener('keydown', (event) => {
         else { flushSource(); send({ kind: 'save' }); }
         return;
       }
-      if (key === 'n') { event.preventDefault(); runAction('new-file'); return; }
+      if (key === 'n') {
+        event.preventDefault();
+        runAction(event.shiftKey ? 'new-window' : 'new-file');
+        return;
+      }
       if (key === 'o') { event.preventDefault(); runAction('open-file'); return; }
     }
     // Escape 留给菜单；方向/翻页/滚动放行，其余编辑键吞掉
@@ -1583,7 +1591,11 @@ window.addEventListener('keydown', (event) => {
       send({ kind: 'setCaret', stop: key === 'home' ? 0 : maxStop, extend: event.shiftKey });
       return;
     }
-    if (key === 'n') { event.preventDefault(); runAction('new-file'); return; }
+    if (key === 'n') {
+      event.preventDefault();
+      runAction(event.shiftKey ? 'new-window' : 'new-file');
+      return;
+    }
     if (key === 'o') { event.preventDefault(); runAction('open-file'); return; }
     // Ctrl+S 在未命名文档上会由内核回 needs_path，前端再弹保存对话框；
     // Ctrl+Shift+S 是明确的「另存为」，总是弹框。

@@ -324,6 +324,7 @@ byte   0  2  5  8  10
 - ✅ **检查更新**（2026-11-21）：`tauri-plugin-updater` 负责清单拉取与签名校验，桌面端只暴露四个自定义命令（`check_update` / `download_update` / `cancel_update_download` / `install_update`）。`src/update.ts` 管弹窗状态机（检查 / 可下载 / 下载中 / 就绪 / 失败），`UpdateDialog.vue` 只管展示与按钮；帮助菜单加「检查更新…」与「启动时检查更新」（默认关闭，开关存 localStorage，与 image-view 一样不主动联网）。启动检查静默失败，发现新版本只 toast 一句；下载中关窗等同取消。签名公钥写在 `tauri.conf.json`，私钥在 `.tauri/mdview.key`（已 gitignore，发布机用 `TAURI_SIGNING_PRIVATE_KEY` 注入）
 - ✅ **关于弹窗**（2026-11-21）：原先「帮助 → 关于」只弹一句 toast，现改成与检查更新同款的模态弹窗。`src/dialog.css` 抽出两份弹窗共用的骨架（遮罩 / 卡片 / 标题 / 正文 / 按钮排），`src/dialog-modal.ts` 收拢锁滚动、吞 Esc、聚焦关闭按钮这三件事，两处不再各写一套；`src/about.ts` 只存 `open` 与版本号（`getVersion`，浏览器里回落到 `package.json`），`AboutDialog.vue` 展示图标、版本、一句话简介与内核/外壳/许可/项目四行元信息。关闭同样只认底部按钮；菜单动作名 `about` 由 `bridge.dispatch` 直接接管，内核里那句 toast 已删
 - ✅ **GitHub 发布流水线**（2026-11-21）：新增 `.github/workflows/release.yml`，与 image-view 同构。推 `v*` 标签触发，分两个 job：`validate` 校验标签、`Cargo.toml` 的 workspace 版本、`package.json` 版本三者一致，并要求 `tauri.conf.json` 不写 `version`（版本只留一处来源），再从 `CHANGELOG.md` 抽对应版本段作为 Release 正文；`build` 矩阵覆盖 Windows x64 / arm64、macOS aarch64 / x86_64（`--bundles app,dmg`，少了 app 就没有 `*.app.tar.gz`，latest.json 会缺 darwin 条目）、Ubuntu 22.04，由 `tauri-action` 上传产物并生成 `latest.json`（`updaterJsonPreferNsis` 让 Windows 更新走 setup.exe）。新增 `CHANGELOG.md` 作为发布说明的唯一来源。另加 `.github/workflows/check.yml`：push 到 main 与 PR 时在 windows-latest 上跑 `cargo fmt --check`、`clippy --all-targets -- -D warnings`、`test --locked --workspace`（只搬 Rust 这一半，前端 type-check/build 未纳入）。接门禁前先做了一次 `style(rust)` 清理：全仓 rustfmt（17 文件）+ 6 处 `collapsible_if` 改 let-chain + `mdview-cli` 的 `type_complexity` 提别名 + 删掉 `mdview-markdown` 未使用的 `thiserror`。**已知缺口**：`src-tauri/icons` 目前只有 32×32 占位图（`icon.png` 也是 32px，没有 `.icns`），正式发版前需要用 1024×1024 源图跑一次 `pnpm tauri icon <源图>` 重新生成整套图标
+- ✅ **多窗口**（2026-11-23）：从「一个进程一篇文档」改成「一个进程多个窗口」。宿主新增 `Sessions` 注册表（窗口标签 → `Session`）与 `CloseGuards`（标签 → 一次性放行标志），所有 IPC 命令都取**调用窗口**的会话；watcher 改成单线程轮询所有窗口，事件只发给对应窗口；`force_close` 只放行自己。二次启动带文件时不再替换现有文档，而是新开窗口（每个窗口独立打开、独立脏标记、独立外部修改监听）；文件菜单与 macOS 原生菜单新增「新建窗口」，快捷键 `Ctrl+Shift+N`。`new_window` 命令必须是 async 并 `run_on_main_thread` 建窗——同步命令在主线程执行，而 `WebviewWindowBuilder::build` 要等主线程消息循环，直接在命令里建窗会死锁
 - ✅ **红线保持**：`editor.ts` 的投影/光标/坐标内核与七个纯逻辑模块零逻辑改动；大纲与正文仍是覆盖层上的洞
 
 迁移分阶段（记录在案，方便回溯是哪一步引入的结构变化）：
@@ -342,8 +343,8 @@ byte   0  2  5  8  10
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-23（最近打开、字数统计、拖放打开、查找替换（含 VSCode 式开关与选区内查找）、Tab 缩进、链接/图片行内编辑；自检 89/89 实跑）
-- 测试：**Rust 260 项全过**（app 93 / markdown 124 / desktop bin 29 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **122 项**（unit 104：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6、`find` 23；dom 18：内核启动、CRLF 视图、环境能力、滚动条），由 `pnpm test` 一次跑完
+- 日期：2026-11-23（多窗口、最近打开、字数统计、拖放打开、查找替换（含 VSCode 式开关与选区内查找）、Tab 缩进、链接/图片行内编辑；自检 89/89 实跑，另用 CDP 实测三窗口各自独立）
+- 测试：**Rust 264 项全过**（app 93 / markdown 124 / desktop bin 33 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **122 项**（unit 104：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6、`find` 23；dom 18：内核启动、CRLF 视图、环境能力、滚动条），由 `pnpm test` 一次跑完
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
 - 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 89/89」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 9 项**、**字数 2 项**、**查找替换 8 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
@@ -520,6 +521,7 @@ pnpm test:watch                             # 改代码时盯着
 | **链接 / 图片改写事务**（标记对圈住整段、URL 转义、删除保留 label） | `crates/mdview-app/src/state.rs`（`edit_link`） |
 | **Tab 缩进 / 反缩进**（列表层级、顶层不动、字符偏移回填） | `crates/mdview-app/src/state.rs`（`indent` / `list_position`） |
 | **字数统计**（按块 `plain_text` 数非空白字符） | `crates/mdview-app/src/state.rs`（`word_count`）、`src/components/StatusBar.vue` |
+| **多窗口会话注册表**（label → `Session` / 关窗守卫，创建、销毁、单例转发、按窗口 watcher） | `src-tauri/src/main.rs`（`Sessions` / `CloseGuards` / `create_window` / `watch_loop`） |
 | **最近打开持久化**（`recent.json`、去重、上限 10）与 **macOS 原生菜单重建**（`build_native_menu` / `rebuild_native_menu` / `recent_menu_entries`） | `src-tauri/src/recent.rs` 与 `main.rs` 的 `recent_files` / `clear_recent_files` |
 | **拖放打开**（`WindowEvent::DragDrop` → `drop-open` / `drop-hover`） | `src-tauri/src/main.rs`（`first_markdown`）、`src/editor/editor.ts` |
 | **键位契约**（`Ctrl+A/C/X` → `selectAll`/`copy`/`cut`，见 `editor.ts` 的 keydown） | `src/editor/editor.ts`、`src-tauri/src/session.rs` |
