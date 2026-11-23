@@ -23,19 +23,14 @@
     </div>
     <div class="tb-right" data-tauri-drag-region>
       <button type="button" class="tb-ctl" id="tb-min" title="最小化" aria-label="最小化" @click="minimize">
-        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2 6h8" stroke="currentColor" stroke-width="1" /></svg>
+        <Minus :size="14" :stroke-width="1.7" aria-hidden="true" />
       </button>
       <button type="button" class="tb-ctl" id="tb-max" title="最大化 / 还原" aria-label="最大化" @click="toggleMaximize">
-        <svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true">
-          <rect class="tb-max-rect" x="2.5" y="2.5" width="7" height="7" :style="{ display: maximized ? 'none' : '' }" />
-          <g class="tb-restore-icon" :style="{ display: maximized ? '' : 'none' }">
-            <rect x="1.5" y="3.5" width="6" height="6" />
-            <path d="M4 3.5V2h6v6H8.5" />
-          </g>
-        </svg>
+        <Square v-if="!maximized" :size="14" :stroke-width="1.7" aria-hidden="true" />
+        <Copy v-else :size="14" :stroke-width="1.7" aria-hidden="true" />
       </button>
       <button type="button" class="tb-ctl tb-close" id="tb-close" title="关闭" aria-label="关闭" @click="closeWindow">
-        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1" /></svg>
+        <X :size="14" :stroke-width="1.7" aria-hidden="true" />
       </button>
     </div>
   </header>
@@ -44,6 +39,7 @@
 <script setup lang="ts">
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { Copy, Minus, Square, X } from 'lucide-vue-next';
 import { onMounted, ref } from 'vue';
 import { state } from '../bridge';
 import { MENU_LABELS, MENU_ORDER, menuState, showMenu, toggleMenu, type MenuKey } from '../menu';

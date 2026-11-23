@@ -318,7 +318,7 @@ byte   0  2  5  8  10
   - `StatusBar.vue` 用 `<Teleport to="#bar">` 接管状态栏内容，`editor.ts` 不再拼 `innerHTML`
   - `Toast.vue` 接管 `#toast`，显隐与计时统一由 `bridge.notify` 管
   - `TitleBar.vue` + `MenuPopup.vue` + `menu.ts` 接管标题、菜单、窗口按钮、拖拽区与最大化图标；滚动条抽到 `scrollbars.ts`；删除 `titlebar.js`
-- ✅ **图标库 Lucide**（2026-11-23）：`lucide-vue-next@1` 按名导入，包声明 `sideEffects: false`，Vite 生产构建只留用到的图标——实测 4 个 Vue 图标（ChevronRight / Check / TriangleAlert 等）原始体积只增约 2.2 KB、gzip 约 130 B，产物里搜不到未使用的图标名。菜单箭头/勾选、更新弹窗已替换；查找栏不在 Vue 树里，改用 `index.html` 里的一份 Lucide symbol sprite（8 个图标：chevron / 上下箭头 / 省略号 / 关闭 / 替换 / 全部替换 / 勾选），静态 DOM 用 `<use>` 复用，同样不引字体。刻意保留的非 Lucide 图形：标题栏三枚窗口按钮（12px 手绘 1px 细线，跟系统标题栏一致）、关于弹窗的 `M↓` 品牌记号、`Aa/ab/.*/AB` 这类文字开关、正文列表圆点/箭头（文档内容，不是 UI 图标）
+- ✅ **图标库 Lucide**（2026-11-23）：`lucide-vue-next@1` 按名导入，包声明 `sideEffects: false`，Vite 生产构建只留用到的图标——实测 4 个 Vue 图标（ChevronRight / Check / TriangleAlert 等）原始体积只增约 2.2 KB、gzip 约 130 B，产物里搜不到未使用的图标名。菜单箭头/勾选、更新弹窗、标题栏窗口按钮（Minus / Square / Copy / X）都已替换；窗口按钮取 14px + `stroke-width: 1.7`，渲染后仍是约 1px 细线，观感不变。查找栏不在 Vue 树里，改用 `index.html` 里的一份 Lucide symbol sprite（8 个图标：chevron / 上下箭头 / 省略号 / 关闭 / 替换 / 全部替换 / 勾选），静态 DOM 用 `<use>` 复用，同样不引字体。刻意保留的非 Lucide 图形：关于弹窗的 `M↓` 品牌记号、`Aa/ab/.*/AB` 这类文字开关、正文列表圆点/箭头（文档内容，不是 UI 图标）
 - ✅ **单入口**：`index.html` 只留 `<script type="module" src="/src/main.ts">`，九个旧脚本按序在 `main.ts` 里 `import`；首帧 UA 判定挪到 `platform.ts`，满足 CSP（不再需要内联脚本）
 - ✅ **编辑内核收敛**（P3.5）：`src/app.js` → `src/editor/editor.ts`，七个纯逻辑模块与用例一起挪进 `src/editor/`，`web_ime.rs` 的守门清单与 `cwd` 同步
 - ✅ **`editor.ts` 全量类型化**（P3.6）：新增 `src/editor/ipc.ts` 承载 `Wire`（23 种 `kind`，与 `session.rs` 逐条对应）/ `Reply` / `Snapshot` / `BlockDto` / `PatchDto` / `CaretDto`（保留 `char_offset` 等 Rust 字段名，不做 camelCase），摘掉 `@ts-nocheck`
