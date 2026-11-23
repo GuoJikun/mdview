@@ -399,6 +399,27 @@ async fn open_file(
     Ok(Some(snap))
 }
 
+/// 文件 → 重新加载：把磁盘上的最新内容读回来，丢掉内存里的改动。
+///
+/// 只对已落盘的文档有意义；未命名文档没有磁盘来源，直接报错让前端提示，
+/// 不要先弹「丢弃改动」再告诉用户没得载入。有未保存改动时和换文档一样先问一句。
+#[tauri::command]
+async fn reload_file(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    sessions: tauri::State<'_, Sessions>,
+) -> Result<Option<Snapshot>, String> {
+    let session = session_of(window.label(), &sessions)?;
+    if session.watch_path().is_none() {
+        return Err("当前文档尚未保存，没有可重新加载的磁盘内容".to_string());
+    }
+    if !ask_discard(&app, &window, &sessions, "重新加载") {
+        return Ok(None);
+    }
+    log::info!("重新加载（窗口={}）", window.label());
+    session.reload_file()
+}
+
 /// 新窗口标签序号。`main` 留给启动窗口，新开的一律 `doc-N`。
 static WINDOW_SEQ: AtomicUsize = AtomicUsize::new(1);
 
@@ -602,6 +623,7 @@ fn is_recent_menu_id(id: &str) -> bool {
 fn menu_action(id: &str) -> Option<&'static str> {
     Some(match id {
         "open-file" => "open-file",
+        "reload-file" => "reload-file",
         "save" => "save",
         "save-as" => "save-as",
         "new-file" => "new-file",
@@ -689,6 +711,9 @@ fn build_native_menu(
         .item(&item("new-window", "新建窗口")?)
         .item(&item("open-file", "打开文件…")?)
         .item(&recent_menu)
+        .separator()
+        .item(&item("reload-file", "重新加载")?)
+        .separator()
         .item(&item("save", "保存")?)
         .item(&item("save-as", "另存为…")?)
         .separator()
@@ -947,6 +972,7 @@ fn main() {
             ready,
             selftest,
             open_file,
+            reload_file,
             new_file,
             new_window,
             confirm_discard,

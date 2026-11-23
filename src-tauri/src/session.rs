@@ -284,6 +284,24 @@ impl Session {
         Ok(self.snapshot())
     }
 
+    /// 从磁盘重新读入当前文件，整体替换文档状态。
+    ///
+    /// 只对已经落盘的文档有意义：未命名文档没有磁盘来源，返回 `Ok(None)`，
+    /// 由调用方决定怎么提示。读盘失败时不改动现有状态——先 `load` 再替换，
+    /// 文件被删或没权限时用户的缓冲区还在。
+    ///
+    /// 撤销栈随旧 `AppState` 一起丢弃：重新加载之后的历史不该混进旧内容。
+    pub fn reload_file(&self) -> Result<Option<Snapshot>, String> {
+        let path = {
+            let app = self.state.lock().expect("状态锁中毒");
+            app.path.clone()
+        };
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        self.open_file(path).map(Some)
+    }
+
     /// 把图片 URL 解析为当前文档目录内的文件，并给出 MIME 类型。
     ///
     /// 沙箱在 `mdview_markdown::resolve_local` 里做；这里只负责提供基准目录。
@@ -471,6 +489,34 @@ mod tests {
         );
         assert_eq!(session.resolve_image("../secret.png"), None);
         assert_eq!(session.resolve_image("https://example.com/a.png"), None);
+    }
+
+    #[test]
+    fn reload_reads_the_file_back_from_disk() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("mdview-reload-{stamp}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doc.md");
+        std::fs::write(&path, "旧内容").unwrap();
+        let session = Session::open(Some(path.clone())).unwrap();
+
+        // 模拟别的进程改文件
+        std::fs::write(&path, "新内容").unwrap();
+        let snap = session.reload_file().unwrap().expect("有路径就该返回快照");
+        assert_eq!(session.text(), "新内容");
+        assert!(!session.is_dirty(), "重新加载后应当是干净状态");
+        assert_eq!(snap.source, "新内容");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reload_without_a_path_does_nothing() {
+        let session = session("未命名");
+        assert!(session.reload_file().unwrap().is_none());
+        assert_eq!(session.text(), "未命名");
     }
 
     #[test]

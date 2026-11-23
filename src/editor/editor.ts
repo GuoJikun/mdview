@@ -1187,6 +1187,16 @@ function runAction(action: string) {
         refreshRecent();
       }).catch((err) => toast('打开文件失败：' + err));
       break;
+    case 'reload-file':
+      // 同一条队列：在途 dispatch 的回包不能盖掉刚读回来的内容。
+      // 用户取消确认时返回 null（静默）；未命名文档由 Rust 直接报错。
+      queue = queue.then(async () => {
+        const snap = await invoke<Snapshot | null>('reload_file');
+        if (!snap) return;
+        adoptSnapshot(snap);
+        toast('已重新加载');
+      }).catch((err) => toast('重新加载失败：' + err));
+      break;
     case 'undo': send({ kind: 'undo' }); break;
     case 'redo': send({ kind: 'redo' }); break;
     // 查找栏自己管焦点，不能落到函数末尾的 focusActiveEditor()
@@ -1373,7 +1383,7 @@ function applySnapshot(snap: Snapshot) {
 /**
  * 换文档后的统一收尾：全量重绘、回到顶部、刷新滚动条、把焦点还给输入框。
  *
- * 「打开文件」「新建」「二次启动转入文件」三条路都要做同样四件事，
+ * 「打开文件」「重新加载」「新建」「二次启动转入文件」几条路都要做同样四件事，
  * 收在这里免得哪天加一条路又漏掉某一步（漏掉焦点，键盘就再也打不进字）。
  */
 function adoptSnapshot(snap: Snapshot) {
@@ -1542,6 +1552,14 @@ window.addEventListener('keydown', (event) => {
       event.preventDefault();
       closeLinkEditor();
     }
+    return;
+  }
+  // 重新加载：三个视图都能用，但输入框（查找栏 / 链接面板）里不抢键。
+  // 必须在这里拦下——WebView 把 Ctrl+R 当刷新页面，漏掉 preventDefault
+  // 会整个页面重载、内存状态全丢。
+  if (accel && accelKey === 'r') {
+    event.preventDefault();
+    runAction('reload-file');
     return;
   }
   // 源码视图：textarea 自己就是编辑器，有原生光标/选区/撤销栈。

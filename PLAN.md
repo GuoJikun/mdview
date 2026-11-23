@@ -310,6 +310,7 @@ byte   0  2  5  8  10
 - ✅ **粘贴 HTML 规范化 / 复制富文本**（2026-11-23）：`html-to-md.js` 把富文本转 Markdown——标题、段落、列表（含嵌套）、引用、代码块（保留语言与反引号围栏）、GFM 表格（对齐、竖线转义、无表头补空表头）、链接/图片（协议白名单，`javascript:` 与非图片 `data:` 丢弃）、粗斜体/删除线/行内代码、分隔线；脚本 / 样式 / 表单控件整段丢弃，字面量元字符转义。粘贴时只有出现结构标签才转换：VSCode / 终端复制的纯文本也带 `<div>` HTML，按 HTML 转会拆段、吃缩进，这类仍走 `text/plain`。复制时内核用 `MarkdownParser::gfm().parse(选区源码).to_html()` 附带 HTML，前端一次 `ClipboardItem` 写 `text/html` + `text/plain`，粘到 Word / 飞书保留格式；`ClipboardItem` 不可用时退回纯文本。接线顺带修掉「在查找 / 链接面板输入框里粘贴会被插进正文」。HTML 转换 dom 用例 20 项、剪贴板 4 项，Rust 复制 HTML 1 项
 - ✅ **数学公式**（2026-11-21）：`MarkdownParser::gfm()` 开启 `ENABLE_MATH`，`project.rs` 把 `InlineMath` / `DisplayMath` 落成 `SpanKind::Math { display }`，定界符按「恰好 want 个 `$`」内缩进 `hidden` 并登记为 `MarkerPair`（退格可整对抽掉，与行内代码同一套逻辑）。编辑态每个公式字符带 `.m`、保留全部 `data-b/data-a` 停靠点；阅读态 `to_html` 输出 `<code class="m">` / `<code class="m md">`，后者由 CSS 居中排版。`app.css` 与 CLI 验证页同步配色，明暗主题各有变量。Rust 单测 4 项 + 应用层配对删除 1 项全过
 - ✅ **脚注完整链路**（2026-11-21）：`project.rs` 收集全篇 `FootnoteReference` / `FootnoteDefinition` 事件，按引用首次出现顺序分配编号并回填到 `SpanKind::FootnoteReference { label, number }` 与 `BlockKind::FootnoteDefinition { label, number, references }`。阅读态 `to_html` 输出上标序号 + `<a href="#fnN">`、编号定义块与逐处回链 `↩`；编辑态定义独立成 `kind-footnote` 块，`id="fnN"` + `data-fn` 供跳转，标签前缀仍折叠（CSS `::before` 显示序号），回链放在块尾且不带 `data-b`、不占停靠点。引用字符带 `data-fnref/data-fnbyte` 与锚点 id，前端 Ctrl/Cmd+Click（阅读态单击）跳定义、回链跳回引用。定义正文照常逐字符可编辑，源码真值不变。Rust 单测 5 项 + 应用层编辑 1 项全过
+- ✅ **重新加载入口**（2026-11-23）：文件菜单「重新加载」+ `Ctrl+R`，把磁盘上的最新内容读回来。内核侧复用 `Session::open_file` 的构造路径（解析、指纹、光标归零一致），撤销栈随旧 `AppState` 一起丢弃；未命名文档直接报错（没有磁盘来源），脏文档先走 `ask_discard` 的「重新加载会丢失当前未保存的改动」。macOS 原生菜单同步加项，`menu_action` 表转发 `reload-file`；`Ctrl+R` 必须在 keydown 里 `preventDefault`，否则 WebView 会刷新整个页面
 - ⬜ 大文档虚拟化（5 万字以下不做；DOM 节点数与跨块选区天然冲突）
 
 ### M5 前端工程化（Vite + Vue 外壳）✅
@@ -409,7 +410,7 @@ byte   0  2  5  8  10
 4. ~~**Windows 原子写窗口期**~~ **已修（M1，2026-11-20）**：见 M1，`atomic_replace` 内核级单步替换。
 5. **无虚拟化**：全文档一次性建 DOM。5 万字以上会卡，但暂无此需求。
 6. ~~**图片只渲染占位符**~~ **已修（2026-11-20）**：`project.rs` 把 `![alt](url)` 折叠成原子 Span；`preview.rs` 输出带 `data-asset` 的原子节点，保留 `data-b/data-a` 停靠点。桌面端 `load_image` 命令用 `mdview_markdown::resolve_local` 把路径限制在 Markdown 所在目录内，读盘后编码成 data URL；远程/data URL 直接交给浏览器，失败则回退「图」占位符。样式限制 `max-width:100%; max-height:360px`。仍有的边界：单图上限 32 MiB，SVG 由 `<img>` 加载（脚本不执行），无按 DPI/缩放的精细排版。
-7. ~~**`Watcher` 无实现**~~ **已修（M1，2026-11-20）**：见 M1，`NotifyWatcher` + 后台轮询 + 指纹二次确认 + 前端 toast。当前提示要用户手动重新打开，自动重载（会冲掉未保存编辑）未做。
+7. ~~**`Watcher` 无实现**~~ **已修（M1，2026-11-20）**：见 M1，`NotifyWatcher` + 后台轮询 + 指纹二次确认 + 前端 toast。当前提示要用户手动重新打开，自动重载（会冲掉未保存编辑）未做——2026-11-23 补了「文件 → 重新加载」（`Ctrl+R`），把「手动重新打开」简化成一次菜单/快捷键，自动重载仍然不做。
 8. **列表嵌套未验证**：多级列表的 `Item` 边界换行只测了单层。
 9. ~~**退格会先吃掉标记字符**~~ **已修（M3）**：`Block.markers` 记录成对标记（`**…**`、`` `…` ``、`[…]() `），配对来自 pulldown 的容器事件而不是猜。退格/Delete 落在标记里时按「整对抽掉、保留中间原文」处理，一次事务完成。副作用是**语义选择**：在加粗词首退格 = 去掉加粗，而不是删掉前一个可见字。想反过来的话改 `marker_edit_at` 的调用点即可，但那样就没有「不删字去格式」的入口了。
    - 由此带出**重合停靠点**的坑，两端已经区别处理：
