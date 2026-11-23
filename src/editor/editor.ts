@@ -234,16 +234,21 @@ function hydrateImages() {
 
     const url = holder.dataset.asset || '';
     holder.dataset.imgState = 'loading';
+    const done = () => {
+      if (!holder.isConnected) return;
+      holder.dataset.imgState = 'loaded';
+      holder.classList.add('loaded');
+      // 图片加载完会撑开正文，所有标题的纵坐标随之下移。不重测锚点的话，
+      // 点大纲跳到图片之后的标题会落在图片上方，偏差正好是一张图的高度。
+      refreshOutlineAnchors();
+    };
     const fail = () => {
       if (!holder.isConnected) return;
       holder.dataset.imgState = 'failed';
       holder.classList.add('failed');
       img.remove();
-    };
-    const done = () => {
-      if (!holder.isConnected) return;
-      holder.dataset.imgState = 'loaded';
-      holder.classList.add('loaded');
+      // 占位高度同样会变，锚点也要重测
+      refreshOutlineAnchors();
     };
     img.addEventListener('load', done);
     img.addEventListener('error', fail);
@@ -333,9 +338,15 @@ function updateActiveOutline() {
 
 /** 点击大纲项：按锚点实际位置把该标题滚到阅读基准线处。 */
 function jumpToOutline(idx: number) {
-  const anchor = outlineAnchors[idx];
-  if (!anchor || !isFinite(anchor.top)) return;
-  const target = outlineScrollToAnchor(anchor.top, OUTLINE_LINE);
+  // 现场量一次而不是用缓存：图片可能刚加载完、字体可能刚替换，
+  // 缓存里的 top 是上一次布局的旧值，按它滚会差出图片/字体的高度。
+  const item = outline[idx];
+  const el = item ? docEl.children[item.block] : null;
+  const top = el
+    ? el.getBoundingClientRect().top + (window.scrollY || window.pageYOffset || 0)
+    : outlineAnchors[idx]?.top;
+  if (top === undefined || !isFinite(top)) return;
+  const target = outlineScrollToAnchor(top, OUTLINE_LINE);
   window.scrollTo({ top: target, behavior: 'smooth' });
 }
 
