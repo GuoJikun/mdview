@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主窗口：自定义命令 + 自绘标题栏需要的窗口控制",
-  "windows": ["main"],
+  "description": "所有文档窗口：自定义命令 + 自绘标题栏需要的窗口控制。main 是启动窗口，doc-* 是多窗口新建的标签",
+  "windows": ["main", "doc-*"],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",

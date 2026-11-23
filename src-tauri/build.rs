@@ -8,6 +8,16 @@ fn main() {
     //
     // build script 的 CWD 是 src-tauri/，Vite 产物在其上一级的 dist/。
     println!("cargo:rerun-if-changed=../dist");
+    // 权限能力与平台窗口配置都是编译期嵌入的：不显式跟踪的话，改了
+    // capabilities/*.json 二进制不会重编，新窗口拿到的还是旧 ACL
+    // （表现为 doc-1 之类动态窗口「没有权限」）。
+    for entry in std::fs::read_dir("capabilities").into_iter().flatten().flatten() {
+        println!("cargo:rerun-if-changed={}", entry.path().display());
+    }
+    println!("cargo:rerun-if-changed=tauri.conf.json");
+    println!("cargo:rerun-if-changed=tauri.windows.conf.json");
+    println!("cargo:rerun-if-changed=tauri.linux.conf.json");
+    println!("cargo:rerun-if-changed=tauri.macos.conf.json");
     println!(
         "cargo:rustc-env=MDVIEW_WEB_STAMP={:016x}",
         stamp(Path::new("../dist"))
