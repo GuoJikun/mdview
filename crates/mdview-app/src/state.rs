@@ -232,6 +232,24 @@ impl AppState {
         &self.frames
     }
 
+    /// 正文字数：按块的可见文本统计，不含 Markdown 标记与空白。
+    ///
+    /// 不数源码里的 `#`、`**`、表格竖线——用户看到的是投影，字数就该是
+    /// 投影的规模。图片计 alt 文本，分隔线/任务框计零（`plain_text` 已处理）。
+    pub fn word_count(&self) -> usize {
+        self.parsed
+            .blocks
+            .iter()
+            .map(|block| {
+                block
+                    .plain_text()
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .count()
+            })
+            .sum()
+    }
+
     pub fn render_frame(&self) -> RenderFrame {
         RenderFrame {
             revision: self.document.revision().0,
@@ -2458,6 +2476,21 @@ mod tests {
         type_text(&mut app, &files, "首");
         assert_eq!(app.document.text(), "首");
         assert_eq!(caret_byte(&app), 3);
+    }
+
+    #[test]
+    fn word_count_ignores_markup_and_whitespace() {
+        let mut files = InMemoryFileStore::default();
+        let app = open(&mut files, "# 标题\n\n**粗体** 与 `代码`\n\n- 甲\n- 乙");
+        // 标题 2 + 粗体 2 + 与 1 + 代码 2 + 列表 2 = 9
+        assert_eq!(app.word_count(), 9);
+    }
+
+    #[test]
+    fn word_count_counts_image_alt_but_not_rules() {
+        let mut files = InMemoryFileStore::default();
+        let app = open(&mut files, "![示意图](a.png)\n\n---");
+        assert_eq!(app.word_count(), 3, "只数 alt 文本，分隔线不计");
     }
 
     #[test]

@@ -48,6 +48,8 @@ interface Meta {
   dirty: boolean;
   path: string | null;
   stops: number;
+  /** 正文字数，由内核随快照 / 回包下发。 */
+  words: number;
 }
 
 let byBefore: Map<number, HTMLElement> = new Map(); // 停靠点 → 从它开始的元素
@@ -56,7 +58,7 @@ let marks: HTMLElement[] = [];                      // 全部带 data-b 的元�
 let maxStop = -1;                                   // 最大停靠点序号，供上下移动取上界
 let caret: CaretDto | null = null;                  // 最近一次内核回报的光标
 let pendingStop: number | null = null;              // 已发出、尚未回包的垂直移动落点
-let meta: Meta = { revision: 0, dirty: false, path: null, stops: 0 };
+let meta: Meta = { revision: 0, dirty: false, path: null, stops: 0, words: 0 };
 // 当前视图模式。它不只画菜单圆点，还真正驱动 <html data-view> 切 DOM：
 // wysiwyg 显示富文本投影；reading 只读；source 显示并编辑 Markdown 源文本。
 // 与内核默认值一致；macOS 原生菜单切模式也走 runAction，会同步更新。
@@ -456,6 +458,7 @@ function pushShellState() {
     path: meta.path,
     dirty: !!meta.dirty,
     blocks: docEl.children.length,
+    words: meta.words,
     stop: caret ? caret.stop : null,
     column: caret && caret.visual !== null ? caret.visual : null,
     revision: meta.revision,
@@ -696,6 +699,7 @@ function applyReply(reply: Reply) {
   paintSelection(reply.selection ?? null);
   meta.revision = reply.revision;
   meta.dirty = reply.dirty;
+  if (typeof reply.words === 'number') meta.words = reply.words;
   // 另存为成功后内核会把文档改绑到新路径，标题栏要跟着换名字
   if (reply.path) meta.path = reply.path;
   // 内核回传的源文本真值。源码视图里 textarea 是用户正在敲的那一侧，
@@ -742,7 +746,13 @@ function writeClipboard(text: string) {
 
 /** 用一份内核快照全量重绘。boot 与「打开文件」共用，避免两处渲染逻辑漂移。 */
 function applySnapshot(snap: Snapshot) {
-  meta = { revision: snap.revision, dirty: snap.dirty, path: snap.path, stops: snap.stops };
+  meta = {
+    revision: snap.revision,
+    dirty: snap.dirty,
+    path: snap.path,
+    stops: snap.stops,
+    words: typeof snap.words === 'number' ? snap.words : 0,
+  };
   // 换文档/新建/启动：源文本真值整份替换，textarea 无条件跟上
   sourceText = snap.source ?? '';
   sourceEl.value = sourceText;
@@ -1821,6 +1831,10 @@ window.__mdviewSelfTest = async function () {
       // 先敲一个字让它变脏，再看保存是否如实要求路径（而不是回「已保存」）
       send({ kind: 'insertText', text: '草' });
       await queue;
+      const counted = await invoke<Snapshot>('snapshot');
+      check('字数统计跟随输入', counted.words === 1, String(counted.words));
+      check('状态栏显示字数', (barEl.textContent || '').includes('字数'),
+        (barEl.textContent || '').slice(0, 24));
       const reply = await invoke<Reply>('dispatch', { message: { kind: 'save' } });
       check('未命名保存要求路径',
         reply.needs_path === true && reply.saved === false && reply.dirty === true,

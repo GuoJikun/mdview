@@ -143,6 +143,8 @@ pub struct Snapshot {
     pub path: Option<String>,
     pub dirty: bool,
     pub stops: usize,
+    /// 正文字数（可见文本，不含 Markdown 标记与空白）。状态栏直接显示。
+    pub words: usize,
     pub blocks: Vec<BlockDto>,
     pub caret: Option<CaretDto>,
     /// 选区停靠点区间（已归一），`null` 表示没有选区
@@ -157,6 +159,8 @@ pub struct Snapshot {
 pub struct Reply {
     pub revision: u64,
     pub dirty: bool,
+    /// 正文字数，随每次编辑回包，状态栏不必等下一次快照。
+    pub words: usize,
     /// 增量重绘：替换块节点 [start, end)
     pub patch: Option<PatchDto>,
     /// 全量重绘：整个块列表
@@ -276,6 +280,7 @@ impl Session {
             path: app.path.as_ref().map(|p| p.display().to_string()),
             dirty: app.dirty,
             stops: app.layout.stops(),
+            words: app.word_count(),
             blocks: blocks_of(app.frames()),
             caret: caret_of(&app),
             selection: selection_of(&app),
@@ -290,6 +295,7 @@ impl Session {
         let mut reply = Reply {
             revision: app.document.revision().0,
             dirty: app.dirty,
+            words: app.word_count(),
             caret: caret_of(&app),
             selection: selection_of(&app),
             outline: Some(outline_of(&app)),
@@ -606,6 +612,17 @@ mod tests {
         // 块首停靠点序号必须连续，前端据此拼接
         assert_eq!(snap.blocks[1].base, snap.blocks[0].end + 1);
         assert_eq!(snap.caret.unwrap().stop, 0);
+    }
+
+    #[test]
+    fn snapshot_reports_word_count_and_reply_updates_it() {
+        let session = session("# 标题\n\n正文");
+        assert_eq!(session.snapshot().words, 4, "标记与空白不计");
+        session.dispatch(Wire::SelectAll);
+        let reply = session.dispatch(Wire::InsertText {
+            text: "甲乙".into(),
+        });
+        assert_eq!(reply.words, 2, "回包要带最新字数");
     }
 
     #[test]

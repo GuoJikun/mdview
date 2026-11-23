@@ -26,6 +26,8 @@ export interface BridgeState {
   dirty: boolean;
   /** 正文块数。 */
   blocks: number;
+  /** 正文字数（可见文本，不含 Markdown 标记与空白）。 */
+  words: number;
   /** 光标停靠点序号；无光标为 null。 */
   stop: number | null;
   /** 视觉列；无光标为 null。 */
@@ -73,6 +75,7 @@ const store = reactive<BridgeState>({
   title: document.title || 'mdview',
   dirty: false,
   blocks: 0,
+  words: 0,
   stop: null,
   column: null,
   revision: 0,

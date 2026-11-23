@@ -84,6 +84,8 @@ export interface OutlineDto {
 export interface Reply {
   revision: number;
   dirty: boolean;
+  /** 正文字数（可见文本，不含 Markdown 标记与空白）。 */
+  words: number;
   patch?: PatchDto | null;
   full?: BlockDto[] | null;
   caret?: CaretDto | null;
@@ -110,6 +112,8 @@ export interface Snapshot {
   path: string | null;
   dirty: boolean;
   stops: number;
+  /** 正文字数（可见文本，不含 Markdown 标记与空白）。 */
+  words: number;
   blocks: BlockDto[];
   caret: CaretDto | null;
   selection: [number, number] | null;

@@ -4,6 +4,7 @@
        点击委托仍在 editor.ts 的 #bar 监听器上，动作逻辑零重写。 -->
   <Teleport to="#bar">
     <span>块 <b>{{ blockText }}</b></span>
+    <span>字数 <b>{{ state.words ?? 0 }}</b></span>
     <span>停靠点 <b>{{ dash(state.stop) }}</b></span>
     <span>列 <b>{{ dash(state.column) }}</b></span>
     <span>r<b>{{ state.revision }}</b></span>
