@@ -24,7 +24,7 @@
         >
           <span class="gutter"></span>
           <span class="label">{{ entry.sub.label }}</span>
-          <span class="chev">›</span>
+          <span class="chev" aria-hidden="true"></span>
         </button>
         <div v-if="openSubIndex === i" class="tb-submenu" role="menu">
           <template v-for="(item, j) in entry.sub.items" :key="j">

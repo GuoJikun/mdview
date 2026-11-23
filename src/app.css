@@ -232,7 +232,15 @@ html.custom-titlebar #tb-menu-popup {
 #tb-menu-popup button.danger .label { color: var(--danger); }
 #tb-menu-popup button.danger:hover .label,
 #tb-menu-popup button.danger.focused .label { color: #fff; }
-#tb-menu-popup .chev { margin-left: auto; color: var(--text3); font-size: 14px; }
+#tb-menu-popup .chev {
+  margin-left: auto; align-self: center;
+  /* 实心三角：6×12px。原先的 › 字形在 14px 字号下只有 3×5px，太细太小 */
+  width: 0; height: 0;
+  border-left: 6px solid currentColor;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  color: var(--text3);
+}
 #tb-menu-popup button:hover .chev,
 #tb-menu-popup button.focused .chev { color: #fff; }
 /* 菜单分隔线用独立的 tb-sep：正文表格间隙那个 .sep 虽已收进 #doc 作用域，
