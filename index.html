@@ -27,21 +27,35 @@
 <!-- preedit 镜像层：组合期间唯一可见的输入反馈，位置贴着 caret -->
 <div id="preedit"></div>
 <!-- 查找替换浮层：Ctrl+F / Ctrl+H 打开，Esc 关闭。
-     只在编辑区内浮动，不占正文布局；事件接线见 editor.ts 的「查找替换」段。 -->
+     布局对齐 VSCode：左侧箭头展开替换行，Aa / ab / .* 三个开关在输入框内，
+     右侧是命中计数、上/下一个、更多与关闭。事件接线见 editor.ts 的「查找替换」段。 -->
 <div id="findbar" hidden>
   <div class="find-row">
-    <input id="find-input" type="text" placeholder="查找" autocomplete="off" spellcheck="false" aria-label="查找">
-    <span id="find-count" class="find-count">0/0</span>
+    <button type="button" class="find-expand" data-find="toggle-replace" title="切换替换（Ctrl+H）" aria-label="切换替换"><span class="chev">›</span></button>
+    <div class="find-field">
+      <input id="find-input" type="text" placeholder="查找" autocomplete="off" spellcheck="false" aria-label="查找">
+      <button type="button" class="find-inline" data-find="case" title="区分大小写（Alt+C）" aria-label="区分大小写">Aa</button>
+      <button type="button" class="find-inline" data-find="word" title="全词匹配（Alt+W）" aria-label="全词匹配">ab</button>
+      <button type="button" class="find-inline" data-find="regex" title="使用正则表达式（Alt+R）" aria-label="使用正则表达式">.*</button>
+    </div>
+    <span id="find-count" class="find-count"></span>
     <button type="button" data-find="prev" title="上一个（Shift+Enter）" aria-label="上一个">↑</button>
     <button type="button" data-find="next" title="下一个（Enter）" aria-label="下一个">↓</button>
-    <button type="button" data-find="case" title="区分大小写" aria-label="区分大小写">Aa</button>
-    <button type="button" data-find="toggle-replace" title="替换（Ctrl+H）" aria-label="替换">替换</button>
+    <button type="button" data-find="more" title="更多选项" aria-label="更多选项" aria-haspopup="true">≡</button>
     <button type="button" data-find="close" title="关闭（Esc）" aria-label="关闭">×</button>
+    <div id="find-menu" class="find-menu" hidden>
+      <button type="button" data-find="in-selection" aria-pressed="false">
+        <span class="tick"></span>仅在选区内查找
+      </button>
+    </div>
   </div>
   <div id="find-replace-row" class="find-row" hidden>
-    <input id="replace-input" type="text" placeholder="替换为" autocomplete="off" spellcheck="false" aria-label="替换为">
-    <button type="button" data-find="replace">替换</button>
-    <button type="button" data-find="replace-all">全部替换</button>
+    <div class="find-field">
+      <input id="replace-input" type="text" placeholder="替换" autocomplete="off" spellcheck="false" aria-label="替换">
+      <button type="button" class="find-inline" data-find="preserve" title="保留大小写" aria-label="保留大小写">AB</button>
+    </div>
+    <button type="button" data-find="replace" title="替换（Ctrl+Alt+Enter 全部替换）" aria-label="替换">⇄</button>
+    <button type="button" data-find="replace-all" title="全部替换（Ctrl+Alt+Enter）" aria-label="全部替换">▣</button>
   </div>
 </div>
 <!-- 链接 / 图片行内编辑：点正文里的链接或图片弹出，Esc / 点空白关闭。 -->

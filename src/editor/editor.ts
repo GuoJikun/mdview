@@ -11,7 +11,13 @@ import type { ThemeMode } from '../bridge';
 import { createLineMotion, scrollDelta } from './caretline.js';
 import { copyText } from './clipboard.js';
 import { clampToBox, createDragAutoScroll, edgeSpeed } from './dragscroll.js';
-import { findAll, replaceAllText, utf8Offsets } from './find.js';
+import {
+  buildMatcher,
+  findMatches as scanMatches,
+  replaceMatches,
+  replacementFor,
+  utf8Offsets,
+} from './find.js';
 import { createIme } from './ime.js';
 import type {
   BlockDto,
@@ -47,6 +53,7 @@ const findInput = document.getElementById('find-input') as HTMLInputElement;
 const findCount = document.getElementById('find-count') as HTMLElement;
 const replaceRow = document.getElementById('find-replace-row') as HTMLElement;
 const replaceInput = document.getElementById('replace-input') as HTMLInputElement;
+const findMenu = document.getElementById('find-menu') as HTMLElement;
 const linkEditEl = document.getElementById('linkedit') as HTMLElement;
 const linkUrlInput = document.getElementById('link-url') as HTMLInputElement;
 const linkTextInput = document.getElementById('link-text') as HTMLInputElement;
@@ -83,6 +90,8 @@ let outline: OutlineDto[] = [];             // 大纲项 [{ level, title, block 
 let outlineAnchors: { top: number }[] = []; // 与 outline 同序的锚点，文档坐标系
 let activeOutlineIdx = -1;                  // 当前高亮的大纲项
 let lastTitleKey: string | null = null;     // 标题栏去重：path + 脏标记
+/** 最近一次绘制的选区（停靠点区间）。查找的「仅在选区内」按它换算字节范围。 */
+let selectionStops: [number, number] | null = null;
 
 /**
  * 源码 byte → 停靠点。查找命中来自源码文本，选中却要停靠点，
@@ -346,6 +355,12 @@ interface FindMatch {
 
 let findOpen = false;
 let findCaseSensitive = false;
+let findWholeWord = false;
+let findRegex = false;
+let findPreserveCase = false;
+let findInSelection = false;
+let findBadPattern = false;
+let findMatcher: { re: RegExp } | null = null;
 let findMatches: FindMatch[] = [];
 let findIndex = -1;
 let findRefreshTimer = 0;
@@ -353,6 +368,24 @@ let findRefreshTimer = 0;
 /** 搜索对象：源码视图直接读 textarea，避免去抖未落盘时搜到旧文本。 */
 function findHaystack(): string {
   return window.__mdviewMode === 'source' ? sourceEl.value : sourceText;
+}
+
+/**
+ * 「仅在选区内查找」的字节范围。
+ *
+ * 选区端点是停靠点，元素身上有 `data-byte`：起点元素的 byte 是选区首字符，
+ * 终点元素（选区末端之后的那个停靠点）的 byte 正好是选区末字节。取不到就
+ * 返回 null，调用方按全篇搜。
+ */
+function selectionByteRange(): { start: number; end: number } | null {
+  if (!selectionStops) return null;
+  const [lo, hi] = selectionStops;
+  const first = byBefore.get(lo);
+  const last = byBefore.get(hi);
+  if (!first || !last) return null;
+  const start = Number(first.dataset.byte);
+  const end = Number(last.dataset.byte);
+  return end > start ? { start, end } : null;
 }
 
 /**
@@ -396,15 +429,34 @@ function runFind() {
   const query = findInput.value;
   findMatches = [];
   findIndex = -1;
+  findMatcher = null;
+  findBadPattern = false;
   if (!query) {
     paintFind();
     return;
   }
+  const built = buildMatcher(query, {
+    caseSensitive: findCaseSensitive,
+    wholeWord: findWholeWord,
+    regex: findRegex,
+  });
+  if (built.error) {
+    findBadPattern = true;
+    paintFind();
+    return;
+  }
+  if (!built.re) {
+    paintFind();
+    return;
+  }
+  findMatcher = { re: built.re };
   const text = findHaystack();
   const offsets = utf8Offsets(text);
-  for (const hit of findAll(text, query, findCaseSensitive)) {
+  const scope = findInSelection ? selectionByteRange() : null;
+  for (const hit of scanMatches(text, findMatcher)) {
     const startByte = offsets[hit.start];
     const endByte = offsets[hit.end];
+    if (scope && (startByte < scope.start || endByte > scope.end)) continue;
     const range = stopRangeFor(startByte, endByte);
     if (!range) continue;
     findMatches.push({ start: hit.start, end: hit.end, startByte, endByte, ...range });
@@ -416,16 +468,33 @@ function clearFindHighlight() {
   for (const el of marks) el.classList.remove('find-hit', 'find-current');
 }
 
+/** 命中为 0 时上/下一个与两个替换按钮都置灰。 */
+function setFindNavDisabled(disabled: boolean) {
+  for (const name of ['prev', 'next', 'replace', 'replace-all']) {
+    const btn = findEl.querySelector<HTMLButtonElement>(`[data-find="${name}"]`);
+    if (btn) btn.disabled = disabled;
+  }
+}
+
 /**
  * 重画命中高亮。`marks` 与 `findMatches` 都按位置升序，用一根游标扫一遍即可，
  * 不做 O(元素数 × 命中数) 的包含判断。
  */
 function paintFind() {
   clearFindHighlight();
-  if (!findMatches.length) {
-    findCount.textContent = '0/0';
+  findCount.classList.toggle('bad', findBadPattern);
+  if (findBadPattern) {
+    findCount.textContent = '无效正则';
+    setFindNavDisabled(true);
     return;
   }
+  if (!findMatches.length) {
+    // VSCode 在没有命中时显示「无结果」；查询为空则什么都不显示
+    findCount.textContent = findInput.value ? '无结果' : '';
+    setFindNavDisabled(true);
+    return;
+  }
+  setFindNavDisabled(false);
   findCount.textContent =
     (findIndex >= 0 ? findIndex + 1 : 0) + '/' + findMatches.length;
   const current = findIndex >= 0 ? findMatches[findIndex] : null;
@@ -491,7 +560,8 @@ function stepFind(delta: number) {
 function openFind(withReplace: boolean) {
   findOpen = true;
   findEl.hidden = false;
-  replaceRow.hidden = !withReplace;
+  // Ctrl+F 不强行收起已经展开的替换行；Ctrl+H 才展开
+  if (withReplace) setReplaceVisible(true);
   // 源码视图有原生选区，直接拿它当查询词；编辑态没有可借的选区，保持原查询。
   if (window.__mdviewMode === 'source') {
     const picked = sourceEl.value.slice(sourceEl.selectionStart, sourceEl.selectionEnd);
@@ -507,32 +577,83 @@ function closeFind() {
   if (!findOpen) return;
   findOpen = false;
   findEl.hidden = true;
+  findMenu.hidden = true;
   findMatches = [];
   findIndex = -1;
+  findBadPattern = false;
+  findCount.classList.remove('bad');
   clearFindHighlight();
-  findCount.textContent = '0/0';
+  findCount.textContent = '';
   focusActiveEditor();
 }
 
-function toggleFindCase() {
-  findCaseSensitive = !findCaseSensitive;
-  findEl.querySelector('[data-find="case"]')?.classList.toggle('on', findCaseSensitive);
+/** 展开 / 收起替换行，同时把左侧箭头转成「展开」朝向。 */
+function setReplaceVisible(show: boolean) {
+  replaceRow.hidden = !show;
+  findEl.querySelector('.find-expand')?.classList.toggle('open', show);
+}
+
+function markFindToggle(name: string, on: boolean) {
+  findEl.querySelector(`[data-find="${name}"]`)?.classList.toggle('on', on);
+}
+
+/** 任一开关变了都重跑一次，并把光标带到第一个命中。 */
+function refreshFind() {
   runFind();
   if (findMatches.length) goToMatch(0);
 }
 
+function toggleFindCase() {
+  findCaseSensitive = !findCaseSensitive;
+  markFindToggle('case', findCaseSensitive);
+  refreshFind();
+}
+
+function toggleFindWord() {
+  findWholeWord = !findWholeWord;
+  markFindToggle('word', findWholeWord);
+  refreshFind();
+}
+
+function toggleFindRegex() {
+  findRegex = !findRegex;
+  markFindToggle('regex', findRegex);
+  refreshFind();
+}
+
+function toggleFindPreserve() {
+  findPreserveCase = !findPreserveCase;
+  markFindToggle('preserve', findPreserveCase);
+}
+
+function toggleFindScope() {
+  if (!findInSelection && !selectionByteRange()) {
+    toast('先在正文里选中一段，才能只在选区内查找');
+    return;
+  }
+  findInSelection = !findInSelection;
+  findEl
+    .querySelector('[data-find="in-selection"]')
+    ?.setAttribute('aria-pressed', String(findInSelection));
+  refreshFind();
+}
+
 function replaceCurrent() {
   if (!findOpen || findIndex < 0 || !findMatches.length) return;
-  const m = findMatches[findIndex];
-  const text = replaceInput.value;
+  const match = findMatches[findIndex];
+  // 正则模式下 $1 之类的捕获组引用由 find.js 展开；保留大小写也在这里套
+  const piece = replacementFor(findHaystack(), match, replaceInput.value, {
+    matcher: findMatcher,
+    preserveCase: findPreserveCase,
+  });
   if (window.__mdviewMode === 'source') {
     sourceEl.value =
-      sourceEl.value.slice(0, m.start) + text + sourceEl.value.slice(m.end);
+      sourceEl.value.slice(0, match.start) + piece + sourceEl.value.slice(match.end);
     flushSource();
   } else {
     // 先选后插：insertText 有选区时就是替换，一次事务、一步撤销。
-    send({ kind: 'select', anchor: m.startByte, head: m.endByte });
-    send({ kind: 'insertText', text });
+    send({ kind: 'select', anchor: match.startByte, head: match.endByte });
+    send({ kind: 'insertText', text: piece });
   }
   const at = findIndex;
   queue.then(() => {
@@ -543,12 +664,17 @@ function replaceCurrent() {
 
 function replaceAllMatches() {
   if (!findOpen || !findMatches.length) return;
-  const text = replaceInput.value;
+  const text = findHaystack();
+  const next = replaceMatches(text, findMatches, replaceInput.value, {
+    matcher: findMatcher,
+    preserveCase: findPreserveCase,
+  });
+  if (next === text) return;
   if (window.__mdviewMode === 'source') {
-    sourceEl.value = replaceAllText(sourceEl.value, findMatches, text);
+    sourceEl.value = next;
     flushSource();
   } else {
-    send({ kind: 'replaceSource', text: replaceAllText(findHaystack(), findMatches, text) });
+    send({ kind: 'replaceSource', text: next });
   }
   queue.then(() => {
     runFind();
@@ -575,13 +701,24 @@ function refreshFindAfterEdit() {
 findEl.addEventListener('click', (event) => {
   const btn = (event.target as Element | null)?.closest<HTMLElement>('[data-find]');
   if (!btn) return;
-  switch (btn.dataset.find) {
+  const action = btn.dataset.find;
+  // 除了「更多」与菜单里的项，点任何按钮都收起下拉
+  if (action !== 'more' && action !== 'in-selection') findMenu.hidden = true;
+  switch (action) {
     case 'prev': stepFind(-1); break;
     case 'next': stepFind(1); break;
     case 'case': toggleFindCase(); break;
+    case 'word': toggleFindWord(); break;
+    case 'regex': toggleFindRegex(); break;
+    case 'preserve': toggleFindPreserve(); break;
     case 'toggle-replace':
-      replaceRow.hidden = !replaceRow.hidden;
+      setReplaceVisible(replaceRow.hidden);
       if (!replaceRow.hidden) replaceInput.focus({ preventScroll: true });
+      break;
+    case 'more': findMenu.hidden = !findMenu.hidden; break;
+    case 'in-selection':
+      findMenu.hidden = true;
+      toggleFindScope();
       break;
     case 'close': closeFind(); break;
     case 'replace': replaceCurrent(); break;
@@ -599,9 +736,24 @@ findInput.addEventListener('input', () => {
 replaceInput.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;
   event.preventDefault();
-  if (event.shiftKey) replaceAllMatches();
+  // 阻止冒泡：否则 window 上的查找快捷键还会再走一次「下一个」
+  event.stopPropagation();
+  const all = event.shiftKey || (event.ctrlKey && event.altKey);
+  if (all) replaceAllMatches();
   else replaceCurrent();
 });
+
+// 点「更多」菜单外面收起它。
+document.addEventListener(
+  'mousedown',
+  (event) => {
+    if (findMenu.hidden) return;
+    const target = event.target as Element | null;
+    if (target && (findMenu.contains(target) || target.closest('[data-find="more"]'))) return;
+    findMenu.hidden = true;
+  },
+  true,
+);
 
 // ---- 链接 / 图片行内编辑 ----------------------------------------------
 
@@ -824,6 +976,7 @@ function applyCaret(next: CaretDto | null, reveal = true, force = false) {
 }
 
 function paintSelection(range: [number, number] | null) {
+  selectionStops = range ? [range[0], range[1]] : null;
   for (const el of marks) el.classList.remove('sel');
   if (!range) return;
   const [lo, hi] = range;
@@ -1360,7 +1513,14 @@ window.addEventListener('keydown', (event) => {
       closeFind();
     } else if (event.key === 'Enter') {
       event.preventDefault();
-      stepFind(event.shiftKey ? -1 : 1);
+      if (event.ctrlKey || event.metaKey) replaceAllMatches();
+      else stepFind(event.shiftKey ? -1 : 1);
+    } else if (event.altKey) {
+      // 与 VSCode 一致的开关快捷键：Alt+C / Alt+W / Alt+R
+      const key = event.key.toLowerCase();
+      if (key === 'c') { event.preventDefault(); toggleFindCase(); }
+      else if (key === 'w') { event.preventDefault(); toggleFindWord(); }
+      else if (key === 'r') { event.preventDefault(); toggleFindRegex(); }
     }
     return;
   }
@@ -2352,6 +2512,21 @@ window.__mdviewSelfTest = async function () {
       check('查找命中一处', findCount.textContent === '1/1', String(findCount.textContent));
       check('命中高亮落在正文', docEl.querySelectorAll('.find-hit').length > 0,
         String(docEl.querySelectorAll('.find-hit').length));
+      check('查找栏有 Aa/ab/.* 三个开关',
+        ['case', 'word', 'regex'].every((name) => !!findEl.querySelector(`[data-find="${name}"]`)),
+        '');
+      // 正则写错时计数位要显示「无效正则」，而不是静默无结果
+      toggleFindRegex();
+      findInput.value = '([';
+      findInput.dispatchEvent(new Event('input', { bubbles: true }));
+      check('无效正则给出提示', findCount.textContent === '无效正则',
+        String(findCount.textContent));
+      toggleFindRegex();
+      findInput.value = '草';
+      findInput.dispatchEvent(new Event('input', { bubbles: true }));
+      await queue;
+      check('取消失败正则后命中恢复', findCount.textContent === '1/1',
+        String(findCount.textContent));
       replaceInput.value = '青';
       replaceAllMatches();
       await queue;

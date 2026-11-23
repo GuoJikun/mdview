@@ -1,7 +1,17 @@
 // 查找替换的纯逻辑用例：UTF-16 → UTF-8 映射、命中列表、批量替换。
 // 不碰 DOM，跑 unit project（node 环境）。
 import { describe, expect, it } from 'vitest';
-import { escapeRegExp, findAll, replaceAllText, utf8Offsets } from '../find.js';
+import {
+  buildMatcher,
+  escapeRegExp,
+  findAll,
+  findMatches,
+  matchCase,
+  replaceAllText,
+  replaceMatches,
+  replacementFor,
+  utf8Offsets,
+} from '../find.js';
 
 describe('utf8Offsets', () => {
   it('中文每字 3 字节', () => {
@@ -77,5 +87,71 @@ describe('escapeRegExp', () => {
     expect(escapeRegExp('a.b*c(d)[e]{f}^$|\\')).toBe(
       'a\\.b\\*c\\(d\\)\\[e\\]\\{f\\}\\^\\$\\|\\\\',
     );
+  });
+});
+
+describe('全词与正则', () => {
+  it('全词匹配不会命中子串', () => {
+    const { re } = buildMatcher('port', { wholeWord: true });
+    const hits = findMatches('port transport viewport port', { re });
+    expect(hits).toEqual([
+      { start: 0, end: 4 },
+      { start: 24, end: 28 },
+    ]);
+  });
+
+  it('全词匹配对中文按字边界处理', () => {
+    const { re } = buildMatcher('标题', { wholeWord: true });
+    expect(findMatches('加标题了 标题 副标题', { re })).toEqual([
+      { start: 5, end: 7 },
+    ]);
+  });
+
+  it('正则模式按模式匹配', () => {
+    const { re } = buildMatcher('\\d+', { regex: true });
+    expect(findMatches('甲 12 乙 345', { re })).toEqual([
+      { start: 2, end: 4 },
+      { start: 7, end: 10 },
+    ]);
+  });
+
+  it('正则写错时返回 error 而不是抛异常', () => {
+    expect(buildMatcher('([', { regex: true })).toEqual({ error: true });
+  });
+
+  it('未开正则时元字符按字面量处理', () => {
+    const { re } = buildMatcher('a.b');
+    expect(findMatches('a.b axb', { re })).toEqual([{ start: 0, end: 3 }]);
+  });
+});
+
+describe('替换展开与保留大小写', () => {
+  const src = 'name: alice, name: bob';
+
+  it('正则替换展开捕获组', () => {
+    const { re } = buildMatcher('name: (\\w+)', { regex: true });
+    const hits = findMatches(src, { re });
+    expect(replaceMatches(src, hits, '$1', { matcher: { re } }))
+      .toBe('alice, bob');
+  });
+
+  it('非正则替换把 $1 当普通文本', () => {
+    expect(replacementFor(src, { start: 0, end: 4 }, '$1', {})).toBe('$1');
+  });
+
+  it('保留大小写：全大写跟着大写', () => {
+    expect(matchCase('new', 'OLD')).toBe('NEW');
+  });
+
+  it('保留大小写：全小写跟着小写', () => {
+    expect(matchCase('NEW', 'old')).toBe('new');
+  });
+
+  it('保留大小写：首字母大写沿用替换词的首字母大写', () => {
+    expect(matchCase('new', 'Old')).toBe('New');
+  });
+
+  it('保留大小写不影响中文', () => {
+    expect(matchCase('新词', '旧词')).toBe('新词');
   });
 });
