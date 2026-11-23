@@ -63,6 +63,8 @@ fn dispatch(app: tauri::AppHandle, session: tauri::State<'_, Session>, message: 
         && let Some(path) = saved_to
     {
         recent::remember(&app, &path);
+        // macOS 原生菜单是静态快照，另存为后要把新路径补进「最近打开」
+        refresh_native_menu(&app);
     }
     reply
 }
@@ -77,6 +79,7 @@ fn recent_files(app: tauri::AppHandle) -> Vec<String> {
 #[tauri::command]
 fn clear_recent_files(app: tauri::AppHandle) {
     recent::clear(&app);
+    refresh_native_menu(&app);
 }
 
 /// 前端遇到 Markdown 里的本地图片时调用。
@@ -238,6 +241,7 @@ async fn open_file(
     // 自检反复打开样张，不该污染用户的最近列表。
     if !app.state::<RunMode>().self_test {
         recent::remember(&app, &path);
+        refresh_native_menu(&app);
     }
     Ok(Some(snap))
 }
@@ -284,6 +288,37 @@ fn first_markdown(paths: &[PathBuf]) -> Option<&PathBuf> {
     })
 }
 
+/// 最近打开子菜单的 (菜单 id, 显示名)。id 与前端动作名一致（`recent:0`）。
+///
+/// 只放文件名：完整路径会把菜单撑得很宽；自绘菜单用 `title` 兜底，
+/// 原生菜单没有悬停提示，宁可短一些。
+fn recent_menu_entries(recents: &[String]) -> Vec<(String, String)> {
+    recents
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let label = PathBuf::from(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| path.clone());
+            (format!("recent:{index}"), label)
+        })
+        .collect()
+}
+
+/// 动态菜单 id 是否属于「最近打开」。
+///
+/// 原生菜单每次重建，`menu_action` 的静态表覆盖不到这些序号，只能在事件里
+/// 现判。`recent:` 后面必须是数字，避免把将来的其它 `recent-*` 动作误吞。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn is_recent_menu_id(id: &str) -> bool {
+    id == "recent-clear"
+        || id
+            .strip_prefix("recent:")
+            .is_some_and(|index| index.parse::<usize>().is_ok())
+}
+
 /// 原生菜单里需要转给前端执行的动作 ID。
 /// 只列自绘编辑器真正支持的动作；about / hide / quit / minimize 等由系统自己处理。
 #[cfg(target_os = "macos")]
@@ -319,8 +354,17 @@ fn menu_action(id: &str) -> Option<&'static str> {
 
 /// macOS 的系统菜单栏。故意不给自定义项设 accelerator：快捷键由 editor.ts 的
 /// keydown 统一处理，两边都设会让「撤销」这类非幂等动作执行两次。
-#[cfg(target_os = "macos")]
-fn build_native_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+///
+/// 最近打开列表是运行时数据，菜单只能在打开 / 另存为 / 清除后整棵重建；
+/// 重建入口是 [`refresh_native_menu`]。
+///
+/// 函数本身不加 `cfg`：菜单 API 各桌面平台都有，留在编译单元里才能在
+/// Windows 开发机上一起做类型检查（只在 macOS 调用）。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn build_native_menu(
+    app: &tauri::AppHandle,
+    recents: &[String],
+) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{AboutMetadata, MenuBuilder, MenuItem, SubmenuBuilder};
 
     let item =
@@ -336,9 +380,36 @@ fn build_native_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<
         .quit()
         .build()?;
 
+    // 最近打开：空表也要有一项占位，否则子菜单会变成空壳、点了没反应。
+    let mut recent_builder = SubmenuBuilder::new(app, "最近打开");
+    let entries = recent_menu_entries(recents);
+    if entries.is_empty() {
+        recent_builder = recent_builder.item(&MenuItem::with_id(
+            app,
+            "recent-empty",
+            "（暂无）",
+            false,
+            None::<&str>,
+        )?);
+    } else {
+        for (id, label) in entries {
+            recent_builder =
+                recent_builder.item(&MenuItem::with_id(app, id, label, true, None::<&str>)?);
+        }
+        recent_builder = recent_builder.separator().item(&MenuItem::with_id(
+            app,
+            "recent-clear",
+            "清除记录",
+            true,
+            None::<&str>,
+        )?);
+    }
+    let recent_menu = recent_builder.build()?;
+
     let file_menu = SubmenuBuilder::new(app, "文件")
         .item(&item("new-file", "新建")?)
         .item(&item("open-file", "打开文件…")?)
+        .item(&recent_menu)
         .item(&item("save", "保存")?)
         .item(&item("save-as", "另存为…")?)
         .separator()
@@ -407,6 +478,35 @@ fn build_native_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<
 struct RunMode {
     self_test: bool,
 }
+
+/// 最近列表变了就整棵重建原生菜单。
+///
+/// 命令可能跑在非 UI 线程上，菜单必须在主线程构建/安装，统一投递过去。
+/// 这里不加 `cfg`：Windows 上不会调用，但留在编译单元里才能一起做类型检查。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn rebuild_native_menu(app: &tauri::AppHandle) {
+    let recents = recent::list(app);
+    let handle = app.clone();
+    if let Err(err) = app.run_on_main_thread(move || match build_native_menu(&handle, &recents) {
+        Ok(menu) => {
+            if let Err(err) = handle.set_menu(menu) {
+                log::warn!("重建原生菜单失败：{err}");
+            }
+        }
+        Err(err) => log::warn!("构建原生菜单失败：{err}"),
+    }) {
+        log::warn!("投递菜单重建失败：{err}");
+    }
+}
+
+/// 调用点统一走这里；非 macOS 是空实现，不必到处写 `cfg`。
+#[cfg(target_os = "macos")]
+fn refresh_native_menu(app: &tauri::AppHandle) {
+    rebuild_native_menu(app);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn refresh_native_menu(_app: &tauri::AppHandle) {}
 
 fn main() {
     let mut path: Option<PathBuf> = None;
@@ -573,10 +673,14 @@ fn main() {
             // macOS：标题栏用系统装饰，菜单也用原生菜单栏；点击项转发给前端执行。
             #[cfg(target_os = "macos")]
             {
-                let menu = build_native_menu(app.handle())?;
+                let menu = build_native_menu(app.handle(), &recent::list(app.handle()))?;
                 app.set_menu(menu)?;
                 app.on_menu_event(|app, event| {
-                    if let Some(action) = menu_action(event.id().as_ref()) {
+                    let id = event.id().as_ref();
+                    // 最近打开是运行时生成的 id，静态动作表里没有，直接透传
+                    if is_recent_menu_id(id) {
+                        let _ = app.emit("menu-action", id);
+                    } else if let Some(action) = menu_action(id) {
                         let _ = app.emit("menu-action", action);
                     }
                 });
@@ -627,6 +731,34 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_menu_entries_use_basenames_and_stable_ids() {
+        let entries = recent_menu_entries(&[
+            "/home/me/一.md".to_string(),
+            "/home/me/子目录/二.md".to_string(),
+        ]);
+        assert_eq!(
+            entries,
+            vec![
+                ("recent:0".to_string(), "一.md".to_string()),
+                ("recent:1".to_string(), "二.md".to_string()),
+            ]
+        );
+        assert!(recent_menu_entries(&[]).is_empty());
+    }
+
+    #[test]
+    fn only_recent_menu_ids_are_recognised() {
+        assert!(is_recent_menu_id("recent:0"));
+        assert!(is_recent_menu_id("recent:12"));
+        assert!(is_recent_menu_id("recent-clear"));
+        // 占位项不是可点击动作；`recent:` 后面不是数字也不能吞
+        assert!(!is_recent_menu_id("recent-empty"));
+        assert!(!is_recent_menu_id("recent:"));
+        assert!(!is_recent_menu_id("recent:x"));
+        assert!(!is_recent_menu_id("open-file"));
+    }
 
     #[test]
     fn first_markdown_skips_folders_and_other_files() {

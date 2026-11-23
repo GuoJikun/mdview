@@ -302,7 +302,7 @@ byte   0  2  5  8  10
 - ✅ **链接/图片行内编辑**（2026-11-23）：编辑态单击链接或图片弹出小面板，可改地址与文字（图片为 alt）、删除或打开。内核 `Message::EditLink { stop, url?, text?, remove }` 按停靠点找到覆盖它的 Link/Image 片段；Link 片段只覆盖 label，必须借 `Block::markers` 的配对把 `[label](url)` 整段圈进来再重写，label 里原有的 `**` 等行内标记原样保留。URL 含空白或圆括号时用 `<...>` 包起来。整段重写是一次事务、一步撤销。Rust 单测 4 项 + 自检 6 项
 - ✅ **查找 / 替换**（2026-11-23，UI 对齐 VSCode）：`Ctrl+F` / `Ctrl+H` 唤起浮层，左侧箭头展开/收起替换行，`Esc` 关闭；查找框内联 Aa（区分大小写）/ ab（全词）/ .*（正则）三个开关，`Alt+C` / `Alt+W` / `Alt+R` 也能切；右侧显示 `1/5` 或「无结果」、正则有误时显示「无效正则」，上/下一个与替换按钮在无命中时置灰；替换行有 AB（保留大小写）与替换 / 全部替换，「更多」里可开启「仅在选区内查找」。正则替换支持 `$1` 捕获组，保留大小写按命中串的全大写/全小写/首字母大写三种形态套用（`src/editor/find.js` 的 `buildMatcher` / `findMatches` / `replacementFor` / `replaceMatches`）。搜索对象是**源码**，命中下标先换成 UTF-8 字节，再用每个字符元素的 `data-byte` 二分出停靠点区间交给内核 `Select`；落在折叠标记里的命中（如搜 `**`）选出来是零宽，直接跳过。高亮用一根游标扫 `marks`，不做元素数 × 命中数的包含判断；文档编辑后 60ms 防抖重算，但不抢光标。纯逻辑单测 23 项 + 自检 8 项
 - ✅ **字数统计**（2026-11-23）：`AppState::word_count` 按块统计 `plain_text` 的非空白字符，不含 Markdown 标记；随 `Snapshot` 与每次 `Reply` 下发，状态栏显示「字数」。Rust 单测 3 项 + 自检 2 项
-- ✅ **最近打开文件**（2026-11-23）：宿主侧 `recent.json`（应用配置目录，最多 10 条，去重后提到最前）。打开文件、另存为、带文件参数启动都会记录；`--self-test` 不写。文件菜单的「最近打开」子菜单由 `bridge.recent` 运行时填充，路径只放文件名、`title` 给完整路径，另有「清除记录」。Rust 单测 4 项 + 自检 1 项
+- ✅ **最近打开文件**（2026-11-23）：宿主侧 `recent.json`（应用配置目录，最多 10 条，去重后提到最前）。打开文件、另存为、带文件参数启动都会记录；`--self-test` 不写。Windows / Linux 的自绘菜单由 `bridge.recent` 运行时填充（文件名 + `title` 完整路径 + 清除记录）；macOS 原生菜单在每次记录变化后重建，空表显示「（暂无）」。Rust 单测 6 项 + 自检 1 项
 - ✅ **拖放打开文件**（2026-11-23）：`WindowEvent::DragDrop` 在宿主侧判定落进来的是不是存在的 `.md/.markdown/.txt`（大小写不敏感），只发路径给前端复用 `open_file`，未保存改动的确认与菜单打开完全一致；拖入时正文铺一圈虚线，松手/离开撤掉。前端另挡掉 webview 对文件拖放的默认导航。Rust 单测 1 项（拖放本身不可合成，未进自检）
 - ⬜ 粘贴 HTML 规范化（sanitize 后转 Markdown，不能直接注入）
 - ✅ **数学公式**（2026-11-21）：`MarkdownParser::gfm()` 开启 `ENABLE_MATH`，`project.rs` 把 `InlineMath` / `DisplayMath` 落成 `SpanKind::Math { display }`，定界符按「恰好 want 个 `$`」内缩进 `hidden` 并登记为 `MarkerPair`（退格可整对抽掉，与行内代码同一套逻辑）。编辑态每个公式字符带 `.m`、保留全部 `data-b/data-a` 停靠点；阅读态 `to_html` 输出 `<code class="m">` / `<code class="m md">`，后者由 CSS 居中排版。`app.css` 与 CLI 验证页同步配色，明暗主题各有变量。Rust 单测 4 项 + 应用层配对删除 1 项全过
@@ -343,7 +343,7 @@ byte   0  2  5  8  10
 ## 7. 当前进度快照
 
 - 日期：2026-11-23（最近打开、字数统计、拖放打开、查找替换（含 VSCode 式开关与选区内查找）、Tab 缩进、链接/图片行内编辑；自检 89/89 实跑）
-- 测试：**Rust 258 项全过**（app 93 / markdown 124 / desktop bin 27 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **122 项**（unit 104：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6、`find` 23；dom 18：内核启动、CRLF 视图、环境能力、滚动条），由 `pnpm test` 一次跑完
+- 测试：**Rust 260 项全过**（app 93 / markdown 124 / desktop bin 29 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **122 项**（unit 104：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6、`find` 23；dom 18：内核启动、CRLF 视图、环境能力、滚动条），由 `pnpm test` 一次跑完
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
 - 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 89/89」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 9 项**、**字数 2 项**、**查找替换 8 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
@@ -421,7 +421,7 @@ byte   0  2  5  8  10
     - 同批修掉的两个丢稿缺口：① 未命名文档按 Ctrl+S 不再谎称「已保存」（`Effect::NeedsPath` → 弹框 → `saveTo`），写盘失败从 `Conflict` 拆成 `Effect::WriteFailed`；② 关窗与换文档前检查 dirty——`CloseRequested` 由 `on_window_event` 拦截（`CloseGuard` 放行标志 + `close-requested` 事件），`open_file` / `new_file` 前用 `ask_discard` 问一句。自检模式下确认框一律放行，否则会挂死。
 19. **块级公式内含空行时不被识别**：pulldown-cmark 把 math 的定界符跟踪限制在单个块内，`$$\na\n\nb\n$$` 中的 `$$` 会退化成字面文本（mdview 的 `split_blocks` 同样按空行切块，行为一致）。多段公式请把空行去掉，或用多个 `$$…$$`。
 20. **脚注里的复杂块级结构不分层**：定义内的列表 / 代码块 / 引用会被拍平成带换行的普通片段（定义块本身仍独立）。脚注以短段落为主，复杂结构请放到正文；另外无定义的 `[^x]` 按 pulldown 行为保留为字面文本。
-21. **macOS 原生菜单没有「最近打开」**：原生菜单只在 setup 时构建一次，运行时列表变化要重建并重新 `set_menu`；当前只做了自绘菜单（Windows / Linux）。拖放打开走 `WindowEvent::DragDrop`，Linux 上能否收到该事件由 tauri 运行时决定，未实机验证。
+21. **拖放打开的 Linux 支持未实机验证**：走 `WindowEvent::DragDrop`，能否收到该事件由 tauri 运行时决定。macOS 原生菜单的「最近打开」已补齐：菜单在打开 / 另存为 / 清除后经 `refresh_native_menu` 投递到主线程整棵重建。
 
 ---
 
@@ -520,7 +520,7 @@ pnpm test:watch                             # 改代码时盯着
 | **链接 / 图片改写事务**（标记对圈住整段、URL 转义、删除保留 label） | `crates/mdview-app/src/state.rs`（`edit_link`） |
 | **Tab 缩进 / 反缩进**（列表层级、顶层不动、字符偏移回填） | `crates/mdview-app/src/state.rs`（`indent` / `list_position`） |
 | **字数统计**（按块 `plain_text` 数非空白字符） | `crates/mdview-app/src/state.rs`（`word_count`）、`src/components/StatusBar.vue` |
-| **最近打开持久化**（`recent.json`、去重、上限 10） | `src-tauri/src/recent.rs` 与 `main.rs` 的 `recent_files` / `clear_recent_files` |
+| **最近打开持久化**（`recent.json`、去重、上限 10）与 **macOS 原生菜单重建**（`build_native_menu` / `rebuild_native_menu` / `recent_menu_entries`） | `src-tauri/src/recent.rs` 与 `main.rs` 的 `recent_files` / `clear_recent_files` |
 | **拖放打开**（`WindowEvent::DragDrop` → `drop-open` / `drop-hover`） | `src-tauri/src/main.rs`（`first_markdown`）、`src/editor/editor.ts` |
 | **键位契约**（`Ctrl+A/C/X` → `selectAll`/`copy`/`cut`，见 `editor.ts` 的 keydown） | `src/editor/editor.ts`、`src-tauri/src/session.rs` |
 | 前端守门测试（语法检查七个 `.js` + 跑 vitest 的 unit project；dom project 不进 cargo test） | `src-tauri/tests/web_ime.rs`、`vitest.config.ts` |
