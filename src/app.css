@@ -620,6 +620,12 @@ html[data-drop="1"] body::after {
 #findbar .find-row { display: flex; align-items: center; gap: 2px; }
 #find-replace-row { padding-left: 26px; }
 
+/* 查找栏里的 Lucide sprite：16px、线宽 2，颜色跟随按钮 */
+#findbar .i {
+  width: 16px; height: 16px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
 #findbar button {
   height: 24px; min-width: 24px; padding: 0 4px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -630,10 +636,10 @@ html[data-drop="1"] body::after {
 #findbar button:disabled { opacity: .4; cursor: default; }
 #findbar button.on { background: var(--accent-soft); color: var(--accent); }
 
-/* 左侧展开箭头：收起时 ›，展开后旋转 90°。 */
+/* 左侧展开箭头：收起时指向右，展开后旋转 90°。 */
 #findbar .find-expand { flex: none; }
 #findbar .find-expand .chev {
-  display: block; font-size: 16px; line-height: 1;
+  display: flex; align-items: center;
   transition: transform .12s ease;
 }
 #findbar .find-expand.open .chev { transform: rotate(90deg); }
@@ -676,8 +682,12 @@ html[data-drop="1"] body::after {
   width: 100%; justify-content: flex-start; gap: 6px; padding: 0 8px;
   color: var(--text); font-weight: 400;
 }
-#findbar .find-menu .tick { width: 12px; color: var(--accent); }
-#findbar .find-menu button[aria-pressed="true"] .tick::before { content: "✓"; }
+#findbar .find-menu .tick {
+  width: 12px; height: 12px; display: inline-flex; flex: none;
+  color: var(--accent);
+}
+#findbar .find-menu .tick .i { width: 12px; height: 12px; opacity: 0; }
+#findbar .find-menu button[aria-pressed="true"] .tick .i { opacity: 1; }
 
 /* 命中高亮：所有命中浅色，当前一处加深。 */
 #doc .find-hit { background: rgba(255, 196, 0, .35); border-radius: 2px; }

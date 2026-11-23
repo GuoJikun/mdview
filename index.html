@@ -7,6 +7,29 @@
 <link rel="stylesheet" href="/src/app.css">
 </head>
 <body>
+<!-- Lucide 图标 sprite（ISC）。查找栏是静态 DOM、不在 Vue 树里，用 <use> 复用
+     同一份路径数据；菜单/弹窗里的 Vue 组件直接 import 组件，不经过这里。 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7" /><path d="M12 19V5" /></symbol>
+  <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 5v14" /><path d="m19 12-7 7-7-7" /></symbol>
+  <symbol id="i-ellipsis" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" /></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></symbol>
+  <symbol id="i-replace" viewBox="0 0 24 24">
+    <path d="M14 4a1 1 0 0 1 1-1" /><path d="M15 10a1 1 0 0 1-1-1" />
+    <path d="M21 4a1 1 0 0 0-1-1" /><path d="M21 9a1 1 0 0 1-1 1" />
+    <path d="m3 7 3 3 3-3" /><path d="M6 10V5a2 2 0 0 1 2-2h2" />
+    <rect x="3" y="14" width="7" height="7" rx="1" />
+  </symbol>
+  <symbol id="i-replace-all" viewBox="0 0 24 24">
+    <path d="M14 14a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1" /><path d="M14 4a1 1 0 0 1 1-1" />
+    <path d="M15 10a1 1 0 0 1-1-1" /><path d="M19 14a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1" />
+    <path d="M21 4a1 1 0 0 0-1-1" /><path d="M21 9a1 1 0 0 1-1 1" />
+    <path d="m3 7 3 3 3-3" /><path d="M6 10V5a2 2 0 0 1 2-2h2" />
+    <rect x="3" y="14" width="7" height="7" rx="1" />
+  </symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></symbol>
+</svg>
 <!-- 自绘标题栏与菜单弹层由 Vue 渲染（TitleBar.vue / MenuPopup.vue） -->
 <!-- 自绘纵向滚动条：浏览器原生滚动条纵跨整窗，会压住标题栏和状态栏。
      正文与大纲各一套，共用 .tb-vscroll 的视觉与拖动逻辑 -->
@@ -31,7 +54,7 @@
      右侧是命中计数、上/下一个、更多与关闭。事件接线见 editor.ts 的「查找替换」段。 -->
 <div id="findbar" hidden>
   <div class="find-row">
-    <button type="button" class="find-expand" data-find="toggle-replace" title="切换替换（Ctrl+H）" aria-label="切换替换"><span class="chev">›</span></button>
+    <button type="button" class="find-expand" data-find="toggle-replace" title="切换替换（Ctrl+H）" aria-label="切换替换"><span class="chev"><svg class="i" aria-hidden="true"><use href="#i-chevron-right" /></svg></span></button>
     <div class="find-field">
       <input id="find-input" type="text" placeholder="查找" autocomplete="off" spellcheck="false" aria-label="查找">
       <button type="button" class="find-inline" data-find="case" title="区分大小写（Alt+C）" aria-label="区分大小写">Aa</button>
@@ -39,13 +62,13 @@
       <button type="button" class="find-inline" data-find="regex" title="使用正则表达式（Alt+R）" aria-label="使用正则表达式">.*</button>
     </div>
     <span id="find-count" class="find-count"></span>
-    <button type="button" data-find="prev" title="上一个（Shift+Enter）" aria-label="上一个">↑</button>
-    <button type="button" data-find="next" title="下一个（Enter）" aria-label="下一个">↓</button>
-    <button type="button" data-find="more" title="更多选项" aria-label="更多选项" aria-haspopup="true">≡</button>
-    <button type="button" data-find="close" title="关闭（Esc）" aria-label="关闭">×</button>
+    <button type="button" data-find="prev" title="上一个（Shift+Enter）" aria-label="上一个"><svg class="i" aria-hidden="true"><use href="#i-arrow-up" /></svg></button>
+    <button type="button" data-find="next" title="下一个（Enter）" aria-label="下一个"><svg class="i" aria-hidden="true"><use href="#i-arrow-down" /></svg></button>
+    <button type="button" data-find="more" title="更多选项" aria-label="更多选项" aria-haspopup="true"><svg class="i" aria-hidden="true"><use href="#i-ellipsis" /></svg></button>
+    <button type="button" data-find="close" title="关闭（Esc）" aria-label="关闭"><svg class="i" aria-hidden="true"><use href="#i-x" /></svg></button>
     <div id="find-menu" class="find-menu" hidden>
       <button type="button" data-find="in-selection" aria-pressed="false">
-        <span class="tick"></span>仅在选区内查找
+        <span class="tick"><svg class="i" aria-hidden="true"><use href="#i-check" /></svg></span>仅在选区内查找
       </button>
     </div>
   </div>
@@ -54,8 +77,8 @@
       <input id="replace-input" type="text" placeholder="替换" autocomplete="off" spellcheck="false" aria-label="替换">
       <button type="button" class="find-inline" data-find="preserve" title="保留大小写" aria-label="保留大小写">AB</button>
     </div>
-    <button type="button" data-find="replace" title="替换（Ctrl+Alt+Enter 全部替换）" aria-label="替换">⇄</button>
-    <button type="button" data-find="replace-all" title="全部替换（Ctrl+Alt+Enter）" aria-label="全部替换">▣</button>
+    <button type="button" data-find="replace" title="替换（Ctrl+Alt+Enter 全部替换）" aria-label="替换"><svg class="i" aria-hidden="true"><use href="#i-replace" /></svg></button>
+    <button type="button" data-find="replace-all" title="全部替换（Ctrl+Alt+Enter）" aria-label="全部替换"><svg class="i" aria-hidden="true"><use href="#i-replace-all" /></svg></button>
   </div>
 </div>
 <!-- 链接 / 图片行内编辑：点正文里的链接或图片弹出，Esc / 点空白关闭。 -->

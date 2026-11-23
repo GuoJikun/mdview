@@ -2380,7 +2380,7 @@ window.__mdviewSelfTest = async function () {
         const active = 'theme-' + mdviewTheme.mode();
         check('当前档位带圆点',
           subBtns.some((b) => b.dataset.action === active &&
-            b.querySelector('.gutter')?.textContent === '•'), active);
+            !!b.querySelector('.gutter .dot')), active);
         // 回归：鼠标移到子菜单项上不能让面板消失。普通菜单项的 pointerenter
         // 会收起子菜单，但子菜单内部的项必须豁免，否则永远点不到这些项。
         if (subBtns.length) {
