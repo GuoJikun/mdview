@@ -300,7 +300,7 @@ byte   0  2  5  8  10
 - ✅ **外链打开**（2026-11-21）：投影里的链接字符只带 `data-href`，**不产出 `<a href>`**——有锚点的话点一下 webview 就把整个应用导航走，且没有后退可言（中键、拖拽、右键菜单都能绕过 click 拦截，所以干脆不给出可导航的锚点）。前端在 `#doc` 上接管 click：编辑态 Ctrl/Cmd+Click、阅读态单击，转成 `open_url` 命令落到系统 shell（Windows 直调 `ShellExecuteW`，macOS `open`，Linux `xdg-open`，不引 opener 插件）。三个必须的细节：① URL 白名单只放行 `http(s)` / `mailto`，因为 `[x](javascript:...)` 是合法 Markdown，`dest_url` 会原样落进属性；② 链接的每个字符各挂一份 `data-href`，点击命中的是单个字符元素、与同链接其它字符是平级兄弟，`closest` 读不到邻居身上的属性；③ 拖选之后浏览器也会补发一次 click，位移超过 4px 视为选字。编辑态不让单击跟随链接是硬要求：正文整块都是可编辑区，抢走单击等于废掉「点哪儿光标落哪儿」
 - ✅ **代码高亮**（2026-11-21）：解析层新增 `highlight.rs`，用自带的轻量词法扫描给围栏代码块产出 byte 区间 token（关键字 / 类型 / 字面量 / 字符串 / 注释 / 数字 / 函数 / 变量 / 标签 / 属性 / 运算符），覆盖 Rust、JS/TS、Python、JSON、HTML/XML、CSS、Shell、Go、C/C++、Java/C#、SQL、YAML、TOML、Markdown。**不引 `syntect` / `tree-sitter-highlight`**：前者要背整套语法包，后者是 C grammar，都会破坏 `mdview-markdown` 的纯 Rust 零依赖约束；这里只需要粗粒度着色，自带扫描更可控。token 挂在 `Block::tokens`，渲染时按字符停靠点查表加 `tk-*` class——编辑态与阅读态共用同一套 DOM，**停靠点集合、光标、选区、增量 patch 全不变**；阅读态 `to_html` 另按 token 切段包 `<span class="tk …">`。未知语言不着色，按原文显示
 - ✅ **链接/图片行内编辑**（2026-11-23）：编辑态单击链接或图片弹出小面板，可改地址与文字（图片为 alt）、删除或打开。内核 `Message::EditLink { stop, url?, text?, remove }` 按停靠点找到覆盖它的 Link/Image 片段；Link 片段只覆盖 label，必须借 `Block::markers` 的配对把 `[label](url)` 整段圈进来再重写，label 里原有的 `**` 等行内标记原样保留。URL 含空白或圆括号时用 `<...>` 包起来。整段重写是一次事务、一步撤销。Rust 单测 4 项 + 自检 6 项
-- ✅ **查找 / 替换**（2026-11-23）：`Ctrl+F` / `Ctrl+H` 唤起浮层，`Enter` / `Shift+Enter` 前后跳，`Esc` 关闭；全部替换走 `replaceSource` 一次事务。搜索对象是**源码**（`src/editor/find.js` 的 `findAll` + `utf8Offsets`），命中下标先换成 UTF-8 字节，再用每个字符元素的 `data-byte` 二分出停靠点区间交给内核 `Select`。落在折叠标记里的命中（如搜 `**`）选出来是零宽，直接跳过。高亮用一根游标扫 `marks`，不做元素数 × 命中数的包含判断；文档编辑后 60ms 防抖重算，但不抢光标。纯逻辑单测 12 项 + 自检 6 项
+- ✅ **查找 / 替换**（2026-11-23，UI 对齐 VSCode）：`Ctrl+F` / `Ctrl+H` 唤起浮层，左侧箭头展开/收起替换行，`Esc` 关闭；查找框内联 Aa（区分大小写）/ ab（全词）/ .*（正则）三个开关，`Alt+C` / `Alt+W` / `Alt+R` 也能切；右侧显示 `1/5` 或「无结果」、正则有误时显示「无效正则」，上/下一个与替换按钮在无命中时置灰；替换行有 AB（保留大小写）与替换 / 全部替换，「更多」里可开启「仅在选区内查找」。正则替换支持 `$1` 捕获组，保留大小写按命中串的全大写/全小写/首字母大写三种形态套用（`src/editor/find.js` 的 `buildMatcher` / `findMatches` / `replacementFor` / `replaceMatches`）。搜索对象是**源码**，命中下标先换成 UTF-8 字节，再用每个字符元素的 `data-byte` 二分出停靠点区间交给内核 `Select`；落在折叠标记里的命中（如搜 `**`）选出来是零宽，直接跳过。高亮用一根游标扫 `marks`，不做元素数 × 命中数的包含判断；文档编辑后 60ms 防抖重算，但不抢光标。纯逻辑单测 23 项 + 自检 8 项
 - ✅ **字数统计**（2026-11-23）：`AppState::word_count` 按块统计 `plain_text` 的非空白字符，不含 Markdown 标记；随 `Snapshot` 与每次 `Reply` 下发，状态栏显示「字数」。Rust 单测 3 项 + 自检 2 项
 - ✅ **最近打开文件**（2026-11-23）：宿主侧 `recent.json`（应用配置目录，最多 10 条，去重后提到最前）。打开文件、另存为、带文件参数启动都会记录；`--self-test` 不写。文件菜单的「最近打开」子菜单由 `bridge.recent` 运行时填充，路径只放文件名、`title` 给完整路径，另有「清除记录」。Rust 单测 4 项 + 自检 1 项
 - ✅ **拖放打开文件**（2026-11-23）：`WindowEvent::DragDrop` 在宿主侧判定落进来的是不是存在的 `.md/.markdown/.txt`（大小写不敏感），只发路径给前端复用 `open_file`，未保存改动的确认与菜单打开完全一致；拖入时正文铺一圈虚线，松手/离开撤掉。前端另挡掉 webview 对文件拖放的默认导航。Rust 单测 1 项（拖放本身不可合成，未进自检）
@@ -342,13 +342,13 @@ byte   0  2  5  8  10
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-23（最近打开、字数统计、拖放打开、查找替换、Tab 缩进、链接/图片行内编辑；自检 86/86 实跑）
-- 测试：**Rust 258 项全过**（app 93 / markdown 124 / desktop bin 27 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **111 项**（unit 93：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6、`find` 12；dom 18：内核启动、CRLF 视图、环境能力、滚动条），由 `pnpm test` 一次跑完
+- 日期：2026-11-23（最近打开、字数统计、拖放打开、查找替换（含 VSCode 式开关与选区内查找）、Tab 缩进、链接/图片行内编辑；自检 89/89 实跑）
+- 测试：**Rust 258 项全过**（app 93 / markdown 124 / desktop bin 27 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **122 项**（unit 104：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6、`find` 23；dom 18：内核启动、CRLF 视图、环境能力、滚动条），由 `pnpm test` 一次跑完
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 86/86」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 9 项**、**字数 2 项**、**查找替换 6 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 89/89」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 9 项**、**字数 2 项**、**查找替换 8 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
-  - **必须走 `pnpm tauri dev`**：debug 构建会按 `devUrl` 加载 `http://localhost:1450`，直接 `cargo run` 时没有 Vite，窗口标题只有配置里的 `mdview`、页面白屏、日志停在「启动」一行——不是回归。同参数走 `tauri dev` 时窗口拿得到焦点，「系统剪贴板可写」才判得为真
+  - **必须走 `pnpm tauri dev`**：debug 构建会按 `devUrl` 加载 `http://localhost:1450`，没有 Vite 时窗口标题只有配置里的 `mdview`、页面白屏、日志停在「启动」一行——不是回归。想直接用 `target/debug/mdview-desktop.exe` 跑自检，手工起的 Vite **必须绑 IPv4**（`pnpm dev -- --host 127.0.0.1`）：Vite 默认在这台机器上只监听 `[::1]`，WebView2 打不开 `localhost` 时同样白屏，且 CDP 里页面的 `title` 会停在 `about:blank`
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
 - 最近提交（Angular 规范）：
   - `feat: 初始化内核、解析投影与日志`
@@ -514,8 +514,8 @@ pnpm test:watch                             # 改代码时盯着
 | **浏览器里的内核启动用例**（铺 index.html 骨架 + mock IPC + 断言光标像素） | `src/editor/__tests__/editor.dom.test.ts`、`src/editor/__tests__/env.dom.test.ts` |
 | 自检样张（必须是「一块一行」的文档） | `src-tauri/tests/fixtures/selftest.md` |
 | **剪贴板写入**（内核给文本、前端写系统剪贴板，`execCommand` 兜底） | `src/editor/clipboard.js` |
-| **查找替换纯逻辑**（UTF-16→UTF-8 下标、命中列表、批量替换，不碰 DOM） | `src/editor/find.js`、`src/editor/__tests__/find.test.ts` |
-| **查找替换接线**（浮层、高亮、跳转、替换、防抖重算） | `src/editor/editor.ts`、`index.html`（`#findbar`）、`app.css` |
+| **查找替换纯逻辑**（UTF-16→UTF-8 下标、全词 / 正则匹配、`$1` 展开、保留大小写、批量替换，不碰 DOM） | `src/editor/find.js`、`src/editor/__tests__/find.test.ts` |
+| **查找替换接线**（VSCode 式浮层、三个内联开关、命中高亮、跳转、替换、选区内查找、防抖重算） | `src/editor/editor.ts`、`index.html`（`#findbar`）、`app.css` |
 | **链接 / 图片行内编辑**（面板、`data-href`/`data-asset` 预填、Esc/外部点击收起） | `src/editor/editor.ts`、`index.html`（`#linkedit`）、`app.css` |
 | **链接 / 图片改写事务**（标记对圈住整段、URL 转义、删除保留 label） | `crates/mdview-app/src/state.rs`（`edit_link`） |
 | **Tab 缩进 / 反缩进**（列表层级、顶层不动、字符偏移回填） | `crates/mdview-app/src/state.rs`（`indent` / `list_position`） |
