@@ -194,6 +194,9 @@ pub struct Reply {
     /// 要写入系统剪贴板的文本（Ctrl+C / Ctrl+X）。前端拿到后自己写剪贴板，
     /// 窗口层不去碰它——那需要额外的宿主能力，而文本真值本来就在内核里。
     pub clipboard: Option<String>,
+    /// 同一段内容的 HTML 版本，供富文本粘贴目标（Word / 飞书）保留格式。
+    /// 由选区源码重新解析得到；解析失败时退化为纯文本，不影响复制。
+    pub clipboard_html: Option<String>,
     pub conflict: bool,
     pub saved: bool,
     /// 内核没有落盘路径，需要宿主先问用户要一个（另存为）。
@@ -356,7 +359,15 @@ impl Session {
                 Effect::NeedsPath => reply.needs_path = true,
                 Effect::WriteFailed { message } => reply.error = Some(message),
                 Effect::Conflict => reply.conflict = true,
-                Effect::Clipboard { text } => reply.clipboard = Some(text),
+                Effect::Clipboard { text } => {
+                    // 复制出去的是源码；富文本目标需要 HTML，就地按同一份源码重渲染
+                    reply.clipboard_html = Some(
+                        mdview_markdown::MarkdownParser::gfm()
+                            .parse(&text)
+                            .to_html(&text),
+                    );
+                    reply.clipboard = Some(text);
+                }
                 // 增量解析调度由内核内部实现；选区高亮随 Reply 顶层字段一起下发
                 Effect::ScheduleParse { .. } | Effect::Selection { .. } => {}
             }
@@ -598,6 +609,21 @@ mod tests {
         // 复制不改文档
         assert_eq!(session.text(), "甲\n\n乙");
         assert!(!reply.dirty);
+    }
+
+    #[test]
+    fn copy_reports_source_and_a_rich_html_version() {
+        let session = session("**粗体**");
+        session.dispatch(Wire::SelectAll);
+        let reply = session.dispatch(Wire::Copy);
+        assert_eq!(reply.clipboard.as_deref(), Some("**粗体**"));
+        let html = reply.clipboard_html.expect("复制要附带 HTML 版本");
+        assert!(
+            html.contains("<strong>粗体</strong>"),
+            "富文本复制应保留加粗，实际：{html}"
+        );
+        // 复制不改文档
+        assert_eq!(session.text(), "**粗体**");
     }
 
     #[test]

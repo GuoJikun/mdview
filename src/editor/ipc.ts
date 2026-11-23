@@ -97,6 +97,8 @@ export interface Reply {
   selection?: [number, number] | null;
   /** 要写入系统剪贴板的文本（Ctrl+C / Ctrl+X）。 */
   clipboard?: string | null;
+  /** 同一段内容的 HTML 版本，用于保留格式的富文本粘贴。 */
+  clipboard_html?: string | null;
   conflict: boolean;
   saved: boolean;
   /** 内核没有落盘路径，需要弹保存对话框。置位时 dirty/saved 都不动。 */

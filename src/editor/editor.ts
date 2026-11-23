@@ -10,6 +10,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { ThemeMode } from '../bridge';
 import { createLineMotion, scrollDelta } from './caretline.js';
 import { copyText } from './clipboard.js';
+import { htmlToMarkdown, looksLikeRichHtml } from './html-to-md.js';
 import { clampToBox, createDragAutoScroll, edgeSpeed } from './dragscroll.js';
 import {
   buildMatcher,
@@ -1300,7 +1301,7 @@ function applyReply(reply: Reply) {
       sourceEl.value = sourceText;
     }
   }
-  if (typeof reply.clipboard === 'string') writeClipboard(reply.clipboard);
+  if (typeof reply.clipboard === 'string') writeClipboard(reply.clipboard, reply.clipboard_html);
   if (reply.conflict) toast('文件已被外部修改，保存被拒');
   else if (reply.error) toast(reply.error);
   if (reply.saved) {
@@ -1324,9 +1325,9 @@ function applyReply(reply: Reply) {
  */
 let lastClipboard: string | null = null;   // 最近一次交出去的文本，自检用它核对整条链路
 
-function writeClipboard(text: string) {
+function writeClipboard(text: string, html?: string | null) {
   lastClipboard = text;
-  copyText(text)
+  copyText(text, html ?? '')
     .then((ok) => {
       if (!ok) toast('复制失败：系统剪贴板不可用');
     })
@@ -1680,13 +1681,25 @@ type WindowWithClipboard = Window & { clipboardData?: DataTransfer };
 window.addEventListener('paste', (event) => {
   // 源码视图：让 textarea 原生粘贴源文本，随后 input 事件整篇同步给内核。
   if (window.__mdviewMode === 'source') return;
+  // 查找 / 替换 / 链接面板里的输入框自己处理粘贴，别把内容插进正文
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  if (target && (target.closest('#findbar') || target.closest('#linkedit'))) return;
   // Windows 上 `clipboardData` 一定在；老 WebView 才有 window 兜底，故一并保留
   const data = event.clipboardData ?? (window as WindowWithClipboard).clipboardData;
   const text = data?.getData('text/plain') ?? '';
-  if (!text) return;
+  const html = data?.getData('text/html') ?? '';
+  // 富文本优先：从浏览器 / Word 复制过来的标题、列表、表格转成 Markdown。
+  // 纯文本复制（VSCode、终端）也会带一份 <div> 包起来的 HTML，那种不转，
+  // 否则每一行都会被拆成独立段落、缩进也会丢。
+  let payload = text;
+  if (html && looksLikeRichHtml(html, text)) {
+    const markdown = htmlToMarkdown(html);
+    if (markdown) payload = markdown;
+  }
+  if (!payload) return;
   event.preventDefault();
   if (window.__mdviewMode === 'reading') return;  // 阅读视图只读
-  send({ kind: 'insertText', text });
+  send({ kind: 'insertText', text: payload });
 });
 
 // 文件拖进窗口时，浏览器默认会尝试把应用导航到该文件（整个界面被顶掉）。

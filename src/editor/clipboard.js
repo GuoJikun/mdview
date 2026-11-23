@@ -6,9 +6,28 @@
  * 照 DOM 拼出来的是「看到的」，而复制出去的必须是「能重新解析回同样结构的」。
  */
 
-/** 剪贴板写入成功与否（失败只影响这一次复制，不该打断编辑）。 */
-async function copyText(text) {
+/**
+ * 剪贴板写入成功与否（失败只影响这一次复制，不该打断编辑）。
+ *
+ * `html` 非空时优先走 ClipboardItem，同时写 `text/html` 与 `text/plain`——
+ * 粘到 Word / 飞书保留加粗与标题，粘回纯文本编辑器仍是源码。
+ * ClipboardItem 不可用（老 WebView / 非安全上下文）时退回纯文本。
+ */
+async function copyText(text, html = '') {
   if (typeof text !== 'string' || text.length === 0) return false;
+  if (html && typeof ClipboardItem === 'function' && navigator.clipboard?.write) {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+        }),
+      ]);
+      return true;
+    } catch (err) {
+      // 权限被拒或类型不支持：下面退回纯文本
+    }
+  }
   // 首选异步 API：WebView2 里 tauri.localhost 属于安全上下文，正常可用
   try {
     if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
