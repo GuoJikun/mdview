@@ -304,7 +304,7 @@ byte   0  2  5  8  10
 - ✅ **字数统计**（2026-11-23）：`AppState::word_count` 按块统计 `plain_text` 的非空白字符，不含 Markdown 标记；随 `Snapshot` 与每次 `Reply` 下发，状态栏显示「字数」。Rust 单测 3 项 + 自检 2 项
 - ✅ **最近打开文件**（2026-11-23）：宿主侧 `recent.json`（应用配置目录，最多 10 条，去重后提到最前）。打开文件、另存为、带文件参数启动都会记录；`--self-test` 不写。Windows / Linux 的自绘菜单由 `bridge.recent` 运行时填充（文件名 + `title` 完整路径 + 清除记录）；macOS 原生菜单在每次记录变化后重建，空表显示「（暂无）」。Rust 单测 6 项 + 自检 1 项
 - ✅ **拖放打开文件**（2026-11-23）：`WindowEvent::DragDrop` 在宿主侧判定落进来的是不是存在的 `.md/.markdown/.txt`（大小写不敏感），只发路径给前端复用 `open_file`，未保存改动的确认与菜单打开完全一致；拖入时正文铺一圈虚线，松手/离开撤掉。前端另挡掉 webview 对文件拖放的默认导航。Rust 单测 1 项（拖放本身不可合成，未进自检）
-- ⬜ 粘贴 HTML 规范化（sanitize 后转 Markdown，不能直接注入）
+- ✅ **粘贴 HTML 规范化 / 复制富文本**（2026-11-23）：`html-to-md.js` 把富文本转 Markdown——标题、段落、列表（含嵌套）、引用、代码块（保留语言与反引号围栏）、GFM 表格（对齐、竖线转义、无表头补空表头）、链接/图片（协议白名单，`javascript:` 与非图片 `data:` 丢弃）、粗斜体/删除线/行内代码、分隔线；脚本 / 样式 / 表单控件整段丢弃，字面量元字符转义。粘贴时只有出现结构标签才转换：VSCode / 终端复制的纯文本也带 `<div>` HTML，按 HTML 转会拆段、吃缩进，这类仍走 `text/plain`。复制时内核用 `MarkdownParser::gfm().parse(选区源码).to_html()` 附带 HTML，前端一次 `ClipboardItem` 写 `text/html` + `text/plain`，粘到 Word / 飞书保留格式；`ClipboardItem` 不可用时退回纯文本。接线顺带修掉「在查找 / 链接面板输入框里粘贴会被插进正文」。HTML 转换 dom 用例 20 项、剪贴板 4 项，Rust 复制 HTML 1 项
 - ✅ **数学公式**（2026-11-21）：`MarkdownParser::gfm()` 开启 `ENABLE_MATH`，`project.rs` 把 `InlineMath` / `DisplayMath` 落成 `SpanKind::Math { display }`，定界符按「恰好 want 个 `$`」内缩进 `hidden` 并登记为 `MarkerPair`（退格可整对抽掉，与行内代码同一套逻辑）。编辑态每个公式字符带 `.m`、保留全部 `data-b/data-a` 停靠点；阅读态 `to_html` 输出 `<code class="m">` / `<code class="m md">`，后者由 CSS 居中排版。`app.css` 与 CLI 验证页同步配色，明暗主题各有变量。Rust 单测 4 项 + 应用层配对删除 1 项全过
 - ✅ **脚注完整链路**（2026-11-21）：`project.rs` 收集全篇 `FootnoteReference` / `FootnoteDefinition` 事件，按引用首次出现顺序分配编号并回填到 `SpanKind::FootnoteReference { label, number }` 与 `BlockKind::FootnoteDefinition { label, number, references }`。阅读态 `to_html` 输出上标序号 + `<a href="#fnN">`、编号定义块与逐处回链 `↩`；编辑态定义独立成 `kind-footnote` 块，`id="fnN"` + `data-fn` 供跳转，标签前缀仍折叠（CSS `::before` 显示序号），回链放在块尾且不带 `data-b`、不占停靠点。引用字符带 `data-fnref/data-fnbyte` 与锚点 id，前端 Ctrl/Cmd+Click（阅读态单击）跳定义、回链跳回引用。定义正文照常逐字符可编辑，源码真值不变。Rust 单测 5 项 + 应用层编辑 1 项全过
 - ⬜ 大文档虚拟化（5 万字以下不做；DOM 节点数与跨块选区天然冲突）
@@ -343,8 +343,8 @@ byte   0  2  5  8  10
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-23（多窗口、最近打开、字数统计、拖放打开、查找替换（含 VSCode 式开关与选区内查找）、Tab 缩进、链接/图片行内编辑；自检 89/89 实跑，另用 CDP 实测三窗口各自独立）
-- 测试：**Rust 264 项全过**（app 93 / markdown 124 / desktop bin 33 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **122 项**（unit 104：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6、`find` 23；dom 18：内核启动、CRLF 视图、环境能力、滚动条），由 `pnpm test` 一次跑完
+- 日期：2026-11-23（多窗口、最近打开、字数统计、拖放打开、粘贴 HTML / 复制富文本、查找替换（含 VSCode 式开关与选区内查找）、Tab 缩进、链接/图片行内编辑；自检 89/89 实跑，另用 CDP 实测三窗口各自独立与粘贴链路）
+- 测试：**Rust 265 项全过**（app 93 / markdown 124 / desktop bin 34 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **146 项**（unit 108：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6、`find` 23、`clipboard` 4；dom 38：内核启动、CRLF 视图、环境能力、滚动条、HTML→Markdown 20），由 `pnpm test` 一次跑完
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
 - 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 89/89」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 9 项**、**字数 2 项**、**查找替换 8 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
@@ -410,13 +410,13 @@ byte   0  2  5  8  10
    - 由此带出**重合停靠点**的坑，两端已经区别处理：
      - **词首（已修）**：块首 `**`、`# `、`- `、`> ` 的左右两端落在同一视觉列，「标记之前」这个位置用户永远分不清，Delete 会变成「整对去格式」而不是删第一个字。现在**左侧没有可见文字时只产生右端停靠点**（`Layout::build` 的 `has_visible`），← 也不会再空转一步。
      - **词尾（保留）**：闭合标记之前 / 之后仍是两个停靠点——前者退格删字、后者去格式。点选与 `End` 落到后者，`←` 先经过前者。要统一为「删字」也行，但会失去「不删字只去格式」的入口，等手感反馈再定。
-10. ~~**原生选区未隔离**~~ **已修**：`selectionchange` 时清空浏览器选区，只留自绘 `.sel`；透明输入框内部的选区放行（清掉会打断输入法）。`#doc ::selection` 留了一条透明兜底，防清理晚一帧时两套高亮叠加。**Ctrl+A 已由内核的 `selectAll` 补上**（见第 9 节），代价是这三个组合键全都不再由浏览器提供：撤销、粘贴仍是原生行为，但复制走剪贴板 API 后**不写 `text/html`**——粘贴到 Word 里只有纯文本。
+10. ~~**原生选区未隔离**~~ **已修**：`selectionchange` 时清空浏览器选区，只留自绘 `.sel`；透明输入框内部的选区放行（清掉会打断输入法）。`#doc ::selection` 留了一条透明兜底，防清理晚一帧时两套高亮叠加。**Ctrl+A 已由内核的 `selectAll` 补上**（见第 9 节），代价是这三个组合键全都不再由浏览器提供：撤销、粘贴仍是原生行为；复制现在同时写 `text/html`（见 M4），粘到 Word 能保留格式，`text/plain` 仍是源码。
 11. ~~**`Home` / `End` 按块首块尾**~~ **已修（M3）**：改用 `caretline.js` 的 `edge()`，按视觉行两端定位；矩形取不到时回退到块首/块尾。
 12. **上下移动依赖当前视口的矩形**：`desiredX` 是视口坐标，窗口缩放或正文容器宽度变化会让它失效，因此 `resize` 时重置。若将来支持水平滚动或分栏，需要一并重置。
 13. **空标题显示为字面 `#`**：这是「标题必须成形」的刻意取舍（见第 6 节 M3）。代价是文件里真有 `#` 独自成行的空标题时，打开后会显示成段落文本 `#`。要区分「用户正在输入」与「文件本来如此」，得把光标位置引到投影层；目前不做。
 14. **空段落 = 三行空行**：文档中间的空段落（退出列表后等待输入的那一行）只能靠「分隔 + 空段落 + 分隔」三行空行表达（见第 2 节硬约束 14）。代价有两条：① 手写的文件里本来就有三行以上空行时，中间那几行会渲染成空段落，视觉上比之前多一行；② 空段落没被使用时，文件里就留着三行空行。敲下第一个字之后会自动收敛成正常的两段（`- 甲` + 空行 + `X` + 空行 + `正文`），所以只有「退出列表但没写字」的瞬间才看得到。
 15. **滚动与光标跟随的边界**：页面滚动时只重画光标像素、不再「保证可见」；落点没变也不追视口（不然任何一次重绘回包都会抵消用户的滚动）。这条无法用 `--self-test` 回归：合成出来的滚动是程序化滚动，Chromium 会抑制滚动期间的脚本滚动，有没有这层修复都测不出差别；能测的只有 `scrollDelta` 的几何（`src/editor/__tests__/caretline.test.ts`）与「按键后光标重新可见」。
-16. **剪贴板写入可能在无焦点窗口里挂起**：`navigator.clipboard.writeText` 在窗口没拿到焦点时，Chromium 会把请求挂住等一个不会来的授权，Promise 永远不 settle。生产里只影响「复制好像没反应」，但**自检会整条卡死**——所以自检里对它的等待必须自带 `Promise.race` 超时。另外 `execCommand('copy')` 兜底会短暂抢走 `#ime` 的焦点，调用方要还回去，否则输入法组合被中断。
+16. **剪贴板写入可能在无焦点窗口里挂起**：`navigator.clipboard.writeText` / `write` 在窗口没拿到焦点时，Chromium 会把请求挂住等一个不会来的授权，Promise 永远不 settle。生产里只影响「复制好像没反应」，但**自检会整条卡死**——所以自检里对它的等待必须自带 `Promise.race` 超时。另外 `execCommand('copy')` 兜底会短暂抢走 `#ime` 的焦点，调用方要还回去，否则输入法组合被中断。
 17. **其它块级标记的同类抖动未处理**：`>`（引用）与 `***`／`---`（分隔线）也会在敲完最后一个字符的瞬间改变块类型。它们不涉及字号跳变，先不动；若将来统一处理，应复用同一套「成形」判定。
 18. ~~**菜单没有「新建」**~~ **已修（2026-11-21）**：文件菜单补齐「新建 / 打开文件… / 保存 / 另存为… / 关闭窗口」，`Ctrl+N` 可用。新建**不在硬盘上落文件**——只在内存里换成未命名空文档（`Session::new_file` → `AppState::open("", None)`），与「双击图标启动」是同一条状态路径；首次 Ctrl+S 才弹保存对话框落盘，这样既不会留下空文件，也不用维护两套入口语义。
     - 同批修掉的两个丢稿缺口：① 未命名文档按 Ctrl+S 不再谎称「已保存」（`Effect::NeedsPath` → 弹框 → `saveTo`），写盘失败从 `Conflict` 拆成 `Effect::WriteFailed`；② 关窗与换文档前检查 dirty——`CloseRequested` 由 `on_window_event` 拦截（`CloseGuard` 放行标志 + `close-requested` 事件），`open_file` / `new_file` 前用 `ask_discard` 问一句。自检模式下确认框一律放行，否则会挂死。
@@ -428,14 +428,14 @@ byte   0  2  5  8  10
 
 ## 9. 下一步（按推荐顺序）
 
-1. ~~**`selectAll`**~~ **已完成**：全选 / 复制 / 剪切三条消息 + `Ctrl+A` / `Ctrl+C` / `Ctrl+X`。剩下的相关缺口是 **粘贴**——`paste` 事件直接把 `clipboardData` 的纯文本发给 `InsertText`，还没有 HTML→Markdown 的规范化（见 M4）
+1. ~~**`selectAll`**~~ **已完成**：全选 / 复制 / 剪切三条消息 + `Ctrl+A` / `Ctrl+C` / `Ctrl+X`。~~剩下的相关缺口是 **粘贴**~~ **已完成（2026-11-23）**：粘贴 HTML→Markdown + 复制 `text/html`，见 M4。
 2. ~~**选区拖动到窗口边缘的自动滚动**~~ **已完成**：`src/dragscroll.js` + `--self-test` 三项。剩下的相邻缺口只有「拖到窗口左右两侧时横向自动滚动」——正文不横向滚动，当前不需要。
 3. ~~**`Watcher` 落地**（`notify`）~~ **已完成（M1，2026-11-20）**：`NotifyWatcher` + 父目录监听 + 指纹二次确认 + `external-change` 事件 + 前端 toast。
 4. ~~**M2 收尾**~~ **已完成（2026-11-20）**：主题系统、大纲侧栏、同步滚动（锚点插值）——见第 6 节 M2。
 5. **词尾重合停靠点的退格语义**：词首已经收敛为一处（不可见的那端不再产生停靠点），词尾仍保留两个（见第 8 节第 9 条），需要按实际手感定方向。
 6. ~~**表格子工程**~~ **已完成（2026-11-20）**：`<table>` 网格渲染 + 单元格内停靠点 + Tab 跨格 + 行列增删 + IPC/工具条 + 端到端自检 6 项——见第 6 节 M4。
 7. **引用 / 分隔线的成形判定**：见第 8 节第 17 条，与标题同源，可复用判定函数。
-8. **粘贴 HTML 规范化**：`paste` 仍只取 `text/plain`，从网页复制来的格式全丢；需要 sanitize 后转 Markdown（见 M4）。
+8. ~~**粘贴 HTML 规范化**~~ **已完成（2026-11-23）**：`html-to-md.js` + 剪贴板双格式写入，见 M4。
 9. **`**` 自动配对与段末 Delete 合并**：见 M3 的剩余项。
 10. **表格剩余能力**：排序、单元格内多段落、跨格复制（见第 8 节第 2 条）。
 11. **发版图标**：`src-tauri/icons` 仍是 32×32 占位，正式发版前用 1024×1024 源图跑 `pnpm tauri icon`。
@@ -514,7 +514,8 @@ pnpm test:watch                             # 改代码时盯着
 | **拖选时的边缘自动滚动**（速度曲线、探针点压缩、自走帧循环，不碰 DOM） | `src/editor/dragscroll.js`、`src/editor/__tests__/dragscroll.test.ts` |
 | **浏览器里的内核启动用例**（铺 index.html 骨架 + mock IPC + 断言光标像素） | `src/editor/__tests__/editor.dom.test.ts`、`src/editor/__tests__/env.dom.test.ts` |
 | 自检样张（必须是「一块一行」的文档） | `src-tauri/tests/fixtures/selftest.md` |
-| **剪贴板写入**（内核给文本、前端写系统剪贴板，`execCommand` 兜底） | `src/editor/clipboard.js` |
+| **剪贴板写入**（内核给文本 + HTML、前端一次 `ClipboardItem` 写双格式，`execCommand` 兜底） | `src/editor/clipboard.js` |
+| **HTML → Markdown**（标题 / 列表 / 引用 / 代码块 / 表格 / 链接 / 图片 / 行内格式，协议白名单，纯逻辑） | `src/editor/html-to-md.js`、`src/editor/__tests__/html-to-md.dom.test.ts` |
 | **查找替换纯逻辑**（UTF-16→UTF-8 下标、全词 / 正则匹配、`$1` 展开、保留大小写、批量替换，不碰 DOM） | `src/editor/find.js`、`src/editor/__tests__/find.test.ts` |
 | **查找替换接线**（VSCode 式浮层、三个内联开关、命中高亮、跳转、替换、选区内查找、防抖重算） | `src/editor/editor.ts`、`index.html`（`#findbar`）、`app.css` |
 | **链接 / 图片行内编辑**（面板、`data-href`/`data-asset` 预填、Esc/外部点击收起） | `src/editor/editor.ts`、`index.html`（`#linkedit`）、`app.css` |
