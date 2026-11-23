@@ -12,6 +12,17 @@ use mdview_markdown::{
 
 use crate::ports::{FileStore, Fingerprint, RenderFrame};
 
+/// 段末 Delete 的走向，见 `AppState::block_end_delete`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BlockEndDelete {
+    /// 不是块尾（或块尾不是文本块）：按普通单字符删除。
+    Plain,
+    /// 块尾紧邻语法块：空行是分隔，Delete 不动。
+    Hold,
+    /// 把下一块接成同一行（char 区间）。
+    Merge(Range<usize>),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
     /// 所见即所得：源码为真值，视图是其投影
@@ -895,6 +906,20 @@ impl AppState {
         }
     }
 
+    /// 文本类块：Delete 在块尾时可以把下一块接上来。
+    ///
+    /// 代码块、表格、分隔线、HTML 块不参与——在它们两侧吞掉空行会把语法弄坏。
+    fn is_text_block(kind: &BlockKind) -> bool {
+        matches!(
+            kind,
+            BlockKind::Paragraph
+                | BlockKind::Heading(_)
+                | BlockKind::List { .. }
+                | BlockKind::BlockQuote
+                | BlockKind::FootnoteDefinition { .. }
+        )
+    }
+
     fn delete_backward(&mut self) -> Vec<Effect> {
         if self.composing {
             return Vec::new();
@@ -931,10 +956,58 @@ impl AppState {
         if at >= self.document.len_chars() {
             return Vec::new();
         }
+        match self.block_end_delete(byte) {
+            BlockEndDelete::Merge(range) => return self.apply_with_caret(range, "", None),
+            // 语法块前的空行不能删：宁可没反应，也不能把围栏并进段落
+            BlockEndDelete::Hold => return Vec::new(),
+            BlockEndDelete::Plain => {}
+        }
         if let Some(edit) = self.marker_edit_at(byte) {
             return self.delete_marker(edit);
         }
         self.apply(self.expand_deletion(at..at + 1), "")
+    }
+
+    /// 段末 Delete 的三种走向。
+    ///
+    /// 光标停在块尾时，删掉分隔空行有两种后果：文本块之间是「接成一行」，
+    /// 语法块（围栏、表格）之前却会把两段并进同一个段落——`甲\n```\nx\n```"
+    /// 解析出来的是一整段，代码块直接没了。所以语法块前宁可不动。
+    fn block_end_delete(&self, byte: usize) -> BlockEndDelete {
+        let blocks = &self.parsed.blocks;
+        let Some(index) = blocks
+            .iter()
+            .position(|block| block.byte.contains(&byte) || block.byte.end == byte)
+        else {
+            return BlockEndDelete::Plain;
+        };
+        let Some(block) = blocks.get(index) else {
+            return BlockEndDelete::Plain;
+        };
+        if byte != block.byte.end || !Self::is_text_block(&block.kind) {
+            return BlockEndDelete::Plain;
+        }
+        let Some(next) = blocks.get(index + 1) else {
+            return BlockEndDelete::Plain;
+        };
+        if next.byte.start <= byte {
+            return BlockEndDelete::Plain;
+        }
+        // 下一块是代码块/表格/分隔线：空行是语法分隔，删掉就并进段落了
+        if !Self::is_text_block(&next.kind) {
+            return BlockEndDelete::Hold;
+        }
+        let src = self.document.text();
+        let gap = &src[byte..next.byte.start];
+        let line_breaks = gap.chars().filter(|c| *c == '\n').count();
+        let only_space = gap.chars().all(|c| matches!(c, '\n' | '\r' | ' ' | '\t'));
+        // 多出来的空行（含空段落）说明用户留过结构，一次只删一个字符
+        if line_breaks != 2 || !only_space || next.byte.start == next.byte.end {
+            return BlockEndDelete::Plain;
+        }
+        BlockEndDelete::Merge(
+            self.document.byte_to_char(byte)..self.document.byte_to_char(next.byte.start),
+        )
     }
 
     /// 把删除区间扩到「整块语法单元」的边界。
@@ -2345,6 +2418,69 @@ mod tests {
         assert_eq!(caret_byte(&app), 0);
     }
 
+    /// 段末 Delete 一步把下一段接成同一行，而不是留下软换行。
+    #[test]
+    fn delete_at_block_end_joins_next_paragraph_into_one_line() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\n\n乙");
+        click(&mut app, &files, 3);
+        assert_eq!(caret_byte(&app), 3, "光标应落在第一段末尾");
+        app.update(Message::DeleteForward, &files);
+        assert_eq!(app.document.text(), "甲乙");
+        assert_eq!(app.parsed.blocks.len(), 1, "应合成一个段落");
+        assert_eq!(caret_byte(&app), 3, "光标留在接缝处");
+    }
+
+    /// 标题末尾 Delete 同理：内容接进标题，块类型不变。
+    #[test]
+    fn delete_at_heading_end_joins_the_next_paragraph() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "# 标题\n\n正文");
+        click(&mut app, &files, 8);
+        app.update(Message::DeleteForward, &files);
+        assert_eq!(app.document.text(), "# 标题正文");
+        assert!(matches!(app.parsed.blocks[0].kind, BlockKind::Heading(1)));
+    }
+
+    /// 列表项末尾 Delete：下一段并进该项，列表结构保留。
+    #[test]
+    fn delete_at_list_item_end_joins_the_following_paragraph() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "- 甲\n\n乙");
+        click(&mut app, &files, 5);
+        app.update(Message::DeleteForward, &files);
+        assert_eq!(app.document.text(), "- 甲乙");
+    }
+
+    /// 下一块是代码块时不合并：吞掉空行会让围栏和上一段粘在一起。
+    #[test]
+    fn delete_at_block_end_keeps_separator_before_code_block() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\n\n```\nx\n```");
+        click(&mut app, &files, 3);
+        app.update(Message::DeleteForward, &files);
+        // 空行是段落与围栏的分隔，删掉它围栏会并进段落
+        assert_eq!(app.document.text(), "甲\n\n```\nx\n```");
+        assert!(
+            app.parsed
+                .blocks
+                .iter()
+                .any(|block| matches!(block.kind, BlockKind::CodeBlock { .. })),
+            "代码块必须还在"
+        );
+    }
+
+    /// 多出来的空行（三行以上会产生空段落）是用户留的结构，Delete 只删一个字符。
+    #[test]
+    fn delete_at_block_end_leaves_extra_blank_lines_alone() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\n\n\n\n乙");
+        click(&mut app, &files, 3);
+        app.update(Message::DeleteForward, &files);
+        assert_eq!(app.document.text(), "甲\n\n\n乙");
+    }
+
+    /// 输入第二个 `*` 时自动补闭合的 `**`，光标落在中间。
     #[test]
     fn typing_replaces_selection() {
         let mut files = InMemoryFileStore::default();
