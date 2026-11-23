@@ -291,14 +291,19 @@ byte   0  2  5  8  10
   - 整篇选中（首尾贴住文档两端，拖选到头也算）时直接取文件全文：块首折叠标记左边没有停靠点（硬约束 13），按停靠点取会漏掉第一行的 `# `
   - 剪切 = 复制 + 删选区；删除仍走 `expand_deletion`（掏空 `**粗**` 时连标记一起收），剪贴板里只放选中的那段，一次事务可整体撤销
   - 内核不碰剪贴板：`Effect::Clipboard { text }` 只产出文本，写入由前端 `src/clipboard.js` 完成（`navigator.clipboard` → `execCommand` 兜底）
-- 🔶 输入格式化：回车拆分与列表/引用延续已做；Tab 缩进、`**` 自动配对、Delete 合并块未做
+- ✅ **Tab 缩进 / Shift+Tab 反缩进**（2026-11-23）：`Message::Indent` 按列表层级改行首空白，普通块仍在光标处插两个空格（Shift+Tab 删行首空格）。列表顶层第一项没有父级、顶层项不能再外缩，两种情况都直接不动。光标用**字符**偏移回填——不能拿新文本里的字节位置去换旧文本的字符，中文项会在多字节字符中间截断。Rust 单测 4 项 + 自检 2 项
+- 🔶 输入格式化剩余项：`**` 自动配对、Delete 在段末把两段接成同一行（现只删换行，留下软换行）未做
 
 ### M4 细节 🔶
 - ✅ **表格子工程**（2026-11-20）：仍是源码块，但解析层从 pulldown 事件抽出 `TableGrid / TableRow / TableCell / ColumnAlign`（行列、单元格 byte 区间、对齐），只服务于投影和导航、不替代源码真值。`preview.rs` 把同一组线性停靠点铺进真正的 `<table class="md-table">` 网格，保留全部 `data-b`/`data-a`，行尾换行改零宽标记。应用层新增 `TableMoveCell` / `TableInsertRow` / `TableDeleteRow` / `TableInsertColumn` / `TableDeleteColumn`，所有操作最终转成源码替换事务；表头行插行强制落在分隔行之后，删行禁止删表头/分隔行，删列至少保留一列。前端 Tab 跨格 + 状态栏行列工具条；阅读态 `to_html` 补 `<tr>/<th>/<td>` 与对齐 style（并修掉嵌套 `<table>`）。**表格默认带 1px 边框与 4px 圆角**：根因是桌面端 `app.css` 完全没有表格样式（网格 CSS 只写在 CLI 验证页的 `preview.rs`），已补齐并用主题变量 `--rule`/`--code-bg` 适配深浅色；CLI 验证页与阅读态内联样式同步统一。Rust 单测 + 会话测试 + 端到端自检（新增 8 项）全过
 - ✅ 大纲数据层（`ParseResult::outline`）
 - ✅ **外链打开**（2026-11-21）：投影里的链接字符只带 `data-href`，**不产出 `<a href>`**——有锚点的话点一下 webview 就把整个应用导航走，且没有后退可言（中键、拖拽、右键菜单都能绕过 click 拦截，所以干脆不给出可导航的锚点）。前端在 `#doc` 上接管 click：编辑态 Ctrl/Cmd+Click、阅读态单击，转成 `open_url` 命令落到系统 shell（Windows 直调 `ShellExecuteW`，macOS `open`，Linux `xdg-open`，不引 opener 插件）。三个必须的细节：① URL 白名单只放行 `http(s)` / `mailto`，因为 `[x](javascript:...)` 是合法 Markdown，`dest_url` 会原样落进属性；② 链接的每个字符各挂一份 `data-href`，点击命中的是单个字符元素、与同链接其它字符是平级兄弟，`closest` 读不到邻居身上的属性；③ 拖选之后浏览器也会补发一次 click，位移超过 4px 视为选字。编辑态不让单击跟随链接是硬要求：正文整块都是可编辑区，抢走单击等于废掉「点哪儿光标落哪儿」
 - ✅ **代码高亮**（2026-11-21）：解析层新增 `highlight.rs`，用自带的轻量词法扫描给围栏代码块产出 byte 区间 token（关键字 / 类型 / 字面量 / 字符串 / 注释 / 数字 / 函数 / 变量 / 标签 / 属性 / 运算符），覆盖 Rust、JS/TS、Python、JSON、HTML/XML、CSS、Shell、Go、C/C++、Java/C#、SQL、YAML、TOML、Markdown。**不引 `syntect` / `tree-sitter-highlight`**：前者要背整套语法包，后者是 C grammar，都会破坏 `mdview-markdown` 的纯 Rust 零依赖约束；这里只需要粗粒度着色，自带扫描更可控。token 挂在 `Block::tokens`，渲染时按字符停靠点查表加 `tk-*` class——编辑态与阅读态共用同一套 DOM，**停靠点集合、光标、选区、增量 patch 全不变**；阅读态 `to_html` 另按 token 切段包 `<span class="tk …">`。未知语言不着色，按原文显示
-- ⬜ 链接/图片行内编辑
+- ✅ **链接/图片行内编辑**（2026-11-23）：编辑态单击链接或图片弹出小面板，可改地址与文字（图片为 alt）、删除或打开。内核 `Message::EditLink { stop, url?, text?, remove }` 按停靠点找到覆盖它的 Link/Image 片段；Link 片段只覆盖 label，必须借 `Block::markers` 的配对把 `[label](url)` 整段圈进来再重写，label 里原有的 `**` 等行内标记原样保留。URL 含空白或圆括号时用 `<...>` 包起来。整段重写是一次事务、一步撤销。Rust 单测 4 项 + 自检 6 项
+- ✅ **查找 / 替换**（2026-11-23）：`Ctrl+F` / `Ctrl+H` 唤起浮层，`Enter` / `Shift+Enter` 前后跳，`Esc` 关闭；全部替换走 `replaceSource` 一次事务。搜索对象是**源码**（`src/editor/find.js` 的 `findAll` + `utf8Offsets`），命中下标先换成 UTF-8 字节，再用每个字符元素的 `data-byte` 二分出停靠点区间交给内核 `Select`。落在折叠标记里的命中（如搜 `**`）选出来是零宽，直接跳过。高亮用一根游标扫 `marks`，不做元素数 × 命中数的包含判断；文档编辑后 60ms 防抖重算，但不抢光标。纯逻辑单测 12 项 + 自检 6 项
+- ✅ **字数统计**（2026-11-23）：`AppState::word_count` 按块统计 `plain_text` 的非空白字符，不含 Markdown 标记；随 `Snapshot` 与每次 `Reply` 下发，状态栏显示「字数」。Rust 单测 3 项 + 自检 2 项
+- ✅ **最近打开文件**（2026-11-23）：宿主侧 `recent.json`（应用配置目录，最多 10 条，去重后提到最前）。打开文件、另存为、带文件参数启动都会记录；`--self-test` 不写。文件菜单的「最近打开」子菜单由 `bridge.recent` 运行时填充，路径只放文件名、`title` 给完整路径，另有「清除记录」。Rust 单测 4 项 + 自检 1 项
+- ✅ **拖放打开文件**（2026-11-23）：`WindowEvent::DragDrop` 在宿主侧判定落进来的是不是存在的 `.md/.markdown/.txt`（大小写不敏感），只发路径给前端复用 `open_file`，未保存改动的确认与菜单打开完全一致；拖入时正文铺一圈虚线，松手/离开撤掉。前端另挡掉 webview 对文件拖放的默认导航。Rust 单测 1 项（拖放本身不可合成，未进自检）
 - ⬜ 粘贴 HTML 规范化（sanitize 后转 Markdown，不能直接注入）
 - ✅ **数学公式**（2026-11-21）：`MarkdownParser::gfm()` 开启 `ENABLE_MATH`，`project.rs` 把 `InlineMath` / `DisplayMath` 落成 `SpanKind::Math { display }`，定界符按「恰好 want 个 `$`」内缩进 `hidden` 并登记为 `MarkerPair`（退格可整对抽掉，与行内代码同一套逻辑）。编辑态每个公式字符带 `.m`、保留全部 `data-b/data-a` 停靠点；阅读态 `to_html` 输出 `<code class="m">` / `<code class="m md">`，后者由 CSS 居中排版。`app.css` 与 CLI 验证页同步配色，明暗主题各有变量。Rust 单测 4 项 + 应用层配对删除 1 项全过
 - ✅ **脚注完整链路**（2026-11-21）：`project.rs` 收集全篇 `FootnoteReference` / `FootnoteDefinition` 事件，按引用首次出现顺序分配编号并回填到 `SpanKind::FootnoteReference { label, number }` 与 `BlockKind::FootnoteDefinition { label, number, references }`。阅读态 `to_html` 输出上标序号 + `<a href="#fnN">`、编号定义块与逐处回链 `↩`；编辑态定义独立成 `kind-footnote` 块，`id="fnN"` + `data-fn` 供跳转，标签前缀仍折叠（CSS `::before` 显示序号），回链放在块尾且不带 `data-b`、不占停靠点。引用字符带 `data-fnref/data-fnbyte` 与锚点 id，前端 Ctrl/Cmd+Click（阅读态单击）跳定义、回链跳回引用。定义正文照常逐字符可编辑，源码真值不变。Rust 单测 5 项 + 应用层编辑 1 项全过
@@ -337,13 +342,13 @@ byte   0  2  5  8  10
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-21（新增代码高亮；数据安全闭环 + 前端测试迁到 vitest。自检 65/65 为上次结果，本次未重跑）
-- 测试：**Rust 230 项全过**（app 81 / markdown 114 / desktop bin 21 + 前端守门 2 / core 5 / support 7），`mdview-markdown` clippy 无告警。前端守门那 2 项是：`node --check` 七个 `.js` 模块 + 跑 vitest 的 unit project（7 文件 81 项：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6）。另有 **dom project 10 项**（真实 Chromium 里的内核启动与浏览器能力自检），由 `pnpm test:dom` 单独跑——它要拉一个浏览器实例，塞进 `cargo test` 会让 Rust 流水线变慢且依赖本机装没装 Chrome
+- 日期：2026-11-23（最近打开、字数统计、拖放打开、查找替换、Tab 缩进、链接/图片行内编辑；自检 86/86 实跑）
+- 测试：**Rust 258 项全过**（app 93 / markdown 124 / desktop bin 27 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **111 项**（unit 93：`ime` 13、`caretline` 21、`selection` 4、`dragscroll` 16、`outline` 10、`theme` 11、`update-format` 6、`find` 12；dom 18：内核启动、CRLF 视图、环境能力、滚动条），由 `pnpm test` 一次跑完
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 65/65」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 8 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 86/86」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 9 项**、**字数 2 项**、**查找替换 6 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
-  - **判定以 `tauri dev` 链路为准**：同参数走 `cargo run` 会稳定少 1 项，失败项固定是「系统剪贴板可写」——该链路窗口拿不到焦点时 `navigator.clipboard.writeText` 被拒。属链路差异，不是回归
+  - **必须走 `pnpm tauri dev`**：debug 构建会按 `devUrl` 加载 `http://localhost:1450`，直接 `cargo run` 时没有 Vite，窗口标题只有配置里的 `mdview`、页面白屏、日志停在「启动」一行——不是回归。同参数走 `tauri dev` 时窗口拿得到焦点，「系统剪贴板可写」才判得为真
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
 - 最近提交（Angular 规范）：
   - `feat: 初始化内核、解析投影与日志`
@@ -416,6 +421,7 @@ byte   0  2  5  8  10
     - 同批修掉的两个丢稿缺口：① 未命名文档按 Ctrl+S 不再谎称「已保存」（`Effect::NeedsPath` → 弹框 → `saveTo`），写盘失败从 `Conflict` 拆成 `Effect::WriteFailed`；② 关窗与换文档前检查 dirty——`CloseRequested` 由 `on_window_event` 拦截（`CloseGuard` 放行标志 + `close-requested` 事件），`open_file` / `new_file` 前用 `ask_discard` 问一句。自检模式下确认框一律放行，否则会挂死。
 19. **块级公式内含空行时不被识别**：pulldown-cmark 把 math 的定界符跟踪限制在单个块内，`$$\na\n\nb\n$$` 中的 `$$` 会退化成字面文本（mdview 的 `split_blocks` 同样按空行切块，行为一致）。多段公式请把空行去掉，或用多个 `$$…$$`。
 20. **脚注里的复杂块级结构不分层**：定义内的列表 / 代码块 / 引用会被拍平成带换行的普通片段（定义块本身仍独立）。脚注以短段落为主，复杂结构请放到正文；另外无定义的 `[^x]` 按 pulldown 行为保留为字面文本。
+21. **macOS 原生菜单没有「最近打开」**：原生菜单只在 setup 时构建一次，运行时列表变化要重建并重新 `set_menu`；当前只做了自绘菜单（Windows / Linux）。拖放打开走 `WindowEvent::DragDrop`，Linux 上能否收到该事件由 tauri 运行时决定，未实机验证。
 
 ---
 
@@ -428,6 +434,10 @@ byte   0  2  5  8  10
 5. **词尾重合停靠点的退格语义**：词首已经收敛为一处（不可见的那端不再产生停靠点），词尾仍保留两个（见第 8 节第 9 条），需要按实际手感定方向。
 6. ~~**表格子工程**~~ **已完成（2026-11-20）**：`<table>` 网格渲染 + 单元格内停靠点 + Tab 跨格 + 行列增删 + IPC/工具条 + 端到端自检 6 项——见第 6 节 M4。
 7. **引用 / 分隔线的成形判定**：见第 8 节第 17 条，与标题同源，可复用判定函数。
+8. **粘贴 HTML 规范化**：`paste` 仍只取 `text/plain`，从网页复制来的格式全丢；需要 sanitize 后转 Markdown（见 M4）。
+9. **`**` 自动配对与段末 Delete 合并**：见 M3 的剩余项。
+10. **表格剩余能力**：排序、单元格内多段落、跨格复制（见第 8 节第 2 条）。
+11. **发版图标**：`src-tauri/icons` 仍是 32×32 占位，正式发版前用 1024×1024 源图跑 `pnpm tauri icon`。
 
 每完成一项，更新第 6 节状态、第 7 节快照，并用 Angular 规范提交。
 
@@ -504,6 +514,14 @@ pnpm test:watch                             # 改代码时盯着
 | **浏览器里的内核启动用例**（铺 index.html 骨架 + mock IPC + 断言光标像素） | `src/editor/__tests__/editor.dom.test.ts`、`src/editor/__tests__/env.dom.test.ts` |
 | 自检样张（必须是「一块一行」的文档） | `src-tauri/tests/fixtures/selftest.md` |
 | **剪贴板写入**（内核给文本、前端写系统剪贴板，`execCommand` 兜底） | `src/editor/clipboard.js` |
+| **查找替换纯逻辑**（UTF-16→UTF-8 下标、命中列表、批量替换，不碰 DOM） | `src/editor/find.js`、`src/editor/__tests__/find.test.ts` |
+| **查找替换接线**（浮层、高亮、跳转、替换、防抖重算） | `src/editor/editor.ts`、`index.html`（`#findbar`）、`app.css` |
+| **链接 / 图片行内编辑**（面板、`data-href`/`data-asset` 预填、Esc/外部点击收起） | `src/editor/editor.ts`、`index.html`（`#linkedit`）、`app.css` |
+| **链接 / 图片改写事务**（标记对圈住整段、URL 转义、删除保留 label） | `crates/mdview-app/src/state.rs`（`edit_link`） |
+| **Tab 缩进 / 反缩进**（列表层级、顶层不动、字符偏移回填） | `crates/mdview-app/src/state.rs`（`indent` / `list_position`） |
+| **字数统计**（按块 `plain_text` 数非空白字符） | `crates/mdview-app/src/state.rs`（`word_count`）、`src/components/StatusBar.vue` |
+| **最近打开持久化**（`recent.json`、去重、上限 10） | `src-tauri/src/recent.rs` 与 `main.rs` 的 `recent_files` / `clear_recent_files` |
+| **拖放打开**（`WindowEvent::DragDrop` → `drop-open` / `drop-hover`） | `src-tauri/src/main.rs`（`first_markdown`）、`src/editor/editor.ts` |
 | **键位契约**（`Ctrl+A/C/X` → `selectAll`/`copy`/`cut`，见 `editor.ts` 的 keydown） | `src/editor/editor.ts`、`src-tauri/src/session.rs` |
 | 前端守门测试（语法检查七个 `.js` + 跑 vitest 的 unit project；dom project 不进 cargo test） | `src-tauri/tests/web_ime.rs`、`vitest.config.ts` |
 | **Vue 外壳入口**（挂载、单入口 import、UA 首帧判定、平台复核） | `src/main.ts`、`src/platform.ts`、`src/App.vue` |
