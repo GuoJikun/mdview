@@ -12,6 +12,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod link;
+mod recent;
 mod session;
 mod update;
 
@@ -50,8 +51,32 @@ fn snapshot(session: tauri::State<'_, Session>) -> Snapshot {
 }
 
 #[tauri::command]
-fn dispatch(session: tauri::State<'_, Session>, message: Wire) -> Reply {
-    session.dispatch(message)
+fn dispatch(app: tauri::AppHandle, session: tauri::State<'_, Session>, message: Wire) -> Reply {
+    // 另存为会把文档改绑到一个新路径：这条路径要进最近列表。
+    // 先留一份，`message` 之后会被 move 进内核。
+    let saved_to = match &message {
+        Wire::SaveTo { path } => Some(PathBuf::from(path)),
+        _ => None,
+    };
+    let reply = session.dispatch(message);
+    if reply.saved
+        && let Some(path) = saved_to
+    {
+        recent::remember(&app, &path);
+    }
+    reply
+}
+
+/// 最近打开文件列表，最近的在前。文件菜单据此渲染子菜单。
+#[tauri::command]
+fn recent_files(app: tauri::AppHandle) -> Vec<String> {
+    recent::list(&app)
+}
+
+/// 清空最近打开记录。
+#[tauri::command]
+fn clear_recent_files(app: tauri::AppHandle) {
+    recent::clear(&app);
 }
 
 /// 前端遇到 Markdown 里的本地图片时调用。
@@ -209,7 +234,12 @@ async fn open_file(
         }
     };
     log::info!("打开文件：{}", path.display());
-    session.open_file(path).map(Some)
+    let snap = session.open_file(path.clone())?;
+    // 自检反复打开样张，不该污染用户的最近列表。
+    if !app.state::<RunMode>().self_test {
+        recent::remember(&app, &path);
+    }
+    Ok(Some(snap))
 }
 
 /// 保存对话框：只在「内核说没有路径」或用户主动另存为时调用。
@@ -379,6 +409,7 @@ fn main() {
         if self_test { "（自检模式）" } else { "" }
     );
 
+    let start_path = path.clone();
     let session = Session::open(path).unwrap_or_else(|err| {
         log::error!("打开失败：{err}");
         eprintln!("打开失败：{err}");
@@ -465,6 +496,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             snapshot,
             dispatch,
+            recent_files,
+            clear_recent_files,
             load_image,
             link::open_url,
             ready,
@@ -488,6 +521,12 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 window.show()?;
                 let _ = window.set_focus();
+            }
+
+            // 启动时带文件参数（双击 .md 关联、命令行）：也算「最近打开」。
+            // 自检模式不记，免得样张路径挤进用户的列表。
+            if !self_test && let Some(path) = start_path.as_ref() {
+                recent::remember(app.handle(), path);
             }
 
             // macOS：标题栏用系统装饰，菜单也用原生菜单栏；点击项转发给前端执行。

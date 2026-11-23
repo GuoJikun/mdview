@@ -27,21 +27,24 @@
           <span class="chev">›</span>
         </button>
         <div v-if="openSubIndex === i" class="tb-submenu" role="menu">
-          <button
-            v-for="(item, j) in entry.sub.items"
-            :key="j"
-            type="button"
-            role="menuitemradio"
-            :data-action="item.action"
-            :aria-checked="isChecked(item)"
-            :class="{ danger: item.danger }"
-            @pointerenter.stop
-            @click="run(item.action)"
-          >
-            <span class="gutter">{{ isChecked(item) ? (item.mark === 'dot' ? '•' : '✓') : '' }}</span>
-            <span class="label">{{ item.label }}</span>
-            <span v-if="item.acc" class="acc">{{ item.acc }}</span>
-          </button>
+          <template v-for="(item, j) in entry.sub.items" :key="j">
+            <div v-if="item.sep" class="tb-sep" role="separator"></div>
+            <button
+              v-else
+              type="button"
+              role="menuitemradio"
+              :data-action="item.action"
+              :title="item.title"
+              :aria-checked="isChecked(item)"
+              :class="{ danger: item.danger }"
+              @pointerenter.stop
+              @click="run(item.action)"
+            >
+              <span class="gutter">{{ isChecked(item) ? (item.mark === 'dot' ? '•' : '✓') : '' }}</span>
+              <span class="label">{{ item.label }}</span>
+              <span v-if="item.acc" class="acc">{{ item.acc }}</span>
+            </button>
+          </template>
         </div>
       </div>
 
@@ -50,6 +53,7 @@
         type="button"
         :role="entry.mark === 'dot' ? 'menuitemradio' : 'menuitem'"
         :data-action="entry.action"
+        :title="entry.title"
         :aria-checked="entry.mark === 'dot' ? isChecked(entry) : undefined"
         :class="{ danger: entry.danger }"
         @pointerenter="openSubIndex = null"
@@ -74,9 +78,33 @@ const openSubIndex = ref<number | null>(null);
 const left = ref(4);
 const top = ref(30);
 
-const entries = computed<MenuEntry[]>(() =>
-  (menuState.open ? MENUS[menuState.open] : []),
-);
+const entries = computed<MenuEntry[]>(() => {
+  const base = menuState.open ? MENUS[menuState.open] : [];
+  // 「最近打开」的条目来自运行时状态，菜单树本身保持静态。
+  return base.map((entry) =>
+    entry.sub?.dynamic === 'recent'
+      ? { ...entry, sub: { ...entry.sub, items: recentEntries() } }
+      : entry,
+  );
+});
+
+function baseName(path: string): string {
+  const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return cut >= 0 ? path.slice(cut + 1) : path;
+}
+
+function recentEntries(): MenuEntry[] {
+  if (!state.recent.length) return [{ label: '（暂无）' }];
+  return [
+    ...state.recent.map((path, i) => ({
+      action: 'recent:' + i,
+      label: baseName(path) || path,
+      title: path,
+    })),
+    { sep: true },
+    { action: 'recent-clear', label: '清除记录' },
+  ];
+}
 
 function isChecked(entry: MenuEntry): boolean {
   if (!entry.checked) return false;

@@ -480,6 +480,32 @@ function baseName(path: string): string {
   return cut >= 0 ? path.slice(cut + 1) : path;
 }
 
+/** 最近打开列表的本地副本。菜单动作只带序号，路径要从这里取。 */
+let recentPaths: string[] = [];
+
+/** 从宿主拉一次最近列表，同步给菜单。失败时保持原样，不影响编辑。 */
+function refreshRecent(): Promise<void> {
+  return invoke<string[]>('recent_files')
+    .then((list) => {
+      recentPaths = Array.isArray(list) ? list : [];
+      window.__mdviewBridge?.set({ recent: recentPaths });
+    })
+    .catch(() => {});
+}
+
+/** 按序号打开最近文件。未保存改动仍由宿主的 open_file 先问一句。 */
+function openRecent(index: number) {
+  const path = recentPaths[index];
+  if (!path) return;
+  queue = queue.then(async () => {
+    const snap = await invoke<Snapshot | null>('open_file', { path });
+    if (!snap) return;
+    adoptSnapshot(snap);
+    toast('已打开文件');
+    refreshRecent();
+  }).catch((err) => toast('打开文件失败：' + err));
+}
+
 /**
  * 要一个保存路径，再让内核写到那里。
  *
@@ -524,6 +550,20 @@ function runAction(action: string) {
       return;
     }
   }
+  // 最近打开：菜单条目是运行时生成的，动作名带序号（`recent:0`）。
+  if (action.startsWith('recent:')) {
+    openRecent(Number(action.slice('recent:'.length)));
+    return;
+  }
+  if (action === 'recent-clear') {
+    invoke('clear_recent_files')
+      .then(() => {
+        refreshRecent();
+        toast('已清除最近记录');
+      })
+      .catch((err) => toast('清除失败：' + err));
+    return;
+  }
   switch (action) {
     case 'new-file':
       // 内核在有未保存改动时会先问一句；取消返回 null，这里什么都不做。
@@ -542,6 +582,7 @@ function runAction(action: string) {
         if (!snap) return;
         adoptSnapshot(snap);
         toast('已打开文件');
+        refreshRecent();
       }).catch((err) => toast('打开文件失败：' + err));
       break;
     case 'undo': send({ kind: 'undo' }); break;
@@ -668,7 +709,11 @@ function applyReply(reply: Reply) {
   if (typeof reply.clipboard === 'string') writeClipboard(reply.clipboard);
   if (reply.conflict) toast('文件已被外部修改，保存被拒');
   else if (reply.error) toast(reply.error);
-  if (reply.saved) toast('已保存');
+  if (reply.saved) {
+    toast('已保存');
+    // 另存为会把文档改绑到新路径，最近列表要跟着多一条。
+    refreshRecent();
+  }
   // 内核没有路径：弹框问用户要一个，拿到后补发 saveTo
   if (reply.needs_path) requestSavePath();
   renderStatus();
@@ -744,6 +789,8 @@ async function boot() {
   focusActiveEditor();
   // 给内核一个「页面已接管」的信号，日志里能对上游标是否真的画出来了
   invoke('ready').catch(() => {});
+  // 最近打开列表：首帧就拉一次，文件菜单不用等到第一次保存才有内容。
+  refreshRecent();
   // 外部修改：后端 Watcher 发现磁盘上的文件被别的进程改了会 emit 这个事件。
   // 只提示，不自动重载——自动重载会冲掉用户未保存的编辑。
   if (listen) {
@@ -779,6 +826,7 @@ async function boot() {
         if (!snap) return;
         adoptSnapshot(snap);
         toast('已打开文件');
+        refreshRecent();
       }).catch((err) => toast('打开文件失败：' + err));
     }).catch(() => {});
   }
@@ -1733,6 +1781,10 @@ window.__mdviewSelfTest = async function () {
       const newItem = document.querySelector('#tb-menu-popup button[data-action="new-file"]');
       check('文件菜单有新建项', !!newItem,
         newItem ? newItem.textContent : '无');
+      const recentTrigger = document.querySelector('#tb-menu-popup .submenu-trigger');
+      check('文件菜单有最近打开项',
+        !!recentTrigger && (recentTrigger.textContent || '').includes('最近打开'),
+        recentTrigger ? recentTrigger.textContent : '无');
       fileMenu.click(); // 收起
     } else {
       check('文件菜单有打开文件项', false, '无文件菜单');

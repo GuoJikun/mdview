@@ -94,9 +94,9 @@ it('editor.ts 能在浏览器模式里启动并投影出 DOM', async () => {
   });
   expect(parseFloat(caret.style.top)).toBeGreaterThanOrEqual(0);
 
-  // 内核启动只调 snapshot 和 ready（后者是「前端就绪」信号），
+  // 内核启动只调 snapshot、ready（前端就绪信号）与 recent_files（最近打开菜单），
   // 不该有别的 IPC 意外发生。
-  expect(h.calls.filter((c) => c !== 'snapshot' && c !== 'ready')).toEqual([]);
+  expect(h.calls.filter((c) => !['snapshot', 'ready', 'recent_files'].includes(c))).toEqual([]);
   expect(h.calls).toContain('ready');
 
   // 三种视图真正切换 DOM：不再是"点了只换圆点、正文永远所见即所得"

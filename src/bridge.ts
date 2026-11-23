@@ -40,7 +40,10 @@ export interface BridgeState {
   theme: ThemeName;
   /** 当前视图模式。 */
   mode: ViewMode;
+  /** 大纲（标题项），供侧栏渲染与滚动定位 */
   outline: OutlineItem[];
+  /** 最近打开的文件路径，最近的在前；文件菜单据此渲染子菜单。 */
+  recent: string[];
   activeOutlineIdx: number;
   toast: { text: string; seq: number; visible: boolean };
 }
@@ -78,6 +81,7 @@ const store = reactive<BridgeState>({
   theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
   mode: window.__mdviewMode || 'wysiwyg',
   outline: [],
+  recent: [],
   activeOutlineIdx: -1,
   toast: { text: '', seq: 0, visible: false },
 });

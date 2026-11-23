@@ -14,10 +14,13 @@ export interface MenuEntry {
   action?: string;
   label?: string;
   acc?: string;
+  /** 悬停提示。最近打开这类路径很长的项用它显示完整路径。 */
+  title?: string;
   mark?: 'check' | 'dot';
   danger?: boolean;
   sep?: boolean;
-  sub?: { label: string; items: MenuEntry[] };
+  /** `dynamic: 'recent'` 表示条目由运行时状态填充（见 MenuPopup.vue）。 */
+  sub?: { label: string; items: MenuEntry[]; dynamic?: 'recent' };
   checked?: (state: MenuCheckState) => boolean;
 }
 
@@ -36,6 +39,7 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
   file: [
     { action: 'new-file', label: '新建', acc: 'Ctrl+N' },
     { action: 'open-file', label: '打开文件…', acc: 'Ctrl+O' },
+    { sub: { label: '最近打开', items: [], dynamic: 'recent' } },
     { action: 'save', label: '保存', acc: 'Ctrl+S' },
     { action: 'save-as', label: '另存为…', acc: 'Ctrl+Shift+S' },
     { sep: true },
