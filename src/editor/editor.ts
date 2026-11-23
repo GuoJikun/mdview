@@ -11,6 +11,7 @@ import type { ThemeMode } from '../bridge';
 import { createLineMotion, scrollDelta } from './caretline.js';
 import { copyText } from './clipboard.js';
 import { clampToBox, createDragAutoScroll, edgeSpeed } from './dragscroll.js';
+import { findAll, replaceAllText, utf8Offsets } from './find.js';
 import { createIme } from './ime.js';
 import type {
   BlockDto,
@@ -41,6 +42,11 @@ const preeditEl = document.getElementById('preedit') as HTMLElement;
 const imeEl = document.getElementById('ime') as HTMLTextAreaElement;
 const barEl = document.getElementById('bar') as HTMLElement;
 const outlineEl = document.getElementById('outline') as HTMLElement;
+const findEl = document.getElementById('findbar') as HTMLElement;
+const findInput = document.getElementById('find-input') as HTMLInputElement;
+const findCount = document.getElementById('find-count') as HTMLElement;
+const replaceRow = document.getElementById('find-replace-row') as HTMLElement;
+const replaceInput = document.getElementById('replace-input') as HTMLInputElement;
 
 /** 与整篇文档有关的标量。前端只读，写入点只有 applySnapshot / applyReply。 */
 interface Meta {
@@ -75,6 +81,19 @@ let outlineAnchors: { top: number }[] = []; // 与 outline 同序的锚点，文
 let activeOutlineIdx = -1;                  // 当前高亮的大纲项
 let lastTitleKey: string | null = null;     // 标题栏去重：path + 脏标记
 
+/**
+ * 源码 byte → 停靠点。查找命中来自源码文本，选中却要停靠点，
+ * 这张表按 byte 升序，起点要求精确命中，终点取「最后一个 byte 小于它的元素」的 data-a。
+ * 折叠标记也在表里（带 `hidden` 标记），但命中起点落在标记里时会被跳过。
+ */
+interface ByteStop {
+  byte: number;
+  b: number;
+  a: number;
+  hidden: boolean;
+}
+let byteStops: ByteStop[] = [];
+
 /** 光标进出视口时上下各留的余量，避免贴着边缘打字。 */
 const REVEAL_MARGIN = 32;
 /** 拖动时指针进入视口上下多深就开始自动滚动，以及每帧最多滚多少。 */
@@ -95,6 +114,7 @@ function reindex() {
   byAfter = new Map();
   marks = [];
   maxStop = -1;
+  byteStops = [];
   for (const el of docEl.querySelectorAll<HTMLElement>('[data-b]')) {
     const before = Number(el.dataset.b);
     if (!byBefore.has(before)) byBefore.set(before, el);
@@ -103,7 +123,13 @@ function reindex() {
     if (before > maxStop) maxStop = before;
     if (after > maxStop) maxStop = after;
     marks.push(el);
+    // data-byte 是这一格的源码起点；查找命中靠它对齐停靠点。
+    const byte = Number(el.dataset.byte);
+    if (Number.isFinite(byte)) {
+      byteStops.push({ byte, b: before, a: after, hidden: el.classList.contains('mk') });
+    }
   }
+  byteStops.sort((x, y) => x.byte - y.byte);
 }
 
 /**
@@ -299,6 +325,281 @@ function jumpToOutline(idx: number) {
   const target = outlineScrollToAnchor(anchor.top, OUTLINE_LINE);
   window.scrollTo({ top: target, behavior: 'smooth' });
 }
+
+// ---- 查找替换 --------------------------------------------------------
+
+/**
+ * 一次命中。源码下标（UTF-16）给源码视图选字，字节区间给内核的 `select`，
+ * 停靠点区间用来画高亮与滚动定位——三者必须一起带上，缺一个就会错位。
+ */
+interface FindMatch {
+  start: number;
+  end: number;
+  startByte: number;
+  endByte: number;
+  startStop: number;
+  endStop: number;
+}
+
+let findOpen = false;
+let findCaseSensitive = false;
+let findMatches: FindMatch[] = [];
+let findIndex = -1;
+let findRefreshTimer = 0;
+
+/** 搜索对象：源码视图直接读 textarea，避免去抖未落盘时搜到旧文本。 */
+function findHaystack(): string {
+  return window.__mdviewMode === 'source' ? sourceEl.value : sourceText;
+}
+
+/**
+ * 源码字节区间 → 停靠点区间。
+ *
+ * 起点必须正好是一个可见字符的起点：命中落在折叠标记里（比如搜 `**`）时
+ * 选区是零宽，选出来什么也看不见，直接跳过。终点取「最后一个起点小于它的
+ * 元素」的 `data-a`，这样多字节字符、图片原子都按元素边界算，不必自己数字节。
+ */
+function stopRangeFor(
+  startByte: number,
+  endByte: number,
+): { startStop: number; endStop: number } | null {
+  let lo = 0;
+  let hi = byteStops.length - 1;
+  let first = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (byteStops[mid].byte === startByte) { first = mid; break; }
+    if (byteStops[mid].byte < startByte) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  if (first < 0 || byteStops[first].hidden) return null;
+
+  lo = 0;
+  hi = byteStops.length - 1;
+  let last = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (byteStops[mid].byte < endByte) { last = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  if (last < 0) return null;
+
+  const startStop = byteStops[first].b;
+  const endStop = byteStops[last].a;
+  return endStop > startStop ? { startStop, endStop } : null;
+}
+
+function runFind() {
+  const query = findInput.value;
+  findMatches = [];
+  findIndex = -1;
+  if (!query) {
+    paintFind();
+    return;
+  }
+  const text = findHaystack();
+  const offsets = utf8Offsets(text);
+  for (const hit of findAll(text, query, findCaseSensitive)) {
+    const startByte = offsets[hit.start];
+    const endByte = offsets[hit.end];
+    const range = stopRangeFor(startByte, endByte);
+    if (!range) continue;
+    findMatches.push({ start: hit.start, end: hit.end, startByte, endByte, ...range });
+  }
+  paintFind();
+}
+
+function clearFindHighlight() {
+  for (const el of marks) el.classList.remove('find-hit', 'find-current');
+}
+
+/**
+ * 重画命中高亮。`marks` 与 `findMatches` 都按位置升序，用一根游标扫一遍即可，
+ * 不做 O(元素数 × 命中数) 的包含判断。
+ */
+function paintFind() {
+  clearFindHighlight();
+  if (!findMatches.length) {
+    findCount.textContent = '0/0';
+    return;
+  }
+  findCount.textContent =
+    (findIndex >= 0 ? findIndex + 1 : 0) + '/' + findMatches.length;
+  const current = findIndex >= 0 ? findMatches[findIndex] : null;
+  let mi = 0;
+  for (const el of marks) {
+    if (el.classList.contains('mk')) continue;
+    const b = Number(el.dataset.b);
+    const a = el.hasAttribute('data-a') ? Number(el.dataset.a) : b;
+    while (mi < findMatches.length && findMatches[mi].endStop <= b) mi++;
+    if (mi >= findMatches.length) break;
+    const m = findMatches[mi];
+    if (b >= m.startStop && a <= m.endStop) {
+      el.classList.add('find-hit');
+      if (current && b >= current.startStop && a <= current.endStop) {
+        el.classList.add('find-current');
+      }
+    }
+  }
+}
+
+/** 源码视图的滚动估算：按命中前的换行数乘行高，居中显示。 */
+function scrollSourceTo(index: number) {
+  const line = sourceEl.value.slice(0, index).split('\n').length - 1;
+  const lineHeight = parseFloat(getComputedStyle(sourceEl).lineHeight) || 22;
+  sourceEl.scrollTop = Math.max(0, line * lineHeight - sourceEl.clientHeight / 2);
+}
+
+function goToMatch(index: number, scroll = true) {
+  if (!findMatches.length) {
+    findIndex = -1;
+    paintFind();
+    return;
+  }
+  findIndex = ((index % findMatches.length) + findMatches.length) % findMatches.length;
+  paintFind();
+  const m = findMatches[findIndex];
+  if (window.__mdviewMode === 'source') {
+    sourceEl.focus({ preventScroll: true });
+    sourceEl.setSelectionRange(m.start, m.end);
+    if (scroll) scrollSourceTo(m.start);
+    return;
+  }
+  // 内核的 Select 收 byte，自己会吸附到停靠点；不必在前端换算。
+  send({ kind: 'select', anchor: m.startByte, head: m.endByte });
+  if (scroll) {
+    queue.then(() => {
+      const el = byBefore.get(m.startStop) || byAfter.get(m.startStop);
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  }
+}
+
+function stepFind(delta: number) {
+  if (!findOpen) { openFind(false); return; }
+  if (!findMatches.length) runFind();
+  if (!findMatches.length) return;
+  const from = findIndex < 0
+    ? (delta > 0 ? 0 : findMatches.length - 1)
+    : findIndex + delta;
+  goToMatch(from);
+}
+
+function openFind(withReplace: boolean) {
+  findOpen = true;
+  findEl.hidden = false;
+  replaceRow.hidden = !withReplace;
+  // 源码视图有原生选区，直接拿它当查询词；编辑态没有可借的选区，保持原查询。
+  if (window.__mdviewMode === 'source') {
+    const picked = sourceEl.value.slice(sourceEl.selectionStart, sourceEl.selectionEnd);
+    if (picked && !picked.includes('\n')) findInput.value = picked;
+  }
+  findInput.focus({ preventScroll: true });
+  findInput.select();
+  runFind();
+  if (findMatches.length) goToMatch(0);
+}
+
+function closeFind() {
+  if (!findOpen) return;
+  findOpen = false;
+  findEl.hidden = true;
+  findMatches = [];
+  findIndex = -1;
+  clearFindHighlight();
+  findCount.textContent = '0/0';
+  focusActiveEditor();
+}
+
+function toggleFindCase() {
+  findCaseSensitive = !findCaseSensitive;
+  findEl.querySelector('[data-find="case"]')?.classList.toggle('on', findCaseSensitive);
+  runFind();
+  if (findMatches.length) goToMatch(0);
+}
+
+function replaceCurrent() {
+  if (!findOpen || findIndex < 0 || !findMatches.length) return;
+  const m = findMatches[findIndex];
+  const text = replaceInput.value;
+  if (window.__mdviewMode === 'source') {
+    sourceEl.value =
+      sourceEl.value.slice(0, m.start) + text + sourceEl.value.slice(m.end);
+    flushSource();
+  } else {
+    // 先选后插：insertText 有选区时就是替换，一次事务、一步撤销。
+    send({ kind: 'select', anchor: m.startByte, head: m.endByte });
+    send({ kind: 'insertText', text });
+  }
+  const at = findIndex;
+  queue.then(() => {
+    runFind();
+    if (findMatches.length) goToMatch(Math.min(at, findMatches.length - 1));
+  });
+}
+
+function replaceAllMatches() {
+  if (!findOpen || !findMatches.length) return;
+  const text = replaceInput.value;
+  if (window.__mdviewMode === 'source') {
+    sourceEl.value = replaceAllText(sourceEl.value, findMatches, text);
+    flushSource();
+  } else {
+    send({ kind: 'replaceSource', text: replaceAllText(findHaystack(), findMatches, text) });
+  }
+  queue.then(() => {
+    runFind();
+    if (findMatches.length) goToMatch(0);
+  });
+}
+
+/** 文档被编辑后重算命中，但不抢光标：用户可能正在正文里打字。 */
+function refreshFindAfterEdit() {
+  if (!findOpen) return;
+  if (findRefreshTimer) window.clearTimeout(findRefreshTimer);
+  findRefreshTimer = window.setTimeout(() => {
+    findRefreshTimer = 0;
+    if (!findOpen) return;
+    const keep = findIndex;
+    runFind();
+    if (findMatches.length) {
+      findIndex = Math.min(Math.max(keep, 0), findMatches.length - 1);
+      paintFind();
+    }
+  }, 60);
+}
+
+findEl.addEventListener('click', (event) => {
+  const btn = (event.target as Element | null)?.closest<HTMLElement>('[data-find]');
+  if (!btn) return;
+  switch (btn.dataset.find) {
+    case 'prev': stepFind(-1); break;
+    case 'next': stepFind(1); break;
+    case 'case': toggleFindCase(); break;
+    case 'toggle-replace':
+      replaceRow.hidden = !replaceRow.hidden;
+      if (!replaceRow.hidden) replaceInput.focus({ preventScroll: true });
+      break;
+    case 'close': closeFind(); break;
+    case 'replace': replaceCurrent(); break;
+    case 'replace-all': replaceAllMatches(); break;
+    default: break;
+  }
+});
+
+findInput.addEventListener('input', () => {
+  runFind();
+  if (findMatches.length) goToMatch(0);
+});
+
+// 替换框里的回车只作用于替换；查找框的回车由 window 的 keydown 统一分派。
+replaceInput.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  if (event.shiftKey) replaceAllMatches();
+  else replaceCurrent();
+});
+
 
 // ---- 光标 ------------------------------------------------------------
 
@@ -594,6 +895,9 @@ function runAction(action: string) {
       break;
     case 'undo': send({ kind: 'undo' }); break;
     case 'redo': send({ kind: 'redo' }); break;
+    // 查找栏自己管焦点，不能落到函数末尾的 focusActiveEditor()
+    case 'find': openFind(false); return;
+    case 'replace': openFind(true); return;
     case 'save': flushSource(); send({ kind: 'save' }); break;
     case 'save-as': requestSavePath(); break;
     case 'copy': send({ kind: 'copy' }); break;
@@ -724,6 +1028,8 @@ function applyReply(reply: Reply) {
   }
   // 内核没有路径：弹框问用户要一个，拿到后补发 saveTo
   if (reply.needs_path) requestSavePath();
+  // 文档变了，查找的命中位置也要跟着重算（不抢光标，见 refreshFindAfterEdit）
+  refreshFindAfterEdit();
   renderStatus();
   if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
 }
@@ -764,6 +1070,8 @@ function applySnapshot(snap: Snapshot) {
   rebuildOutline(snap.outline || []);
   applyCaret(snap.caret);
   paintSelection(snap.selection);
+  // 换文档后旧的命中已经不成立，重算（查找栏开着就保持开着）
+  refreshFindAfterEdit();
   renderStatus();
   if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
 }
@@ -904,6 +1212,33 @@ function blockBounds(): { start: number; end: number } | null {
 }
 
 window.addEventListener('keydown', (event) => {
+  // 查找 / 替换：任何视图都要能唤起，必须排在下面各视图分支之前。
+  const accel = event.ctrlKey || event.metaKey;
+  const accelKey = event.key.toLowerCase();
+  if (accel && (accelKey === 'f' || accelKey === 'h')) {
+    event.preventDefault();
+    openFind(accelKey === 'h');
+    return;
+  }
+  if (event.key === 'F3') {
+    event.preventDefault();
+    stepFind(event.shiftKey ? -1 : 1);
+    return;
+  }
+  // 焦点在查找栏里：键盘归它自己。不返回的话每个字符都会被当成正文输入，
+  // Ctrl+A/C/V 也会被内核抢走，输入框直接没法用。
+  // 合成事件的 target 可能是 window（不是 Node），先做类型收窄再 contains。
+  const target = event.target instanceof Node ? event.target : null;
+  if (target && findEl.contains(target)) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeFind();
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      stepFind(event.shiftKey ? -1 : 1);
+    }
+    return;
+  }
   // 源码视图：textarea 自己就是编辑器，有原生光标/选区/撤销栈。
   // 只拦文件类快捷键；其余（输入、方向、Ctrl+A/C/V/Z/Y、Tab）全部放行，
   // 由 input 事件把文本整篇同步回内核。
@@ -1856,6 +2191,30 @@ window.__mdviewSelfTest = async function () {
         'needs_path=' + reply.needs_path + ' saved=' + reply.saved + ' dirty=' + reply.dirty);
     } catch (err) {
       check('新建链路可用', false, String(err));
+    }
+
+    // ---- 查找 / 替换 ----
+    // 在刚新建的「草」文档上跑，命中数确定；替换走真实 IPC → 事务 → 重绘。
+    try {
+      runAction('find');
+      check('查找栏打开并聚焦输入框',
+        !findEl.hidden && document.activeElement === findInput,
+        document.activeElement?.id ?? '无');
+      findInput.value = '草';
+      findInput.dispatchEvent(new Event('input', { bubbles: true }));
+      await queue;
+      check('查找命中一处', findCount.textContent === '1/1', String(findCount.textContent));
+      check('命中高亮落在正文', docEl.querySelectorAll('.find-hit').length > 0,
+        String(docEl.querySelectorAll('.find-hit').length));
+      replaceInput.value = '青';
+      replaceAllMatches();
+      await queue;
+      const replaced = await invoke<Snapshot>('snapshot');
+      check('全部替换写回源码', replaced.source === '青', JSON.stringify(replaced.source));
+      closeFind();
+      check('查找栏可关闭', findEl.hidden, String(findEl.hidden));
+    } catch (err) {
+      check('查找替换链路可用', false, String(err));
     }
   } catch (err) {
     check('自检未抛异常', false, String(err));

@@ -299,6 +299,8 @@ fn menu_action(id: &str) -> Option<&'static str> {
         "copy" => "copy",
         "paste" => "paste",
         "select-all" => "select-all",
+        "find" => "find",
+        "replace" => "replace",
         "theme-system" => "theme-system",
         "theme-light" => "theme-light",
         "theme-dark" => "theme-dark",
@@ -351,6 +353,9 @@ fn build_native_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<
         .item(&item("copy", "复制")?)
         .item(&item("paste", "粘贴")?)
         .item(&item("select-all", "全选")?)
+        .separator()
+        .item(&item("find", "查找…")?)
+        .item(&item("replace", "替换…")?)
         .build()?;
 
     let theme_menu = SubmenuBuilder::new(app, "主题")

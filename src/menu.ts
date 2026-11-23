@@ -54,6 +54,9 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
     { action: 'paste', label: '粘贴', acc: 'Ctrl+V' },
     { sep: true },
     { action: 'select-all', label: '全选', acc: 'Ctrl+A' },
+    { sep: true },
+    { action: 'find', label: '查找…', acc: 'Ctrl+F' },
+    { action: 'replace', label: '替换…', acc: 'Ctrl+H' },
   ],
   selection: [
     { action: 'select-all', label: '全选', acc: 'Ctrl+A' },

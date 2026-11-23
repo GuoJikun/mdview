@@ -26,6 +26,24 @@
 <div id="caret"></div>
 <!-- preedit 镜像层：组合期间唯一可见的输入反馈，位置贴着 caret -->
 <div id="preedit"></div>
+<!-- 查找替换浮层：Ctrl+F / Ctrl+H 打开，Esc 关闭。
+     只在编辑区内浮动，不占正文布局；事件接线见 editor.ts 的「查找替换」段。 -->
+<div id="findbar" hidden>
+  <div class="find-row">
+    <input id="find-input" type="text" placeholder="查找" autocomplete="off" spellcheck="false" aria-label="查找">
+    <span id="find-count" class="find-count">0/0</span>
+    <button type="button" data-find="prev" title="上一个（Shift+Enter）" aria-label="上一个">↑</button>
+    <button type="button" data-find="next" title="下一个（Enter）" aria-label="下一个">↓</button>
+    <button type="button" data-find="case" title="区分大小写" aria-label="区分大小写">Aa</button>
+    <button type="button" data-find="toggle-replace" title="替换（Ctrl+H）" aria-label="替换">替换</button>
+    <button type="button" data-find="close" title="关闭（Esc）" aria-label="关闭">×</button>
+  </div>
+  <div id="find-replace-row" class="find-row" hidden>
+    <input id="replace-input" type="text" placeholder="替换为" autocomplete="off" spellcheck="false" aria-label="替换为">
+    <button type="button" data-find="replace">替换</button>
+    <button type="button" data-find="replace-all">全部替换</button>
+  </div>
+</div>
 <!-- 输入法只能落在真正的可编辑元素上，所以留一个透明输入框承接 IME；
      它同时决定候选窗弹在哪儿（跟着 caret 走） -->
 <textarea id="ime" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off"

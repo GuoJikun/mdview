@@ -597,3 +597,39 @@ html[data-drop="1"] body::after {
   font: 600 15px/1.4 var(--font-ui);
   pointer-events: none;
 }
+
+/* ---- 查找替换 -------------------------------------------------------
+   浮在正文右上角，不参与排版。输入框自己接收键盘，editor.ts 的 window
+   监听器会对它整体让路（否则每个字符都会被当成正文输入）。 */
+#findbar {
+  position: fixed; top: 42px; right: 28px; z-index: 22;
+  width: 340px; padding: 6px; display: flex; flex-direction: column; gap: 6px;
+  background: var(--control); border: 1px solid var(--tile-border);
+  border-radius: 8px; box-shadow: var(--shadow-menu);
+  font: 12px/1 var(--font-ui); color: var(--text);
+}
+#findbar[hidden], #find-replace-row[hidden] { display: none; }
+#findbar .find-row { display: flex; align-items: center; gap: 4px; }
+#findbar input {
+  flex: 1; min-width: 0; height: 26px; padding: 0 8px;
+  border: 1px solid var(--hairline); border-radius: 5px;
+  background: var(--bg); color: var(--fg); font: inherit; outline: none;
+}
+#findbar input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+#findbar .find-count {
+  min-width: 46px; text-align: center; color: var(--text2);
+  font-variant-numeric: tabular-nums;
+}
+#findbar button {
+  height: 26px; min-width: 26px; padding: 0 6px;
+  border: 1px solid transparent; border-radius: 5px;
+  background: transparent; color: var(--icon); font: inherit; cursor: pointer;
+}
+#findbar button:hover { background: var(--hover); color: var(--fg); }
+#findbar button.on { background: var(--accent-soft); color: var(--accent); }
+
+/* 命中高亮：所有命中浅色，当前一处加深。 */
+#doc .find-hit { background: rgba(255, 196, 0, .35); border-radius: 2px; }
+#doc .find-current { background: rgba(255, 140, 0, .55); }
+:root[data-theme="dark"] #doc .find-hit { background: rgba(210, 153, 34, .38); }
+:root[data-theme="dark"] #doc .find-current { background: rgba(255, 166, 87, .55); }
