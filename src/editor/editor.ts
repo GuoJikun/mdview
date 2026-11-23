@@ -47,6 +47,9 @@ const findInput = document.getElementById('find-input') as HTMLInputElement;
 const findCount = document.getElementById('find-count') as HTMLElement;
 const replaceRow = document.getElementById('find-replace-row') as HTMLElement;
 const replaceInput = document.getElementById('replace-input') as HTMLInputElement;
+const linkEditEl = document.getElementById('linkedit') as HTMLElement;
+const linkUrlInput = document.getElementById('link-url') as HTMLInputElement;
+const linkTextInput = document.getElementById('link-text') as HTMLInputElement;
 
 /** 与整篇文档有关的标量。前端只读，写入点只有 applySnapshot / applyReply。 */
 interface Meta {
@@ -599,6 +602,128 @@ replaceInput.addEventListener('keydown', (event) => {
   if (event.shiftKey) replaceAllMatches();
   else replaceCurrent();
 });
+
+// ---- 链接 / 图片行内编辑 ----------------------------------------------
+
+interface LinkTarget {
+  stop: number;
+  url: string;
+  text: string;
+  image: boolean;
+}
+
+let linkTarget: LinkTarget | null = null;
+
+/** 同一个链接的字符是平级兄弟：label 要把左右连续同 href 的字符都拼起来。 */
+function linkLabelAround(el: HTMLElement): string {
+  const href = el.dataset.href;
+  let text = '';
+  let node: Element | null = el;
+  while (node && (node as HTMLElement).dataset.href === href) {
+    text = (node.textContent || '') + text;
+    node = node.previousElementSibling;
+  }
+  node = el.nextElementSibling;
+  while (node && (node as HTMLElement).dataset.href === href) {
+    text += node.textContent || '';
+    node = node.nextElementSibling;
+  }
+  return text;
+}
+
+function positionLinkEditor(el: HTMLElement) {
+  const rect = el.getBoundingClientRect();
+  const width = linkEditEl.offsetWidth || 340;
+  const height = linkEditEl.offsetHeight || 96;
+  const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8);
+  let top = rect.bottom + 6;
+  // 下方放不下就翻到上面，别被状态栏或视口下沿裁掉
+  if (top + height > window.innerHeight - 8) top = Math.max(8, rect.top - height - 6);
+  linkEditEl.style.left = left + 'px';
+  linkEditEl.style.top = top + 'px';
+}
+
+function openLinkEditor(el: HTMLElement) {
+  const image = el.classList.contains('img');
+  const stop = Number(el.dataset.b);
+  if (!Number.isFinite(stop)) return;
+  const url = image ? el.dataset.asset || '' : el.dataset.href || '';
+  linkTarget = {
+    stop,
+    image,
+    url,
+    text: image ? el.getAttribute('title') || '' : linkLabelAround(el),
+  };
+  linkUrlInput.value = url;
+  linkTextInput.value = linkTarget.text;
+  // 图片没有「打开」这个动作
+  const openBtn = linkEditEl.querySelector<HTMLElement>('[data-link="open"]');
+  if (openBtn) openBtn.hidden = image;
+  linkEditEl.hidden = false;
+  positionLinkEditor(el);
+  linkUrlInput.focus({ preventScroll: true });
+  linkUrlInput.select();
+}
+
+function closeLinkEditor() {
+  if (linkEditEl.hidden) return;
+  linkEditEl.hidden = true;
+  linkTarget = null;
+  focusActiveEditor();
+}
+
+/**
+ * 保存 / 删除。整段重写在核心里做：前端只给 stop 与两个字段，
+ * 片段边界、label 里的行内标记都由内核自己处理，一次事务、一步撤销。
+ */
+function submitLinkEdit(remove: boolean) {
+  if (!linkTarget) return;
+  const { stop } = linkTarget;
+  const url = linkUrlInput.value;
+  const text = linkTextInput.value;
+  linkEditEl.hidden = true;
+  linkTarget = null;
+  send({ kind: 'editLink', stop, url, text, remove });
+  focusActiveEditor();
+}
+
+linkEditEl.addEventListener('click', (event) => {
+  const btn = (event.target as Element | null)?.closest<HTMLElement>('[data-link]');
+  if (!btn) return;
+  switch (btn.dataset.link) {
+    case 'save': submitLinkEdit(false); break;
+    case 'remove': submitLinkEdit(true); break;
+    case 'close': closeLinkEditor(); break;
+    case 'open': {
+      const url = linkUrlInput.value.trim();
+      if (url) invoke('open_url', { url }).catch((err) => toast('打不开链接：' + err));
+      break;
+    }
+    default: break;
+  }
+});
+
+for (const input of [linkUrlInput, linkTextInput]) {
+  input.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    submitLinkEdit(false);
+  });
+}
+
+// 点面板外面就收起；点另一个链接/图片时先收起，交给 click 重新打开。
+document.addEventListener(
+  'mousedown',
+  (event) => {
+    if (linkEditEl.hidden) return;
+    const target = event.target as Element | null;
+    if (target && linkEditEl.contains(target)) return;
+    if (target && target.closest('.atom.img[data-asset], [data-href]')) return;
+    closeLinkEditor();
+  },
+  true,
+);
+
 
 
 // ---- 光标 ------------------------------------------------------------
@@ -1239,6 +1364,14 @@ window.addEventListener('keydown', (event) => {
     }
     return;
   }
+  // 链接编辑面板同理：输入框自己收字符，Esc 关面板。
+  if (target && linkEditEl.contains(target)) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeLinkEditor();
+    }
+    return;
+  }
   // 源码视图：textarea 自己就是编辑器，有原生光标/选区/撤销栈。
   // 只拦文件类快捷键；其余（输入、方向、Ctrl+A/C/V/Z/Y、Tab）全部放行，
   // 由 input 事件把文本整篇同步回内核。
@@ -1570,14 +1703,26 @@ docEl.addEventListener('mousedown', (event) => {
 docEl.addEventListener('click', (event) => {
   const start = linkPress;
   linkPress = null;
-  const el = (event.target as Element | null)?.closest<HTMLElement>('[data-href]');
-  const url = el?.dataset.href;
-  if (!url) return;
+  const target = event.target as Element | null;
+  const el = target?.closest<HTMLElement>('[data-href]');
+  const image = target?.closest<HTMLElement>('.atom.img[data-asset]');
   // 拖选之后浏览器也会补发一次 click。位移超过阈值说明这次是选字，不是点链接。
   if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
-  if (window.__mdviewMode !== 'reading' && !(event.ctrlKey || event.metaKey)) return;
-  event.preventDefault();
-  invoke('open_url', { url }).catch((err) => toast('打不开链接：' + err));
+  const modifier = event.ctrlKey || event.metaKey;
+  if (el?.dataset.href) {
+    if (window.__mdviewMode === 'wysiwyg' && !modifier) {
+      // 编辑态单击：不跳转，弹地址/文字面板；光标已经由 mousedown 落在链接上
+      openLinkEditor(el);
+      return;
+    }
+    if (window.__mdviewMode !== 'reading' && !modifier) return;
+    event.preventDefault();
+    invoke('open_url', { url: el.dataset.href }).catch((err) => toast('打不开链接：' + err));
+    return;
+  }
+  if (image && window.__mdviewMode === 'wysiwyg' && !modifier) {
+    openLinkEditor(image);
+  }
 });
 
 // 脚注跳转：引用 → 定义，回链 → 引用。编辑态沿用外链的 Ctrl/Cmd 约定，
@@ -2232,6 +2377,46 @@ window.__mdviewSelfTest = async function () {
       check('Shift+Tab 反缩进', outdented.source === '青', JSON.stringify(outdented.source));
     } catch (err) {
       check('Tab 缩进链路可用', false, String(err));
+    }
+
+    // ---- 链接 / 图片行内编辑 ----
+    try {
+      send({ kind: 'replaceSource', text: '[官网](a.md)' });
+      await queue;
+      const linkEl = docEl.querySelector<HTMLElement>('[data-href]');
+      check('链接字符带 data-href', !!linkEl && linkEl.dataset.href === 'a.md',
+        linkEl ? String(linkEl.dataset.href) : '无');
+      if (linkEl) {
+        openLinkEditor(linkEl);
+        check('链接面板带出原地址与原文字',
+          !linkEditEl.hidden && linkUrlInput.value === 'a.md' &&
+            linkTextInput.value === '官网',
+          linkUrlInput.value + ' / ' + linkTextInput.value);
+        linkUrlInput.value = 'b.md';
+        submitLinkEdit(false);
+        await queue;
+        const edited = await invoke<Snapshot>('snapshot');
+        check('链接改写写回源码', edited.source === '[官网](b.md)',
+          JSON.stringify(edited.source));
+      }
+
+      send({ kind: 'replaceSource', text: '![图](a.png)' });
+      await queue;
+      const imgEl = docEl.querySelector<HTMLElement>('.atom.img[data-asset]');
+      check('图片渲染为原子节点', !!imgEl && imgEl.dataset.asset === 'a.png',
+        imgEl ? String(imgEl.dataset.asset) : '无');
+      if (imgEl) {
+        openLinkEditor(imgEl);
+        check('图片面板带出 alt 与原地址',
+          !linkEditEl.hidden && linkTextInput.value === '图' && linkUrlInput.value === 'a.png',
+          linkTextInput.value + ' / ' + linkUrlInput.value);
+        submitLinkEdit(true);
+        await queue;
+        const removed = await invoke<Snapshot>('snapshot');
+        check('删除图片写回源码', removed.source === '', JSON.stringify(removed.source));
+      }
+    } catch (err) {
+      check('链接图片编辑链路可用', false, String(err));
     }
   } catch (err) {
     check('自检未抛异常', false, String(err));

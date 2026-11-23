@@ -65,6 +65,9 @@ it('editor.ts 能在浏览器模式里启动并投影出 DOM', async () => {
       <div class="find-row"><input id="find-input"><span id="find-count">0/0</span></div>
       <div id="find-replace-row" hidden><input id="replace-input"></div>
     </div>
+    <div id="linkedit" hidden>
+      <input id="link-url"><input id="link-text">
+    </div>
     <textarea id="ime" rows="1"></textarea>
     <div id="bar"></div>
     <div id="vue-app"></div>

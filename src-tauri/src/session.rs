@@ -74,6 +74,14 @@ pub enum Wire {
     Indent {
         outdent: bool,
     },
+    /// 改链接 / 图片：只带要改的字段，缺省表示保持原值。
+    EditLink {
+        stop: usize,
+        url: Option<String>,
+        text: Option<String>,
+        #[serde(default)]
+        remove: bool,
+    },
     TableInsertRow {
         after: bool,
     },
@@ -118,6 +126,17 @@ impl Wire {
             }),
             Wire::TableMoveCell { delta } => Message::TableMoveCell { delta },
             Wire::Indent { outdent } => Message::Indent { outdent },
+            Wire::EditLink {
+                stop,
+                url,
+                text,
+                remove,
+            } => Message::EditLink {
+                stop,
+                url,
+                text,
+                remove,
+            },
             Wire::TableInsertRow { after } => Message::TableInsertRow { after },
             Wire::TableDeleteRow => Message::TableDeleteRow,
             Wire::TableInsertColumn { after } => Message::TableInsertColumn { after },
@@ -489,6 +508,18 @@ mod tests {
         // Tab / Shift+Tab：布尔字段决定方向
         let wire: Wire = serde_json::from_str(r#"{"kind":"indent","outdent":true}"#).unwrap();
         assert!(matches!(wire, Wire::Indent { outdent: true }));
+        // 链接编辑：url/text 可缺省（表示保持原值），remove 缺省为 false
+        let wire: Wire =
+            serde_json::from_str(r#"{"kind":"editLink","stop":3,"url":"https://b"}"#).unwrap();
+        assert!(matches!(
+            wire,
+            Wire::EditLink {
+                stop: 3,
+                url: Some(_),
+                text: None,
+                remove: false
+            }
+        ));
     }
 
     #[test]

@@ -7,7 +7,7 @@ use log::{info, warn};
 use mdview_core::Document;
 use mdview_markdown::{
     BlockFrame, BlockKind, Caret, DocumentLayout, Gravity, MarkdownParser, ParseResult, Patch,
-    Selection, SourceMap, block_frames, diff_frames,
+    Selection, SourceMap, SpanKind, block_frames, diff_frames,
 };
 
 use crate::ports::{FileStore, Fingerprint, RenderFrame};
@@ -103,6 +103,14 @@ pub enum Message {
     /// Tab / Shift+Tab：列表按层级缩进与反缩进，其余块插入 / 删除两个空格。
     Indent {
         outdent: bool,
+    },
+    /// 改链接或图片的地址 / 文字（图片是 alt）。`stop` 落在目标内部即可，
+    /// 内核自己找对应的 Link / Image 片段并整段重写，一次事务、一步撤销。
+    EditLink {
+        stop: usize,
+        url: Option<String>,
+        text: Option<String>,
+        remove: bool,
     },
     /// 在当前行前 / 后插入一行
     TableInsertRow {
@@ -438,6 +446,12 @@ impl AppState {
             Message::Cut => self.cut(),
             Message::TableMoveCell { delta } => self.table_move_cell(delta),
             Message::Indent { outdent } => self.indent(outdent),
+            Message::EditLink {
+                stop,
+                url,
+                text,
+                remove,
+            } => self.edit_link(stop, url, text, remove),
             Message::TableInsertRow { after } => self.table_insert_row(after),
             Message::TableDeleteRow => self.table_delete_row(),
             Message::TableInsertColumn { after } => self.table_insert_column(after),
@@ -685,6 +699,76 @@ impl AppState {
         index
             .and_then(|i| list.items.get(i).map(|item| (item.depth, i == 0)))
             .unwrap_or((0, true))
+    }
+
+    /// 改链接 / 图片。`stop` 只需要落在目标内部，片段由内核自己找。
+    ///
+    /// 整段重写成 `[label](url)` / `![alt](url)`，而不是去改 URL 那几十个字节：
+    /// 引用式链接、带标题的链接、含行内标记的 label 都能一次收敛成规范形式，
+    /// 也不会因为括号/空格把语法拆坏。删除链接保留 label（文字还在），
+    /// 删除图片则整段移除。
+    fn edit_link(
+        &mut self,
+        stop: usize,
+        url: Option<String>,
+        text: Option<String>,
+        remove: bool,
+    ) -> Vec<Effect> {
+        let Some(byte) = self.layout.byte(stop) else {
+            return Vec::new();
+        };
+        let Some((id, _)) = self.layout.locate(stop) else {
+            return Vec::new();
+        };
+        let Some(block) = self.parsed.blocks.get(id.0) else {
+            return Vec::new();
+        };
+        // 链接的每个字符各成片段，但只有 Link / Image 片段的 byte 覆盖整段语法。
+        // 允许 `byte == span.end`：光标停在图片右侧端点时也算点中了它。
+        let Some(span) = block.spans.iter().find(|span| {
+            matches!(span.kind, SpanKind::Link | SpanKind::Image)
+                && span.byte.start <= byte
+                && byte <= span.byte.end
+        }) else {
+            return Vec::new();
+        };
+        let image = matches!(span.kind, SpanKind::Image);
+        let src = self.document.text();
+        // Link 片段只覆盖 label 文本，方括号与 `](url)` 在标记表里；要整段重写，
+        // 得把这一对标记一起圈进来。图片是原子片段，本身就覆盖 `![alt](url)`。
+        let pair = if image {
+            None
+        } else {
+            block
+                .markers
+                .iter()
+                .filter(|pair| {
+                    pair.open.end <= span.byte.start && span.byte.end <= pair.close.start
+                })
+                .min_by_key(|pair| pair.close.start - pair.open.start)
+        };
+        let (range, old_text) = match pair {
+            Some(pair) => (
+                pair.open.start..pair.close.end,
+                src.get(pair.open.end..pair.close.start)
+                    .unwrap_or(&span.text)
+                    .to_owned(),
+            ),
+            None => (span.byte.clone(), span.text.clone()),
+        };
+        let old_url = span.style.link.clone().unwrap_or_default();
+        let label = text.unwrap_or(old_text);
+        let url = url.unwrap_or(old_url);
+        let replacement = if remove {
+            if image { String::new() } else { label }
+        } else if image {
+            format!("![{}]({})", escape_label(&label), escape_url(&url))
+        } else {
+            format!("[{}]({})", escape_label(&label), escape_url(&url))
+        };
+        let start = self.document.byte_to_char(range.start);
+        let end = self.document.byte_to_char(range.end);
+        self.apply_with_caret(start..end, &replacement, Some(start))
     }
 
     fn table_insert_row(&mut self, after: bool) -> Vec<Effect> {
@@ -1254,6 +1338,23 @@ impl AppState {
         let anchor = self.selection.anchor.min(last);
         let head = self.selection.head.min(last);
         self.selection = Selection::new(anchor, head);
+    }
+}
+
+/// label 里的 `]` 必须转义，否则链接会提前闭合。
+fn escape_label(label: &str) -> String {
+    label.replace(']', "\\]")
+}
+
+/// 目标地址含空白或圆括号时用 `<>` 包起来，这是 CommonMark 的写法。
+fn escape_url(url: &str) -> String {
+    if url
+        .chars()
+        .any(|c| c.is_whitespace() || c == '(' || c == ')')
+    {
+        format!("<{url}>")
+    } else {
+        url.to_owned()
     }
 }
 
@@ -2633,6 +2734,101 @@ mod tests {
         click(&mut app, &files, 2);
         app.update(Message::Indent { outdent: true }, &files);
         assert_eq!(app.document.text(), "- 甲", "顶层项不能再往外缩");
+    }
+
+    #[test]
+    fn edit_link_rewrites_url_and_keeps_the_label() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "见[官网](https://a.example)结束");
+        click(&mut app, &files, 4); // 点在「官」上
+        let stop = app.selection.head;
+        app.update(
+            Message::EditLink {
+                stop,
+                url: Some("https://b.example".into()),
+                text: None,
+                remove: false,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "见[官网](https://b.example)结束");
+    }
+
+    #[test]
+    fn edit_link_can_replace_the_label_and_unlink() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "[旧](a.md) 后");
+        click(&mut app, &files, 1); // 点在「旧」上
+        let stop = app.selection.head;
+        app.update(
+            Message::EditLink {
+                stop,
+                url: None,
+                text: Some("新".into()),
+                remove: false,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "[新](a.md) 后");
+
+        let stop = app.selection.head;
+        app.update(
+            Message::EditLink {
+                stop,
+                url: None,
+                text: None,
+                remove: true,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "新 后", "删除链接应保留文字");
+    }
+
+    #[test]
+    fn edit_image_rewrites_alt_and_url_and_can_remove() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "![旧图](a.png)");
+        let stop = app.selection.head; // 文档开头就是图片原子
+        app.update(
+            Message::EditLink {
+                stop,
+                url: Some("b.png".into()),
+                text: Some("新图".into()),
+                remove: false,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "![新图](b.png)");
+
+        let stop = app.selection.head;
+        app.update(
+            Message::EditLink {
+                stop,
+                url: None,
+                text: None,
+                remove: true,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "", "删除图片应整段移除");
+    }
+
+    #[test]
+    fn edit_link_wraps_urls_with_spaces() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "[甲](a.md)");
+        click(&mut app, &files, 1);
+        let stop = app.selection.head;
+        app.update(
+            Message::EditLink {
+                stop,
+                url: Some("my file.md".into()),
+                text: None,
+                remove: false,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "[甲](<my file.md>)");
     }
 
     #[test]

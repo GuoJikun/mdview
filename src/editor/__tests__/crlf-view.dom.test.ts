@@ -74,6 +74,9 @@ it('CRLF 文档只在视图间切换，不发出 replaceSource、不误置脏', 
       <div class="find-row"><input id="find-input"><span id="find-count">0/0</span></div>
       <div id="find-replace-row" hidden><input id="replace-input"></div>
     </div>
+    <div id="linkedit" hidden>
+      <input id="link-url"><input id="link-text">
+    </div>
     <textarea id="ime" rows="1"></textarea>
     <div id="bar"></div>
     <div id="vue-app"></div>

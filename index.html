@@ -44,6 +44,23 @@
     <button type="button" data-find="replace-all">全部替换</button>
   </div>
 </div>
+<!-- 链接 / 图片行内编辑：点正文里的链接或图片弹出，Esc / 点空白关闭。 -->
+<div id="linkedit" hidden>
+  <div class="le-row">
+    <label for="link-url">地址</label>
+    <input id="link-url" type="text" autocomplete="off" spellcheck="false" aria-label="链接地址">
+  </div>
+  <div class="le-row">
+    <label for="link-text">文字</label>
+    <input id="link-text" type="text" autocomplete="off" spellcheck="false" aria-label="链接文字">
+  </div>
+  <div class="le-actions">
+    <button type="button" data-link="open">打开</button>
+    <button type="button" data-link="remove">删除</button>
+    <button type="button" data-link="close">取消</button>
+    <button type="button" data-link="save" class="primary">保存</button>
+  </div>
+</div>
 <!-- 输入法只能落在真正的可编辑元素上，所以留一个透明输入框承接 IME；
      它同时决定候选窗弹在哪儿（跟着 caret 走） -->
 <textarea id="ime" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off"
