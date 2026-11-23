@@ -1327,7 +1327,7 @@ mod tests {
         assert!(matches!(math[0].kind, SpanKind::Math { display: true }));
         assert!(math[0].text.contains("\\int_0^1"));
         assert_eq!(&src[math[0].byte.clone()], math[0].text);
-        assert!(block.markers.len() >= 1);
+        assert!(!block.markers.is_empty());
     }
 
     #[test]
