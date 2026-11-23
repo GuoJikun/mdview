@@ -70,6 +70,10 @@ pub enum Wire {
     TableMoveCell {
         delta: i32,
     },
+    /// Tab / Shift+Tab：列表按层级缩进，其余块插入 / 删除两个空格。
+    Indent {
+        outdent: bool,
+    },
     TableInsertRow {
         after: bool,
     },
@@ -113,6 +117,7 @@ impl Wire {
                 _ => ViewMode::Wysiwyg,
             }),
             Wire::TableMoveCell { delta } => Message::TableMoveCell { delta },
+            Wire::Indent { outdent } => Message::Indent { outdent },
             Wire::TableInsertRow { after } => Message::TableInsertRow { after },
             Wire::TableDeleteRow => Message::TableDeleteRow,
             Wire::TableInsertColumn { after } => Message::TableInsertColumn { after },
@@ -481,6 +486,9 @@ mod tests {
             serde_json::from_str(r#"{"kind":"tableInsertColumn","after":false}"#).unwrap();
         assert!(matches!(wire, Wire::TableInsertColumn { after: false }));
         assert!(serde_json::from_str::<Wire>(r#"{"kind":"tableDeleteColumn"}"#).is_ok());
+        // Tab / Shift+Tab：布尔字段决定方向
+        let wire: Wire = serde_json::from_str(r#"{"kind":"indent","outdent":true}"#).unwrap();
+        assert!(matches!(wire, Wire::Indent { outdent: true }));
     }
 
     #[test]

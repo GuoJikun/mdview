@@ -36,6 +36,8 @@ export type Wire =
   | { kind: 'replaceSource'; text: string }
   | { kind: 'setMode'; mode: string }
   | { kind: 'tableMoveCell'; delta: number }
+  /** Tab / Shift+Tab：列表按层级缩进，其余块插入 / 删除两个空格。 */
+  | { kind: 'indent'; outdent: boolean }
   | { kind: 'tableInsertRow'; after: boolean }
   | { kind: 'tableDeleteRow' }
   | { kind: 'tableInsertColumn'; after: boolean }

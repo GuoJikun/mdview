@@ -100,6 +100,10 @@ pub enum Message {
     TableMoveCell {
         delta: i32,
     },
+    /// Tab / Shift+Tab：列表按层级缩进与反缩进，其余块插入 / 删除两个空格。
+    Indent {
+        outdent: bool,
+    },
     /// 在当前行前 / 后插入一行
     TableInsertRow {
         after: bool,
@@ -433,6 +437,7 @@ impl AppState {
                 .unwrap_or_default(),
             Message::Cut => self.cut(),
             Message::TableMoveCell { delta } => self.table_move_cell(delta),
+            Message::Indent { outdent } => self.indent(outdent),
             Message::TableInsertRow { after } => self.table_insert_row(after),
             Message::TableDeleteRow => self.table_delete_row(),
             Message::TableInsertColumn { after } => self.table_insert_column(after),
@@ -592,6 +597,94 @@ impl AppState {
         }
         let _ = (range, src);
         self.replace_bytes(block_range, &new_text, Some(cell_byte))
+    }
+
+    /// Tab / Shift+Tab。列表项按两个空格一级缩进、反缩进；普通块就是
+    /// 在光标处插两个空格（或删掉行首最多两个空格）。
+    ///
+    /// 只改行首空白，不碰标记：把 `- 乙` 变成 `  - 乙` 才是「降一级」，
+    /// 在标记后面插空格只会把内容推远，列表层级不变。
+    fn indent(&mut self, outdent: bool) -> Vec<Effect> {
+        if self.composing {
+            return Vec::new();
+        }
+        // 有选区时保持原语义：Tab 用两个空格替换选区，反缩进不动。
+        if self.selection_chars().is_some() {
+            return if outdent {
+                Vec::new()
+            } else {
+                self.insert_text("  ")
+            };
+        }
+        let Some(byte) = self.caret_byte() else {
+            return Vec::new();
+        };
+        let Some((id, _)) = self.layout.locate(self.selection.head) else {
+            return Vec::new();
+        };
+        let Some((line_start, prefix)) = self.line_prefix() else {
+            return Vec::new();
+        };
+        let is_list = matches!(self.parsed.blocks[id.0].kind, BlockKind::List { .. });
+        let lead = prefix.len() - prefix.trim_start_matches([' ', '\t']).len();
+
+        if outdent {
+            if lead == 0 {
+                return Vec::new();
+            }
+            // 顶层列表项没有可反缩进的父级；段落则允许删掉行首空格
+            if is_list && self.list_position(id.0, line_start).0 == 0 {
+                return Vec::new();
+            }
+            let take = if prefix.starts_with('\t') {
+                1
+            } else {
+                lead.min(2)
+            };
+            // 行首空白都是 ASCII，删掉的字节数就是字符数；光标用**字符**偏移报，
+            // 不能拿新文本里的字节位置当旧文本的字节（会在多字节字符中间截断）。
+            let start = self.document.byte_to_char(line_start);
+            let end = self.document.byte_to_char(line_start + take);
+            let caret = self.document.byte_to_char(byte).saturating_sub(take);
+            return self.apply_with_caret(start..end, "", Some(caret));
+        }
+
+        if is_list {
+            // 顶层第一项没有父级，缩进只会留下视觉上看不出来的两个空格
+            let (depth, first) = self.list_position(id.0, line_start);
+            if depth == 0 && first {
+                return Vec::new();
+            }
+            let start = self.document.byte_to_char(line_start);
+            let caret = self.document.byte_to_char(byte) + 2;
+            return self.apply_with_caret(start..start, "  ", Some(caret));
+        }
+
+        let at = self.caret_char_offset();
+        self.apply(at..at, "  ")
+    }
+
+    /// 当前行在列表里的「层级 / 是否本块第一项」。找不到时按顶层第一项处理。
+    ///
+    /// `ListItem.byte` 指向的是这一项的行内标记（`-` / `1.`），不是行首：
+    /// 缩进过的列表项在行首之后还有空白，直接拿 `byte <= line_start` 比较会把
+    /// 它认成上一项。这里先找「同一行上、位于行首之后」的那一项。
+    fn list_position(&self, block: usize, line_start: usize) -> (usize, bool) {
+        let Some(list) = self.parsed.blocks[block].list.as_ref() else {
+            return (0, true);
+        };
+        let text = self.document.text();
+        let same_line = list.items.iter().position(|item| {
+            item.byte >= line_start
+                && text
+                    .get(line_start..item.byte)
+                    .is_some_and(|gap| !gap.contains('\n'))
+        });
+        let index =
+            same_line.or_else(|| list.items.iter().rposition(|item| item.byte <= line_start));
+        index
+            .and_then(|i| list.items.get(i).map(|item| (item.depth, i == 0)))
+            .unwrap_or((0, true))
     }
 
     fn table_insert_row(&mut self, after: bool) -> Vec<Effect> {
@@ -2491,6 +2584,55 @@ mod tests {
         let mut files = InMemoryFileStore::default();
         let app = open(&mut files, "![示意图](a.png)\n\n---");
         assert_eq!(app.word_count(), 3, "只数 alt 文本，分隔线不计");
+    }
+
+    #[test]
+    fn tab_indents_a_list_item_and_shift_tab_restores_it() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "- 甲\n- 乙");
+        click(&mut app, &files, 8); // 「乙」之前
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(app.document.text(), "- 甲\n  - 乙", "第二项应降一级");
+        assert_eq!(caret_byte(&app), 10, "光标跟着缩进右移两个字节");
+
+        app.update(Message::Indent { outdent: true }, &files);
+        assert_eq!(app.document.text(), "- 甲\n- 乙", "反缩进应还原");
+    }
+
+    #[test]
+    fn tab_on_the_first_list_item_is_a_no_op() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "- 甲");
+        click(&mut app, &files, 2);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(
+            app.document.text(),
+            "- 甲",
+            "顶层第一项没有父级，不该插空格"
+        );
+    }
+
+    #[test]
+    fn tab_on_a_paragraph_inserts_two_spaces_at_the_caret() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲乙");
+        click(&mut app, &files, 0);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(app.document.text(), "  甲乙");
+        assert_eq!(caret_byte(&app), 2, "光标在插入的空格之后");
+
+        app.update(Message::Indent { outdent: true }, &files);
+        assert_eq!(app.document.text(), "甲乙", "Shift+Tab 删掉行首空格");
+        assert_eq!(caret_byte(&app), 0);
+    }
+
+    #[test]
+    fn shift_tab_on_a_top_level_list_item_does_nothing() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "- 甲");
+        click(&mut app, &files, 2);
+        app.update(Message::Indent { outdent: true }, &files);
+        assert_eq!(app.document.text(), "- 甲", "顶层项不能再往外缩");
     }
 
     #[test]

@@ -1316,9 +1316,10 @@ window.addEventListener('keydown', (event) => {
     case 'Enter': event.preventDefault(); send({ kind: event.shiftKey ? 'hardBreak' : 'newline' }); return;
     case 'Tab':
       event.preventDefault();
-      // 表格内 Tab 跨一格，行末自动接到下一行；非表格保持插入两个空格
+      // 表格内 Tab 跨一格，行末自动接到下一行；其余情况交给内核：
+      // 列表项按两个空格一级缩进，普通块插两个空格。
       if (inTable()) send({ kind: 'tableMoveCell', delta: event.shiftKey ? -1 : 1 });
-      else send({ kind: 'insertText', text: '  ' });
+      else send({ kind: 'indent', outdent: event.shiftKey });
       return;
     case 'ArrowLeft':
       event.preventDefault();
@@ -2215,6 +2216,22 @@ window.__mdviewSelfTest = async function () {
       check('查找栏可关闭', findEl.hidden, String(findEl.hidden));
     } catch (err) {
       check('查找替换链路可用', false, String(err));
+    }
+
+    // ---- Tab 缩进 / Shift+Tab 反缩进 ----
+    try {
+      send({ kind: 'setCaret', stop: 0, extend: false });
+      await queue;
+      press('Tab');
+      await queue;
+      const tabbed = await invoke<Snapshot>('snapshot');
+      check('Tab 在段落插入两个空格', tabbed.source === '  青', JSON.stringify(tabbed.source));
+      press('Tab', true);
+      await queue;
+      const outdented = await invoke<Snapshot>('snapshot');
+      check('Shift+Tab 反缩进', outdented.source === '青', JSON.stringify(outdented.source));
+    } catch (err) {
+      check('Tab 缩进链路可用', false, String(err));
     }
   } catch (err) {
     check('自检未抛异常', false, String(err));
