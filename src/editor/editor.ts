@@ -619,12 +619,12 @@ function linkLabelAround(el: HTMLElement): string {
   const href = el.dataset.href;
   let text = '';
   let node: Element | null = el;
-  while (node && (node as HTMLElement).dataset.href === href) {
+  while (node && (node as HTMLElement).dataset?.href === href) {
     text = (node.textContent || '') + text;
     node = node.previousElementSibling;
   }
   node = el.nextElementSibling;
-  while (node && (node as HTMLElement).dataset.href === href) {
+  while (node && (node as HTMLElement).dataset?.href === href) {
     text += node.textContent || '';
     node = node.nextElementSibling;
   }
