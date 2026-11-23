@@ -616,7 +616,10 @@ html[data-drop="1"] body::after {
   border-radius: 8px; box-shadow: var(--shadow-menu);
   font: 12px/1 var(--font-ui); color: var(--text);
 }
-#findbar[hidden], #find-replace-row[hidden], #find-menu[hidden] { display: none; }
+/* 必须 !important：`#findbar .find-row { display: flex }` 与 `#find-replace-row[hidden]`
+   特异性相同且写在后面，会把 hidden 的 display:none 顶掉（替换行收起后仍然显示）。
+   `#tb-menu-popup[hidden]` 踩过同一个坑，这里保持一致。 */
+#findbar[hidden], #find-replace-row[hidden], #find-menu[hidden] { display: none !important; }
 #findbar .find-row { display: flex; align-items: center; gap: 2px; }
 #find-replace-row { padding-left: 26px; }
 

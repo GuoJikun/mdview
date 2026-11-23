@@ -572,8 +572,10 @@ function stepFind(delta: number) {
 function openFind(withReplace: boolean) {
   findOpen = true;
   findEl.hidden = false;
-  // Ctrl+F 不强行收起已经展开的替换行；Ctrl+H 才展开
-  if (withReplace) setReplaceVisible(true);
+  // Ctrl+F 只看查找、Ctrl+H 才展开替换行。不能沿用上一次的展开状态：
+  // 否则「Ctrl+H 用过一次」之后每次 Ctrl+F 都带出一行用不到的替换框。
+  // 替换框里的内容不清，再按 Ctrl+H 或点左侧箭头还能接着用。
+  setReplaceVisible(withReplace);
   // 源码视图有原生选区，直接拿它当查询词；编辑态没有可借的选区，保持原查询。
   if (window.__mdviewMode === 'source') {
     const picked = sourceEl.value.slice(sourceEl.selectionStart, sourceEl.selectionEnd);
