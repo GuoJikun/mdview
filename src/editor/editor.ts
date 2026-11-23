@@ -496,10 +496,8 @@ function refreshRecent(): Promise<void> {
     .catch(() => {});
 }
 
-/** 按序号打开最近文件。未保存改动仍由宿主的 open_file 先问一句。 */
-function openRecent(index: number) {
-  const path = recentPaths[index];
-  if (!path) return;
+/** 按路径打开。最近列表、拖放、二次启动三条入口共用同一条队列。 */
+function openPath(path: string) {
   queue = queue.then(async () => {
     const snap = await invoke<Snapshot | null>('open_file', { path });
     if (!snap) return;
@@ -507,6 +505,12 @@ function openRecent(index: number) {
     toast('已打开文件');
     refreshRecent();
   }).catch((err) => toast('打开文件失败：' + err));
+}
+
+/** 按序号打开最近文件。未保存改动仍由宿主的 open_file 先问一句。 */
+function openRecent(index: number) {
+  const path = recentPaths[index];
+  if (path) openPath(path);
 }
 
 /**
@@ -830,14 +834,18 @@ async function boot() {
     // 复用 open_file 的注入路径分支，不弹对话框；走 queue 避免覆盖在途编辑。
     listen<unknown>('single-instance-open', (event) => {
       const path = typeof event.payload === 'string' ? event.payload : null;
-      if (!path) return;
-      queue = queue.then(async () => {
-        const snap = await invoke<Snapshot | null>('open_file', { path });
-        if (!snap) return;
-        adoptSnapshot(snap);
-        toast('已打开文件');
-        refreshRecent();
-      }).catch((err) => toast('打开文件失败：' + err));
+      if (path) openPath(path);
+    }).catch(() => {});
+    // 拖放打开：宿主只负责判定「落进来的是不是 Markdown」，打开仍走 open_file，
+    // 这样未保存改动的确认、最近列表的更新都与菜单打开完全一致。
+    listen<unknown>('drop-open', (event) => {
+      const path = typeof event.payload === 'string' ? event.payload : null;
+      if (path) openPath(path);
+    }).catch(() => {});
+    // 悬停反馈：拖进来时给正文加一圈虚线，离开/松手就撤掉。
+    listen<unknown>('drop-hover', (event) => {
+      if (event.payload === true) document.documentElement.dataset.drop = '1';
+      else delete document.documentElement.dataset.drop;
     }).catch(() => {});
   }
 }
@@ -1040,8 +1048,15 @@ window.addEventListener('paste', (event) => {
   send({ kind: 'insertText', text });
 });
 
-// 源码视图：textarea 是输入源，去抖后把整篇 Markdown 写回内核。
-// 不回写 textarea 的值（内核 reply 里带 source 也不覆盖正在编辑的一侧），
+// 文件拖进窗口时，浏览器默认会尝试把应用导航到该文件（整个界面被顶掉）。
+// 真正的 Drop 由宿主在窗口层接管并 emit `drop-open`；这里只掐掉 webview 的默认行为。
+window.addEventListener('dragover', (event) => event.preventDefault());
+window.addEventListener('drop', (event) => {
+  event.preventDefault();
+  delete document.documentElement.dataset.drop;
+});
+
+// 源码视图：textarea 是输入源，去抖后把整篇 Markdown 写回内核。// 不回写 textarea 的值（内核 reply 里带 source 也不覆盖正在编辑的一侧），
 // 只在换文档 / 切换视图时用 sourceText 灌入。
 sourceEl.addEventListener('input', () => {
   if (window.__mdviewMode !== 'source') return;

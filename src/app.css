@@ -583,3 +583,17 @@ html[data-view="reading"] #doc .a { cursor: pointer; }
   transition: opacity .2s ease; pointer-events: none; z-index: 20;
 }
 #toast.show { opacity: 1; }
+
+/* ---- 拖放打开 -------------------------------------------------------
+   文件拖进窗口时给正文铺一圈虚线，提示「松手就会打开」。
+   由宿主的 drop-hover 事件切换 html[data-drop]；整层 pointer-events:none，
+   不会挡住拖放本身的落点判定。 */
+html[data-drop="1"] body::after {
+  content: "松开以打开 Markdown 文件";
+  position: fixed; inset: 8px; z-index: 24;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px dashed var(--accent); border-radius: 10px;
+  background: var(--accent-soft); color: var(--fg);
+  font: 600 15px/1.4 var(--font-ui);
+  pointer-events: none;
+}

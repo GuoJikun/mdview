@@ -17,14 +17,14 @@ mod session;
 mod update;
 
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     process,
     sync::atomic::{AtomicBool, Ordering},
 };
 
 use mdview_app::Watcher;
 use session::{Reply, Session, Snapshot, Wire};
-use tauri::{Emitter, Manager, WindowEvent};
+use tauri::{DragDropEvent, Emitter, Manager, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_window_state::StateFlags;
 
@@ -268,6 +268,22 @@ fn use_custom_titlebar() -> bool {
     !cfg!(target_os = "macos")
 }
 
+/// 从拖放 / 命令行参数里挑第一个能当文档打开的路径。
+///
+/// 只认存在的文件：拖进来的可能是文件夹或图片，交给 `open_file` 只会报错。
+/// 扩展名比较不区分大小写，Windows 上 `.MD` 很常见。
+fn first_markdown(paths: &[PathBuf]) -> Option<&PathBuf> {
+    paths.iter().find(|path| {
+        path.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    matches!(ext.to_ascii_lowercase().as_str(), "md" | "markdown" | "txt")
+                })
+    })
+}
+
 /// 原生菜单里需要转给前端执行的动作 ID。
 /// 只列自绘编辑器真正支持的动作；about / hide / quit / minimize 等由系统自己处理。
 #[cfg(target_os = "macos")]
@@ -430,16 +446,14 @@ fn main() {
     builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
         // 有文件参数就交给已运行实例打开，否则新实例带着文档启动会「没反应」。
         // 跳过 --self-test 这类开关，只认 Markdown 扩展名的路径。
-        let path = args.iter().find(|arg| {
-            !arg.starts_with('-')
-                && Path::new(arg)
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| matches!(ext, "md" | "markdown" | "txt"))
-        });
-        if let Some(path) = path {
-            log::info!("单例收到打开请求：{path}");
-            let _ = app.emit("single-instance-open", path);
+        let paths: Vec<PathBuf> = args
+            .iter()
+            .filter(|arg| !arg.starts_with('-'))
+            .map(PathBuf::from)
+            .collect();
+        if let Some(path) = first_markdown(&paths) {
+            log::info!("单例收到打开请求：{}", path.display());
+            let _ = app.emit("single-instance-open", path.to_string_lossy().to_string());
         }
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.set_focus();
@@ -473,25 +487,47 @@ fn main() {
         .manage(update::UpdateState::new())
         // 关窗守卫：有未保存改动就拦住，让前端问一句再放行。
         // 标题栏的 ×、Alt+F4、菜单里的「关闭窗口」最后都走这里，一处拦全部。
-        .on_window_event(|window, event| {
-            let WindowEvent::CloseRequested { api, .. } = event else {
-                return;
-            };
-            let app = window.app_handle();
-            // swap 而不是 load：放行标志是**一次性**的。万一这次关闭后来没成
-            // （比如被别的插件拦下），下一次关窗还得重新问，不能永久放开。
-            if app
-                .state::<CloseGuard>()
-                .allowed
-                .swap(false, Ordering::SeqCst)
-            {
-                return;
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
+                let app = window.app_handle();
+                // swap 而不是 load：放行标志是**一次性**的。万一这次关闭后来没成
+                // （比如被别的插件拦下），下一次关窗还得重新问，不能永久放开。
+                if app
+                    .state::<CloseGuard>()
+                    .allowed
+                    .swap(false, Ordering::SeqCst)
+                {
+                    return;
+                }
+                if !app.state::<Session>().is_dirty() {
+                    return;
+                }
+                api.prevent_close();
+                let _ = window.emit("close-requested", ());
             }
-            if !app.state::<Session>().is_dirty() {
-                return;
+            // 拖放打开：只在真正的 Drop 上发一次事件，落点/悬停只用来做视觉反馈。
+            // 打开动作仍走前端 → `open_file` 命令，未保存改动的确认与菜单打开同一条路径。
+            WindowEvent::DragDrop(DragDropEvent::Enter { paths, .. }) => {
+                if window.app_handle().state::<RunMode>().self_test {
+                    return;
+                }
+                let _ = window.emit("drop-hover", first_markdown(paths).is_some());
             }
-            api.prevent_close();
-            let _ = window.emit("close-requested", ());
+            WindowEvent::DragDrop(DragDropEvent::Leave) => {
+                let _ = window.emit("drop-hover", false);
+            }
+            WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+                let _ = window.emit("drop-hover", false);
+                if window.app_handle().state::<RunMode>().self_test {
+                    return;
+                }
+                let Some(path) = first_markdown(paths) else {
+                    return;
+                };
+                log::info!("拖放打开：{}", path.display());
+                let _ = window.emit("drop-open", path.to_string_lossy().to_string());
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             snapshot,
@@ -586,6 +622,30 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_markdown_skips_folders_and_other_files() {
+        let dir = std::env::temp_dir().join(format!("mdview-drop-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let md = dir.join("说明.MD");
+        let png = dir.join("图.png");
+        std::fs::write(&md, "# 标题").expect("写测试文档失败");
+        std::fs::write(&png, b"png").expect("写测试图片失败");
+
+        assert_eq!(
+            first_markdown(&[dir.clone(), png.clone(), md.clone()]),
+            Some(&md),
+            "文件夹与非 Markdown 文件应被跳过，扩展名大小写不敏感"
+        );
+        assert_eq!(first_markdown(&[]), None);
+        assert_eq!(
+            first_markdown(&[dir.join("不存在.md")]),
+            None,
+            "不存在的路径不算"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn image_data_url_is_read_from_document_dir() {
