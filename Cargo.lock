@@ -2150,7 +2150,7 @@ dependencies = [
 
 [[package]]
 name = "mdview-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "mdview-core",
@@ -2161,7 +2161,7 @@ dependencies = [
 
 [[package]]
 name = "mdview-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "mdview-app",
@@ -2171,7 +2171,7 @@ dependencies = [
 
 [[package]]
 name = "mdview-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ropey",
  "thiserror 2.0.21",
@@ -2179,7 +2179,7 @@ dependencies = [
 
 [[package]]
 name = "mdview-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "log",
@@ -2198,14 +2198,14 @@ dependencies = [
 
 [[package]]
 name = "mdview-markdown"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pulldown-cmark",
 ]
 
 [[package]]
 name = "mdview-support"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "thiserror 2.0.21",
