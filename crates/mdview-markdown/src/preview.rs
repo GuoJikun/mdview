@@ -1055,8 +1055,13 @@ mod tests {
     #[test]
     fn code_block_chars_carry_macro_and_annotation_classes() {
         let html = preview_html("```rust\n#[derive(Debug)]\nprintln!(\"hi\");\n```");
-        assert!(html.contains("tk-macro"), "缺宏着色: {html}");
-        assert!(html.contains("tk-annotation"), "缺注解着色: {html}");
+        // 断言必须带上 `ch ` 前缀：样式表也内联在同一份 HTML 里，里面本来就有
+        // `.tk-macro` 规则，只搜 `tk-macro` 会恒真，等于什么都没验证。
+        assert!(html.contains("class=\"ch tk-macro\""), "缺宏着色: {html}");
+        assert!(
+            html.contains("class=\"ch tk-annotation\""),
+            "缺注解着色: {html}"
+        );
         // 宏与注解的 class 只加在字符元素上，停靠点数不变
         assert_eq!(
             html.matches("class=\"ch ").count(),

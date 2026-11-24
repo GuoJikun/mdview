@@ -1,5 +1,6 @@
 //! 各语言的关键字 / 类型 / 字面量表，按字典序排列以便二分查找。
-//! 表内容改动时必须保持有序，见 `highlight::lexer::contains` 的调试断言。
+//! 新增条目必须保持有序：`tests::keyword_tables_are_sorted_for_binary_search`
+//! 通过 `ALL_TABLES` 逐张校验（漏登记的表不会被查）。
 
 pub(crate) const RUST_KEYWORDS: &[&str] = &[
     "Self",

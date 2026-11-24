@@ -159,19 +159,19 @@ pub(crate) fn html_tokens(code: &str, base: usize) -> Vec<Token> {
                 j += c.len_utf8();
             }
             // <script> / <style> 内部再按 JS / CSS 扫一遍
-            if name.eq_ignore_ascii_case("script") || name.eq_ignore_ascii_case("style") {
-                let close = format!("</{}", name.to_ascii_lowercase());
-                if let Some(offset) = find_ci(&code[j..], &close) {
-                    let end = j + offset;
-                    let inner = &code[j..end];
-                    let mut inner_tokens = if name.eq_ignore_ascii_case("style") {
-                        css_tokens(inner, base + j)
-                    } else {
-                        code_tokens(Lang::Js, inner, base + j)
-                    };
-                    sink.out.append(&mut inner_tokens);
-                    j = end;
-                }
+            let is_script = name.eq_ignore_ascii_case("script");
+            if (is_script || name.eq_ignore_ascii_case("style"))
+                && let Some(offset) = find_close_tag(&code[j..], &name)
+            {
+                let end = j + offset;
+                let inner = &code[j..end];
+                let mut inner_tokens = if is_script {
+                    code_tokens(Lang::Js, inner, base + j)
+                } else {
+                    css_tokens(inner, base + j)
+                };
+                sink.out.append(&mut inner_tokens);
+                j = end;
             }
             i = j;
             continue;
@@ -181,10 +181,28 @@ pub(crate) fn html_tokens(code: &str, base: usize) -> Vec<Token> {
     sink.finish()
 }
 
-fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
-    haystack
-        .to_ascii_lowercase()
-        .find(&needle.to_ascii_lowercase())
+/// 找 `</name` 且其后紧跟标签边界的字节位置。
+///
+/// 必须校验边界：内联脚本的 JS 字符串里写 `"</scriptx>"` 时，只按前缀匹配会
+/// 把这里当成闭合，脚本被提前截断、余下部分回落到外层 HTML 分词，表现为该行
+/// 之后着色错乱。合法闭合是 `>`、`/`，或名字与 `>` 之间的空白。
+///
+/// 按字节窗口做 ASCII 比较，不再为每次调用分配两份小写副本（内联脚本可能
+/// 几百 KB，`to_ascii_lowercase` 的峰值内存是原文的两倍）。
+fn find_close_tag(haystack: &str, name: &str) -> Option<usize> {
+    let bytes = haystack.as_bytes();
+    let name = name.as_bytes();
+    // 至少要有 `</` + 名字 + 一个边界字节
+    let last = bytes.len().checked_sub(name.len() + 3)?;
+    (0..=last).find(|&i| {
+        bytes[i] == b'<'
+            && bytes[i + 1] == b'/'
+            && bytes[i + 2..i + 2 + name.len()].eq_ignore_ascii_case(name)
+            && matches!(
+                bytes[i + 2 + name.len()],
+                b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r' | 0x0C
+            )
+    })
 }
 
 // ---- CSS --------------------------------------------------------------

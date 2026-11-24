@@ -145,6 +145,29 @@ fn html_marks_tag_name_and_attributes() {
 }
 
 #[test]
+fn html_script_close_tag_requires_a_boundary() {
+    // JS 字符串里的 `"</scriptx>"` 不是闭合标签。只按前缀匹配会在这里截断
+    // 内联脚本，余下源码回落到外层 HTML 分词，`let` 就丢了关键字着色。
+    let code = "<script>\nconst s = \"</scriptx>\";\nlet n = 1;\n</script>";
+    let found = tokens(code, "html");
+    assert!(
+        found.contains(&("\"</scriptx>\"".into(), TokenKind::String)),
+        "字符串内部被拆开: {found:?}"
+    );
+    assert!(
+        found.contains(&("let".into(), TokenKind::Keyword)),
+        "脚本被 </scriptx> 提前闭合: {found:?}"
+    );
+
+    // 名字与 `>` 之间的空白同样是合法闭合
+    let found = tokens("<script>\nlet a = 1;\n</script >", "html");
+    assert!(
+        found.contains(&("let".into(), TokenKind::Keyword)),
+        "未识别 </script > 闭合: {found:?}"
+    );
+}
+
+#[test]
 fn css_marks_property_inside_a_block() {
     let found = tokens("body { color: red; margin: 0; }", "css");
     assert!(found.contains(&("body".into(), TokenKind::Tag)));
