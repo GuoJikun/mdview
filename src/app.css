@@ -23,6 +23,8 @@
   --tk-variable: #953800;
   --tk-tag: #116329;
   --tk-attribute: #0550ae;
+  --tk-macro: #8250df;
+  --tk-annotation: #0550ae;
   --tk-operator: #57606a;
   --quote-border: #dfe2e5;
   --link: #0969da;
@@ -83,6 +85,8 @@
   --tk-variable: #ffa657;
   --tk-tag: #7ee787;
   --tk-attribute: #79c0ff;
+  --tk-macro: #d2a8ff;
+  --tk-annotation: #79c0ff;
   --tk-operator: #c9d1d9;
   --quote-border: #3d444d;
   --link: #58a6ff;
@@ -474,6 +478,8 @@ html[data-view="reading"] #doc {
 #doc .tk-variable { color: var(--tk-variable); }
 #doc .tk-tag { color: var(--tk-tag); }
 #doc .tk-attribute { color: var(--tk-attribute); }
+#doc .tk-macro { color: var(--tk-macro); font-weight: 600; }
+#doc .tk-annotation { color: var(--tk-annotation); }
 #doc .tk-operator { color: var(--tk-operator); }
 #doc .a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
 /* 脚注：引用仍显示源码 `[^x]`，但按上标画；Ctrl/Cmd+Click 跳到定义。

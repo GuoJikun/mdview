@@ -803,6 +803,8 @@ body {
 #doc .tk-variable { color: #953800; }
 #doc .tk-tag { color: #116329; }
 #doc .tk-attribute { color: #0550ae; }
+#doc .tk-macro { color: #8250df; font-weight: 600; }
+#doc .tk-annotation { color: #0550ae; }
 #doc .tk-operator { color: #57606a; }
 #doc .a { color: #0969da; text-decoration: underline; text-underline-offset: 2px; }
 /* 脚注：引用仍显示源码 `[^x]`，但按上标样式画；定义块用序号前缀与回链 */
@@ -1046,6 +1048,18 @@ mod tests {
         assert!(html.contains("tk-number"), "缺数字着色: {html}");
         // 着色只加 class，不改变停靠点：`let a = 1;` 仍是 10 个逐字符元素
         assert_eq!(html.matches("class=\"ch ").count(), 10);
+    }
+
+    #[test]
+    fn code_block_chars_carry_macro_and_annotation_classes() {
+        let html = preview_html("```rust\n#[derive(Debug)]\nprintln!(\"hi\");\n```");
+        assert!(html.contains("tk-macro"), "缺宏着色: {html}");
+        assert!(html.contains("tk-annotation"), "缺注解着色: {html}");
+        // 宏与注解的 class 只加在字符元素上，停靠点数不变
+        assert_eq!(
+            html.matches("class=\"ch ").count(),
+            "#[derive(Debug)]".len() + "println!(\"hi\");".len()
+        );
     }
 
     #[test]
