@@ -4,6 +4,12 @@
 //! 这一档着色，自带的词法扫描足以覆盖常见语言，也保持 `mdview-markdown` 的
 //! 零依赖约束（见 PLAN 第 12 节）。
 //!
+//! 语言覆盖分两类：
+//! - **词表驱动**（多数语言）：只声明关键字 / 类型 / 字面量表与注释、引号规则，
+//!   由 [`lexer::code_tokens`] 统一扫描（见 [`Lang::from_info`]）。
+//! - **专用扫描器**：结构差异太大的格式（JSON / HTML / CSS / YAML / TOML /
+//!   Markdown / diff / Dockerfile / Makefile / Nginx）走 `langs::*` 下的实现。
+//!
 //! 产出的 [`Token`] 与投影层共用 **byte offset** 坐标系：渲染层按字符停靠点
 //! 查表套 class，不改变停靠点集合，也不参与编辑。未知语言返回空表，按原样
 //! 显示代码。
@@ -29,10 +35,15 @@ pub enum TokenKind {
     Variable,
     Tag,
     Attribute,
-    /// Rust `println!` / `vec!` 这类宏调用，以及 C 预处理指令。
+    /// Rust `println!` / `vec!` 这类宏调用，C 预处理指令，以及 `\section` 这类
+    /// LaTeX 控制序列。
     Macro,
     /// Rust `#[derive]`、`@dataclass`、`@Override` 这类属性与注解。
     Annotation,
+    /// 差异补丁里的新增行。
+    Inserted,
+    /// 差异补丁里的删除行。
+    Deleted,
     Operator,
 }
 
@@ -52,6 +63,8 @@ impl TokenKind {
             TokenKind::Attribute => "tk-attribute",
             TokenKind::Macro => "tk-macro",
             TokenKind::Annotation => "tk-annotation",
+            TokenKind::Inserted => "tk-inserted",
+            TokenKind::Deleted => "tk-deleted",
             TokenKind::Operator => "tk-operator",
         }
     }
@@ -78,10 +91,41 @@ enum Lang {
     C,
     Cpp,
     Java,
+    Kotlin,
+    Csharp,
+    Swift,
+    Dart,
+    Scala,
+    Groovy,
+    ObjC,
+    Zig,
     Sql,
     Yaml,
     Toml,
+    Hcl,
+    Protobuf,
+    GraphQl,
     Markdown,
+    Php,
+    Ruby,
+    Perl,
+    Lua,
+    PowerShell,
+    R,
+    Elixir,
+    Haskell,
+    Julia,
+    Clojure,
+    Erlang,
+    Ocaml,
+    Fsharp,
+    Vb,
+    Solidity,
+    Latex,
+    Nginx,
+    Dockerfile,
+    Makefile,
+    Diff,
     Plain,
 }
 
@@ -107,23 +151,67 @@ impl Lang {
         let Some(word) = language_word(info) else {
             return Lang::Plain;
         };
+        // 别名按语言家族分组：扩展名（`rs` / `mts` / `kts`）与常见写法（`bash` /
+        // `pwsh` / `c#`）都要认，否则用户写扩展名就掉回纯文本。
         match word.to_ascii_lowercase().as_str() {
             "rust" | "rs" => Lang::Rust,
+
             "js" | "javascript" | "jsx" | "mjs" | "cjs" => Lang::Js,
-            "ts" | "typescript" | "tsx" => Lang::Ts,
-            "py" | "python" | "python3" => Lang::Python,
-            "json" | "jsonc" => Lang::Json,
-            "html" | "htm" | "xml" | "svg" | "vue" | "svelte" => Lang::Html,
-            "css" | "scss" | "less" => Lang::Css,
+            "ts" | "typescript" | "tsx" | "mts" | "cts" => Lang::Ts,
+
+            "py" | "python" | "python3" | "pyi" => Lang::Python,
+            "rb" | "ruby" | "rake" | "gemspec" => Lang::Ruby,
+            "php" | "phtml" => Lang::Php,
+            "pl" | "pm" | "perl" => Lang::Perl,
+            "lua" => Lang::Lua,
             "sh" | "bash" | "shell" | "zsh" | "fish" => Lang::Shell,
+            "ps1" | "psm1" | "psd1" | "powershell" | "pwsh" => Lang::PowerShell,
+            "r" | "rscript" => Lang::R,
+
+            "java" => Lang::Java,
+            "kt" | "kotlin" | "kts" => Lang::Kotlin,
+            "scala" | "sc" | "sbt" => Lang::Scala,
+            "groovy" | "gradle" => Lang::Groovy,
+            "cs" | "csharp" | "c#" | "csx" => Lang::Csharp,
+            "fs" | "fsi" | "fsx" | "fsharp" => Lang::Fsharp,
+            "vb" | "vbnet" | "vb.net" => Lang::Vb,
+            "swift" => Lang::Swift,
+            "dart" => Lang::Dart,
+
             "go" | "golang" => Lang::Go,
             "c" | "h" => Lang::C,
-            "cpp" | "c++" | "cc" | "cxx" | "hpp" | "hxx" => Lang::Cpp,
-            "java" | "kt" | "kotlin" | "cs" | "csharp" | "c#" => Lang::Java,
-            "sql" | "postgres" | "postgresql" | "mysql" | "sqlite" => Lang::Sql,
+            "cpp" | "c++" | "cc" | "cxx" | "hpp" | "hxx" | "cu" | "cuda" => Lang::Cpp,
+            "objc" | "obj-c" | "objective-c" | "objectivec" => Lang::ObjC,
+            "zig" => Lang::Zig,
+
+            "hs" | "lhs" | "haskell" => Lang::Haskell,
+            "ex" | "exs" | "elixir" => Lang::Elixir,
+            "erl" | "hrl" | "erlang" => Lang::Erlang,
+            "ml" | "mli" | "ocaml" => Lang::Ocaml,
+            "clj" | "cljs" | "cljc" | "edn" | "clojure" => Lang::Clojure,
+            "jl" | "julia" => Lang::Julia,
+
+            "json" | "jsonc" | "json5" | "jsonl" | "ndjson" => Lang::Json,
+            "html" | "htm" | "xml" | "svg" | "vue" | "svelte" | "astro" => Lang::Html,
+            "css" | "scss" | "sass" | "less" | "styl" | "stylus" => Lang::Css,
             "yaml" | "yml" => Lang::Yaml,
-            "toml" | "ini" | "conf" => Lang::Toml,
+            "toml" | "ini" | "conf" | "env" | "dotenv" => Lang::Toml,
             "md" | "markdown" => Lang::Markdown,
+            "sql" | "postgres" | "postgresql" | "mysql" | "sqlite" => Lang::Sql,
+            "graphql" | "gql" => Lang::GraphQl,
+            "proto" | "protobuf" | "proto3" => Lang::Protobuf,
+            "tf" | "tfvars" | "hcl" | "terraform" => Lang::Hcl,
+            "tex" | "latex" | "ltx" => Lang::Latex,
+            "sol" | "solidity" => Lang::Solidity,
+
+            "nginx" | "nginxconf" => Lang::Nginx,
+            "dockerfile" | "docker" | "containerfile" => Lang::Dockerfile,
+            "makefile" | "make" | "mk" | "gnumakefile" => Lang::Makefile,
+            "diff" | "patch" | "udiff" => Lang::Diff,
+
+            // 明确声明「不要着色」的写法，避免将来加语言时被误认。
+            "text" | "txt" | "plain" | "plaintext" | "log" | "console" | "shell-session"
+            | "output" => Lang::Plain,
             _ => Lang::Plain,
         }
     }
@@ -150,6 +238,12 @@ pub fn highlight(info: Option<&str>, src: &str, content: Range<usize>) -> Vec<To
         Lang::Yaml => langs::data::yaml_tokens(code, content.start),
         Lang::Toml => langs::data::toml_tokens(code, content.start),
         Lang::Markdown => langs::markdown::markdown_tokens(code, content.start),
+        Lang::Diff => langs::diff::diff_tokens(code, content.start),
+        // 行导向的工程配置：指令名与变量的位置由行结构决定，通用词法器分不清
+        // `RUN` 与普通标识符，交给专用扫描器。
+        Lang::Dockerfile | Lang::Makefile | Lang::Nginx => {
+            langs::config::tokens(lang, code, content.start)
+        }
         _ => lexer::code_tokens(lang, code, content.start),
     };
     let tokens = normalize(tokens, &content);

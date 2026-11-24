@@ -806,6 +806,8 @@ body {
 #doc .tk-macro { color: #8250df; font-weight: 600; }
 #doc .tk-annotation { color: #0550ae; }
 #doc .tk-operator { color: #57606a; }
+#doc .tk-inserted { color: #116329; background: #e6ffec; }
+#doc .tk-deleted { color: #cf222e; background: #ffebe9; }
 #doc .a { color: #0969da; text-decoration: underline; text-underline-offset: 2px; }
 /* 脚注：引用仍显示源码 `[^x]`，但按上标样式画；定义块用序号前缀与回链 */
 #doc .fnref { color: #8250df; font-size: .82em; vertical-align: super; line-height: 0; cursor: pointer; }

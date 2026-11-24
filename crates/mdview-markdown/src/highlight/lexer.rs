@@ -6,108 +6,41 @@ use super::{Lang, Token, TokenKind};
 
 // ---- 通用词法 ---------------------------------------------------------
 
+/// 普通引号规则。带特殊语法的语言（Rust 原始字符串、C# 的 `@"…"`、Lua 的
+/// `[[…]]`）仍在 [`string_end`] 里按 `lang` 单独处理，这里只描述默认那一档，
+/// 避免 `string_end` 变成三十个分支。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Quotes {
+    /// 不认引号（LaTeX / Makefile）。
+    None,
+    /// 只有 `"`，反斜杠转义。
+    Double,
+    /// `"` 与 `'`，反斜杠转义。
+    Both,
+    /// `"` 与 `'`，不做转义处理（PowerShell / VB：反斜杠是普通字符）。
+    RawBoth,
+    /// `Both` 之上再认 `"""` / `'''` 三引号。
+    Triple,
+}
+
 /// 语言相关的扫描参数。`line_comments` / `block_comment` 决定注释边界，
-/// 其余三个表决定标识符归类。
+/// 三个表决定标识符归类，`quotes` 决定默认的字符串边界。
 struct Spec {
     keywords: &'static [&'static str],
     types: &'static [&'static str],
     literals: &'static [&'static str],
     line_comments: &'static [&'static str],
     block_comment: Option<(&'static str, &'static str)>,
-    /// SQL 这类大小写不敏感的语言。
+    /// SQL / VB / PowerShell 这类大小写不敏感的语言。
     case_insensitive: bool,
-    /// `#` 只有位于行首或空白之后才算注释（Shell / YAML）。
+    /// `#` 只有位于行首或空白之后才算注释（Shell / YAML / Nginx）。
     hash_needs_boundary: bool,
+    quotes: Quotes,
 }
 
-fn spec(lang: Lang) -> Spec {
-    match lang {
-        Lang::Rust => Spec {
-            keywords: RUST_KEYWORDS,
-            types: RUST_TYPES,
-            literals: RUST_LITERALS,
-            line_comments: &["//"],
-            block_comment: Some(("/*", "*/")),
-            case_insensitive: false,
-            hash_needs_boundary: false,
-        },
-        Lang::Js | Lang::Ts => Spec {
-            keywords: if lang == Lang::Ts {
-                TS_KEYWORDS
-            } else {
-                JS_KEYWORDS
-            },
-            types: if lang == Lang::Ts { TS_TYPES } else { JS_TYPES },
-            literals: JS_LITERALS,
-            line_comments: &["//"],
-            block_comment: Some(("/*", "*/")),
-            case_insensitive: false,
-            hash_needs_boundary: false,
-        },
-        Lang::Python => Spec {
-            keywords: PYTHON_KEYWORDS,
-            types: PYTHON_TYPES,
-            literals: PYTHON_LITERALS,
-            line_comments: &["#"],
-            block_comment: None,
-            case_insensitive: false,
-            hash_needs_boundary: false,
-        },
-        Lang::Shell => Spec {
-            keywords: SHELL_KEYWORDS,
-            types: &[],
-            literals: SHELL_LITERALS,
-            line_comments: &["#"],
-            block_comment: None,
-            case_insensitive: false,
-            hash_needs_boundary: true,
-        },
-        Lang::Go => Spec {
-            keywords: GO_KEYWORDS,
-            types: GO_TYPES,
-            literals: GO_LITERALS,
-            line_comments: &["//"],
-            block_comment: Some(("/*", "*/")),
-            case_insensitive: false,
-            hash_needs_boundary: false,
-        },
-        Lang::C => Spec {
-            keywords: C_KEYWORDS,
-            types: C_TYPES,
-            literals: C_LITERALS,
-            line_comments: &["//"],
-            block_comment: Some(("/*", "*/")),
-            case_insensitive: false,
-            hash_needs_boundary: false,
-        },
-        Lang::Cpp => Spec {
-            keywords: CPP_KEYWORDS,
-            types: CPP_TYPES,
-            literals: C_LITERALS,
-            line_comments: &["//"],
-            block_comment: Some(("/*", "*/")),
-            case_insensitive: false,
-            hash_needs_boundary: false,
-        },
-        Lang::Java => Spec {
-            keywords: JAVA_KEYWORDS,
-            types: JAVA_TYPES,
-            literals: C_LITERALS,
-            line_comments: &["//"],
-            block_comment: Some(("/*", "*/")),
-            case_insensitive: false,
-            hash_needs_boundary: false,
-        },
-        Lang::Sql => Spec {
-            keywords: SQL_KEYWORDS,
-            types: SQL_TYPES,
-            literals: SQL_LITERALS,
-            line_comments: &["--"],
-            block_comment: Some(("/*", "*/")),
-            case_insensitive: true,
-            hash_needs_boundary: false,
-        },
-        _ => Spec {
+impl Default for Spec {
+    fn default() -> Self {
+        Self {
             keywords: &[],
             types: &[],
             literals: &[],
@@ -115,7 +48,145 @@ fn spec(lang: Lang) -> Spec {
             block_comment: None,
             case_insensitive: false,
             hash_needs_boundary: false,
-        },
+            quotes: Quotes::None,
+        }
+    }
+}
+
+fn spec(lang: Lang) -> Spec {
+    let (keywords, types, literals) = tables(lang);
+    let (line_comments, block_comment, case_insensitive, hash_needs_boundary, quotes) =
+        syntax(lang);
+    Spec {
+        keywords,
+        types,
+        literals,
+        line_comments,
+        block_comment,
+        case_insensitive,
+        hash_needs_boundary,
+        quotes,
+    }
+}
+
+/// 词表三元组：关键字 / 类型 / 字面量。新增语言时这里加一行，
+/// 再在 [`syntax`] 里给出注释与引号规则。
+fn tables(
+    lang: Lang,
+) -> (
+    &'static [&'static str],
+    &'static [&'static str],
+    &'static [&'static str],
+) {
+    match lang {
+        Lang::Rust => (RUST_KEYWORDS, RUST_TYPES, RUST_LITERALS),
+        Lang::Js => (JS_KEYWORDS, JS_TYPES, JS_LITERALS),
+        Lang::Ts => (TS_KEYWORDS, TS_TYPES, JS_LITERALS),
+        Lang::Python => (PYTHON_KEYWORDS, PYTHON_TYPES, PYTHON_LITERALS),
+        Lang::Shell => (SHELL_KEYWORDS, &[], SHELL_LITERALS),
+        Lang::Go => (GO_KEYWORDS, GO_TYPES, GO_LITERALS),
+        Lang::C => (C_KEYWORDS, C_TYPES, C_LITERALS),
+        Lang::Cpp => (CPP_KEYWORDS, CPP_TYPES, C_LITERALS),
+        Lang::Java => (JAVA_KEYWORDS, JAVA_TYPES, C_LITERALS),
+        Lang::Sql => (SQL_KEYWORDS, SQL_TYPES, SQL_LITERALS),
+
+        Lang::Kotlin => (KOTLIN_KEYWORDS, KOTLIN_TYPES, KOTLIN_LITERALS),
+        Lang::Csharp => (CSHARP_KEYWORDS, CSHARP_TYPES, CSHARP_LITERALS),
+        Lang::Swift => (SWIFT_KEYWORDS, SWIFT_TYPES, SWIFT_LITERALS),
+        Lang::Dart => (DART_KEYWORDS, DART_TYPES, DART_LITERALS),
+        Lang::Scala => (SCALA_KEYWORDS, SCALA_TYPES, SCALA_LITERALS),
+        Lang::Groovy => (GROOVY_KEYWORDS, GROOVY_TYPES, GROOVY_LITERALS),
+        Lang::ObjC => (OBJC_KEYWORDS, OBJC_TYPES, OBJC_LITERALS),
+        Lang::Zig => (ZIG_KEYWORDS, ZIG_TYPES, ZIG_LITERALS),
+
+        Lang::Php => (PHP_KEYWORDS, PHP_TYPES, PHP_LITERALS),
+        Lang::Ruby => (RUBY_KEYWORDS, RUBY_TYPES, RUBY_LITERALS),
+        Lang::Perl => (PERL_KEYWORDS, &[], PERL_LITERALS),
+        Lang::Lua => (LUA_KEYWORDS, LUA_TYPES, LUA_LITERALS),
+        Lang::PowerShell => (POWERSHELL_KEYWORDS, &[], POWERSHELL_LITERALS),
+        Lang::R => (R_KEYWORDS, R_TYPES, R_LITERALS),
+
+        Lang::Elixir => (ELIXIR_KEYWORDS, ELIXIR_TYPES, ELIXIR_LITERALS),
+        Lang::Haskell => (HASKELL_KEYWORDS, HASKELL_TYPES, HASKELL_LITERALS),
+        Lang::Julia => (JULIA_KEYWORDS, JULIA_TYPES, JULIA_LITERALS),
+        Lang::Clojure => (CLOJURE_KEYWORDS, &[], CLOJURE_LITERALS),
+        Lang::Erlang => (ERLANG_KEYWORDS, &[], ERLANG_LITERALS),
+        Lang::Ocaml => (OCAML_KEYWORDS, OCAML_TYPES, OCAML_LITERALS),
+        Lang::Fsharp => (FSHARP_KEYWORDS, FSHARP_TYPES, FSHARP_LITERALS),
+        Lang::Vb => (VB_KEYWORDS, VB_TYPES, VB_LITERALS),
+
+        Lang::Solidity => (SOLIDITY_KEYWORDS, SOLIDITY_TYPES, SOLIDITY_LITERALS),
+        Lang::GraphQl => (GRAPHQL_KEYWORDS, GRAPHQL_TYPES, GRAPHQL_LITERALS),
+        Lang::Protobuf => (PROTOBUF_KEYWORDS, PROTOBUF_TYPES, PROTOBUF_LITERALS),
+        Lang::Hcl => (HCL_KEYWORDS, HCL_TYPES, HCL_LITERALS),
+
+        // 行导向的配置语言只用到注释与引号规则，关键字表供专用扫描器取用。
+        Lang::Nginx => (NGINX_KEYWORDS, &[], NGINX_LITERALS),
+        Lang::Dockerfile => (DOCKERFILE_KEYWORDS, &[], &[]),
+        Lang::Makefile => (MAKEFILE_KEYWORDS, &[], &[]),
+        _ => (&[], &[], &[]),
+    }
+}
+
+/// 注释与引号规则：(行注释前缀, 块注释定界符, 大小写不敏感, `#` 需前置空白,
+/// 引号规则)。
+type Syntax = (
+    &'static [&'static str],
+    Option<(&'static str, &'static str)>,
+    bool,
+    bool,
+    Quotes,
+);
+
+/// 注释与引号规则。
+fn syntax(lang: Lang) -> Syntax {
+    // `None` 在这里既可能是 `Option::None` 也可能是 `Quotes::None`，
+    // 只引入需要的变体，避免遮蔽 prelude。
+    use Quotes::{Both, Double, RawBoth, Triple};
+    match lang {
+        // 已有语言：字符串规则在 `string_end` 里按 lang 特判，这里只管注释。
+        Lang::Rust | Lang::Js | Lang::Ts | Lang::Go | Lang::C | Lang::Cpp | Lang::Java => {
+            (&["//"], Some(("/*", "*/")), false, false, Quotes::None)
+        }
+        Lang::Python => (&["#"], None, false, false, Quotes::None),
+        Lang::Shell => (&["#"], None, false, true, Quotes::None),
+        Lang::Sql => (&["--"], Some(("/*", "*/")), true, false, Quotes::None),
+
+        // C 家族新成员
+        Lang::Kotlin | Lang::Dart | Lang::Scala | Lang::Groovy => {
+            (&["//"], Some(("/*", "*/")), false, false, Triple)
+        }
+        Lang::Swift => (&["//"], Some(("/*", "*/")), false, false, Double),
+        Lang::Zig | Lang::Solidity | Lang::Protobuf => {
+            (&["//"], Some(("/*", "*/")), false, false, Both)
+        }
+        // C# 的 `@"…"` 与 Objective-C 的 `@"…"` 在 `string_end` 里特判。
+        Lang::Csharp | Lang::ObjC => (&["//"], Some(("/*", "*/")), false, false, Quotes::None),
+
+        // 脚本语言
+        Lang::Php => (&["//", "#"], Some(("/*", "*/")), false, false, Both),
+        Lang::Ruby | Lang::R | Lang::Perl => (&["#"], None, false, false, Both),
+        Lang::PowerShell => (&["#"], Some(("<#", "#>")), true, false, RawBoth),
+        Lang::Lua => (&["--"], None, false, false, Quotes::None),
+        Lang::Vb => (&["'"], None, true, false, RawBoth),
+
+        // 函数式与逻辑
+        Lang::Elixir | Lang::GraphQl => (&["#"], None, false, false, Triple),
+        Lang::Haskell => (&["--"], Some(("{-", "-}")), false, false, Double),
+        Lang::Julia => (&["#"], Some(("#=", "=#")), false, false, Triple),
+        Lang::Clojure => (&[";"], None, false, false, Double),
+        Lang::Erlang => (&["%"], None, false, false, Both),
+        Lang::Ocaml => (&[], Some(("(*", "*)")), false, false, Both),
+        Lang::Fsharp => (&["//"], Some(("(*", "*)")), false, false, Triple),
+
+        Lang::Hcl => (&["#", "//"], Some(("/*", "*/")), false, false, Double),
+        Lang::Latex => (&["%"], None, false, false, Quotes::None),
+
+        Lang::Nginx => (&["#"], None, true, true, Quotes::None),
+        Lang::Dockerfile => (&["#"], None, true, true, Double),
+        Lang::Makefile => (&["#"], None, false, false, Quotes::None),
+        Lang::Diff => (&[], None, false, false, Quotes::None),
+        _ => (&[], None, false, false, Quotes::None),
     }
 }
 
@@ -158,6 +229,16 @@ pub(crate) fn code_tokens(lang: Lang, code: &str, base: usize) -> Vec<Token> {
             continue;
         }
 
+        // Lua 的 `--[[ … ]]` 跨行块注释：必须先于 `--` 行注释判定。
+        if lang == Lang::Lua
+            && code[i..].starts_with("--[[")
+            && let Some(end) = lua_long_bracket_end(code, i + 2)
+        {
+            sink.push(i, end, TokenKind::Comment);
+            i = end;
+            continue;
+        }
+
         if let Some((open, close)) = spec.block_comment
             && code[i..].starts_with(open)
         {
@@ -185,16 +266,20 @@ pub(crate) fn code_tokens(lang: Lang, code: &str, base: usize) -> Vec<Token> {
             continue;
         }
 
-        if matches!(lang, Lang::C | Lang::Cpp) && c == '#' && at_line_start(code, i) {
-            if let Some(end) = directive_end(code, i) {
-                sink.push(i, end, TokenKind::Macro);
-                i = end;
-                continue;
-            }
+        if matches!(lang, Lang::C | Lang::Cpp)
+            && c == '#'
+            && at_line_start(code, i)
+            && let Some(end) = directive_end(code, i)
+        {
+            sink.push(i, end, TokenKind::Macro);
+            i = end;
+            continue;
         }
 
-        if matches!(lang, Lang::Python | Lang::Ts | Lang::Java)
-            && c == '@'
+        if matches!(
+            lang,
+            Lang::Python | Lang::Ts | Lang::Java | Lang::Elixir | Lang::ObjC
+        ) && c == '@'
             && annotation_allowed(lang, code, i)
             && let Some(end) = annotation_end(code, i)
         {
@@ -203,14 +288,57 @@ pub(crate) fn code_tokens(lang: Lang, code: &str, base: usize) -> Vec<Token> {
             continue;
         }
 
-        if lang == Lang::Shell && c == '$' {
-            let end = shell_var_end(code, i);
+        // `$var` / `${var}`：Shell 与沿用同一套写法的脚本语言。
+        if c == '$'
+            && matches!(
+                lang,
+                Lang::Shell | Lang::Php | Lang::Perl | Lang::PowerShell | Lang::Ruby
+            )
+        {
+            let end = shell_var_end(code, i, lang == Lang::PowerShell);
             sink.push(i, end, TokenKind::Variable);
             i = end;
             continue;
         }
 
-        if let Some(end) = string_end(lang, code, i) {
+        // Ruby 的 `@ivar` / `@@cvar`。
+        if lang == Lang::Ruby
+            && c == '@'
+            && let Some(end) = ruby_var_end(code, i)
+        {
+            sink.push(i, end, TokenKind::Variable);
+            i = end;
+            continue;
+        }
+
+        // Elixir 的原子 `:ok`：只有前面不是标识符时才算（`a: 1` 的冒号属于键）。
+        if lang == Lang::Elixir
+            && c == ':'
+            && let Some(end) = elixir_atom_end(code, i)
+        {
+            sink.push(i, end, TokenKind::Literal);
+            i = end;
+            continue;
+        }
+
+        // LaTeX 的 `\section` / `\\` 控制序列。
+        if lang == Lang::Latex && c == '\\' {
+            let end = latex_command_end(code, i);
+            sink.push(i, end, TokenKind::Macro);
+            i = end;
+            continue;
+        }
+
+        // PHP 起始标记：`<?php` / `<?=` 否则会被拆成运算符加标识符。
+        if lang == Lang::Php
+            && let Some(end) = php_open_tag_end(code, i)
+        {
+            sink.push(i, end, TokenKind::Macro);
+            i = end;
+            continue;
+        }
+
+        if let Some(end) = string_end(lang, &spec, code, i) {
             sink.push(i, end, TokenKind::String);
             i = end;
             continue;
@@ -274,11 +402,11 @@ fn attribute_end(code: &str, start: usize) -> Option<usize> {
     let mut i = start + (rest.len() - inner.len());
     while i < code.len() {
         let c = code[i..].chars().next()?;
-        if c == '"' || c == '\'' {
-            if let Some(end) = quote_end(code, i, c, true, true) {
-                i = end;
-                continue;
-            }
+        if (c == '"' || c == '\'')
+            && let Some(end) = quote_end(code, i, c, true, true)
+        {
+            i = end;
+            continue;
         }
         match c {
             '[' => depth += 1,
@@ -323,7 +451,7 @@ fn at_line_start(code: &str, i: usize) -> bool {
 }
 
 /// `@` 是否可能作为注解起点：Python 只在行首认装饰器（其余是矩阵乘），
-/// TS / Java 只要前一个非空字符是行首或运算符即可。
+/// TS / Java / Elixir / Objective-C 只要前一个非空字符不是标识符即可。
 fn annotation_allowed(lang: Lang, code: &str, i: usize) -> bool {
     let before = code[..i].trim_end_matches([' ', '\t', '\r']);
     let prev = before.chars().next_back();
@@ -389,7 +517,8 @@ fn word_kind(spec: &Spec, word: &str, is_call: bool) -> Option<TokenKind> {
 /// 在有序关键字表里查词。表由 `langs::code` 按字典序维护，走二分而不是线性扫描。
 pub(crate) fn contains(list: &[&str], word: &str, case_insensitive: bool) -> bool {
     if case_insensitive {
-        // 大小写不敏感的表（SQL / CSS）内容全是 ASCII 小写，小写化后再查即可。
+        // 大小写不敏感的表（SQL / CSS / VB / PowerShell）内容全是 ASCII 小写，
+        // 小写化后再查即可。
         let lower = word.to_ascii_lowercase();
         list.binary_search(&lower.as_str()).is_ok()
     } else {
@@ -488,7 +617,29 @@ fn triple_quote_end(s: &str, start: usize, quote: char) -> Option<usize> {
     s[start + 3..].find(pat).map(|p| start + 3 + p + 3)
 }
 
-fn string_end(lang: Lang, code: &str, i: usize) -> Option<usize> {
+/// 按 [`Quotes`] 认一段普通字符串，返回相对 `rest` 的结束偏移。
+fn scan_quotes(quotes: Quotes, rest: &str) -> Option<usize> {
+    let c = rest.chars().next()?;
+    let (delims, triple, escapes): (&[char], bool, bool) = match quotes {
+        Quotes::None => return None,
+        Quotes::Double => (&['"'], false, true),
+        Quotes::Both => (&['"', '\''], false, true),
+        Quotes::RawBoth => (&['"', '\''], false, false),
+        Quotes::Triple => (&['"', '\''], true, true),
+    };
+    if !delims.contains(&c) {
+        return None;
+    }
+    if triple {
+        let pat = format!("{c}{c}{c}");
+        if rest.starts_with(&pat) {
+            return rest[3..].find(&pat).map(|p| 3 + p + 3);
+        }
+    }
+    quote_end(rest, 0, c, escapes, false)
+}
+
+fn string_end(lang: Lang, spec: &Spec, code: &str, i: usize) -> Option<usize> {
     let rest = &code[i..];
     let c = rest.chars().next()?;
     // 下面各分支返回的偏移都相对于 `rest`，最后统一加上 `i`。
@@ -604,7 +755,46 @@ fn string_end(lang: Lang, code: &str, i: usize) -> Option<usize> {
                 None
             }
         }
-        _ => None,
+        // C# 的 `@"…"` / `$@"…"` / `@$"…"` 逐字字符串：不认反斜杠，可跨行。
+        Lang::Csharp => {
+            if let Some(prefix) = ["$@\"", "@$\"", "@\""]
+                .iter()
+                .find(|p| rest.starts_with(**p))
+                .map(|p| p.len())
+            {
+                Some(
+                    rest[prefix..]
+                        .find('"')
+                        .map(|p| prefix + p + 1)
+                        .unwrap_or(rest.len()),
+                )
+            } else if c == '"' || c == '\'' {
+                quote_end(rest, 0, c, true, false)
+            } else {
+                None
+            }
+        }
+        // Objective-C 的 `@"…"` 与 C 的引号。
+        Lang::ObjC => {
+            if rest.starts_with("@\"") {
+                quote_end(rest, 1, '"', true, true)
+            } else if c == '"' || c == '\'' {
+                quote_end(rest, 0, c, true, false)
+            } else {
+                None
+            }
+        }
+        // Lua 的 `[[ … ]]` 长字符串。
+        Lang::Lua => {
+            if rest.starts_with("[[") {
+                lua_long_bracket_end(rest, 0)
+            } else if c == '"' || c == '\'' {
+                quote_end(rest, 0, c, true, false)
+            } else {
+                None
+            }
+        }
+        _ => scan_quotes(spec.quotes, rest),
     };
     relative.map(|end| i + end)
 }
@@ -612,8 +802,14 @@ fn string_end(lang: Lang, code: &str, i: usize) -> Option<usize> {
 pub(crate) fn number_end(code: &str, start: usize) -> usize {
     let bytes = code.as_bytes();
     let mut i = start;
-    if bytes[i] == b'0'
-        && i + 1 < bytes.len()
+    // JSON / TOML 允许前导负号，调用方只在 `-` 紧跟数字时才进来。这里必须吃掉
+    // 符号：否则首字节是 `-` 时下面的循环一步都不走，原样返回 `start`，调用方的
+    // `i = end` 不推进，扫描器就会死循环。
+    if i < bytes.len() && matches!(bytes[i], b'-' | b'+') {
+        i += 1;
+    }
+    if i + 1 < bytes.len()
+        && bytes[i] == b'0'
         && matches!(bytes[i + 1], b'x' | b'X' | b'b' | b'B' | b'o' | b'O')
     {
         i += 2;
@@ -650,7 +846,8 @@ pub(crate) fn number_end(code: &str, start: usize) -> usize {
     i
 }
 
-fn shell_var_end(code: &str, start: usize) -> usize {
+/// `$var` / `${var}` / `$@`。`allow_colon` 让 PowerShell 的 `$env:PATH` 整段算一个变量。
+pub(crate) fn shell_var_end(code: &str, start: usize, allow_colon: bool) -> usize {
     let rest = &code[start..];
     if rest.starts_with("${") {
         return rest
@@ -661,7 +858,9 @@ fn shell_var_end(code: &str, start: usize) -> usize {
     let mut i = start + 1;
     while i < code.len() {
         let c = code[i..].chars().next().unwrap();
-        if is_ident_continue(c) || matches!(c, '@' | '*' | '#' | '?' | '$' | '!' | '-' | '0'..='9')
+        if is_ident_continue(c)
+            || matches!(c, '@' | '*' | '#' | '?' | '$' | '!' | '-' | '0'..='9')
+            || (allow_colon && c == ':')
         {
             i += c.len_utf8();
         } else {
@@ -669,6 +868,88 @@ fn shell_var_end(code: &str, start: usize) -> usize {
         }
     }
     i
+}
+
+/// Ruby 的 `@ivar` / `@@cvar`：`@` 后必须紧跟标识符首字符。
+fn ruby_var_end(code: &str, start: usize) -> Option<usize> {
+    let rest = &code[start + 1..];
+    let (offset, rest) = match rest.strip_prefix('@') {
+        Some(tail) => (2, tail),
+        None => (1, rest),
+    };
+    rest.chars().next().filter(|c| is_ident_start(*c))?;
+    let mut i = start + offset;
+    while i < code.len() {
+        let c = code[i..].chars().next()?;
+        if is_ident_continue(c) {
+            i += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    Some(i)
+}
+
+/// Elixir 原子 `:ok` / `:error`。键值对 `a: 1` 的冒号前面是标识符，不认。
+fn elixir_atom_end(code: &str, start: usize) -> Option<usize> {
+    let prev = code[..start].chars().next_back();
+    if prev.is_some_and(is_ident_continue) {
+        return None;
+    }
+    let rest = &code[start + 1..];
+    rest.chars().next().filter(|c| is_ident_start(*c))?;
+    let mut i = start + 1;
+    while i < code.len() {
+        let c = code[i..].chars().next()?;
+        if is_ident_continue(c) || matches!(c, '?' | '!') {
+            i += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    Some(i)
+}
+
+/// LaTeX 控制序列：`\section`、`\\`、`\%`。至少吃掉一个字符，保证推进。
+fn latex_command_end(code: &str, start: usize) -> usize {
+    let rest = &code[start + 1..];
+    let Some(first) = rest.chars().next() else {
+        return start + 1;
+    };
+    if !first.is_alphabetic() {
+        return start + 1 + first.len_utf8();
+    }
+    let mut i = start + 1 + first.len_utf8();
+    while i < code.len() {
+        let c = code[i..].chars().next().unwrap();
+        if c.is_alphabetic() {
+            i += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    i
+}
+
+/// PHP 起始标记 `<?php` / `<?=` / `<?`。
+fn php_open_tag_end(code: &str, start: usize) -> Option<usize> {
+    let rest = &code[start..];
+    if rest.starts_with("<?php") {
+        Some(start + 5)
+    } else if rest.starts_with("<?=") {
+        Some(start + 3)
+    } else if rest.starts_with("<?") {
+        Some(start + 2)
+    } else {
+        None
+    }
+}
+
+/// Lua 长括号结构 `[[…]]` / `--[[…]]`：`start` 指向第一个 `[`。
+fn lua_long_bracket_end(code: &str, start: usize) -> Option<usize> {
+    let rest = code.get(start..)?;
+    let body = rest.strip_prefix("[[")?;
+    Some(start + 2 + body.find("]]").map(|p| p + 2).unwrap_or(body.len()))
 }
 
 // ---- YAML / TOML ------------------------------------------------------
