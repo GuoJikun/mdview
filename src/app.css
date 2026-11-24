@@ -23,7 +23,14 @@
   --tk-variable: #953800;
   --tk-tag: #116329;
   --tk-attribute: #0550ae;
+  --tk-macro: #8250df;
+  --tk-annotation: #0550ae;
   --tk-operator: #57606a;
+  /* diff 的新增/删除行：文字色之外还给一层底色，长行才看得出范围 */
+  --tk-inserted: #116329;
+  --tk-inserted-bg: #e6ffec;
+  --tk-deleted: #cf222e;
+  --tk-deleted-bg: #ffebe9;
   --quote-border: #dfe2e5;
   --link: #0969da;
   --rule: #d0d7de;
@@ -83,7 +90,13 @@
   --tk-variable: #ffa657;
   --tk-tag: #7ee787;
   --tk-attribute: #79c0ff;
+  --tk-macro: #d2a8ff;
+  --tk-annotation: #79c0ff;
   --tk-operator: #c9d1d9;
+  --tk-inserted: #3fb950;
+  --tk-inserted-bg: #12261e;
+  --tk-deleted: #f85149;
+  --tk-deleted-bg: #25171c;
   --quote-border: #3d444d;
   --link: #58a6ff;
   --rule: #484f58;
@@ -474,7 +487,12 @@ html[data-view="reading"] #doc {
 #doc .tk-variable { color: var(--tk-variable); }
 #doc .tk-tag { color: var(--tk-tag); }
 #doc .tk-attribute { color: var(--tk-attribute); }
+#doc .tk-macro { color: var(--tk-macro); font-weight: 600; }
+#doc .tk-annotation { color: var(--tk-annotation); }
 #doc .tk-operator { color: var(--tk-operator); }
+/* diff 的增删行整行染色：底色铺满，文字色区分方向 */
+#doc .tk-inserted { color: var(--tk-inserted); background: var(--tk-inserted-bg); }
+#doc .tk-deleted { color: var(--tk-deleted); background: var(--tk-deleted-bg); }
 #doc .a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
 /* 脚注：引用仍显示源码 `[^x]`，但按上标画；Ctrl/Cmd+Click 跳到定义。
    定义块自带 id/编号（预览层写入），序号由 ::before 显示，回链在文字末尾。 */

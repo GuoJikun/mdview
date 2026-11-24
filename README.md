@@ -11,7 +11,7 @@
 - **查找替换**：`Ctrl+F` / `Ctrl+H`，界面参照 VSCode——可折叠替换行、区分大小写 / 全词 / 正则、保留大小写、只在选区内查找；全部命中高亮，`Enter` / `Shift+Enter` 前后跳。
 - **中文输入法**：透明输入框承接 IME，候选窗与预编辑串按像素跟随光标；组合期间不重解析、不重绘。
 - **表格**：解析层抽出行列与对齐，渲染成真正的 `<table>` 网格；Tab 跨格，状态栏可增删行列。`Tab` / `Shift+Tab` 同时负责列表层级的缩进与反缩进。
-- **代码高亮**：围栏代码块按语言着色（Rust / JS / TS / Python / Go / C / C++ / Java / SQL / HTML / CSS / Shell / YAML / TOML…），不引第三方语法库，编辑态与阅读态共用同一套停靠点。
+- **代码高亮**：围栏代码块按语言着色，覆盖 47 种语言与格式（Rust / JS / TS / Python / Go / C / C++ / Java / Kotlin / C# / Swift / PHP / Ruby / Lua / PowerShell / SQL / HTML / CSS / Shell / YAML / TOML / Dockerfile / Makefile / Nginx / diff…），不引第三方语法库，编辑态与阅读态共用同一套停靠点。
 - **大纲侧栏**：按标题的真实坐标判定当前节并高亮，点击跳转，不用滚动百分比估算。
 - **文件安全**：原子写入（Windows `MoveFileEx` / POSIX `rename`）、监听外部修改（只提示不自动重载）、关窗与换文档前拦截未保存改动。
 - **多窗口**：`Ctrl+Shift+N` 新建窗口；双击关联文件或再次启动会新开窗口，而不是顶掉正在编辑的文档。每个窗口一份独立文档与外部修改监听。

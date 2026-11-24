@@ -20,6 +20,17 @@
 
 - 检查更新弹窗的「更新内容」按 Markdown 渲染：标题、列表、行内代码、表格、代码块与链接正常排版，长说明在弹窗内滚动；正文里的原始 HTML 会被丢弃，链接仍交系统浏览器打开
 
+### 代码高亮
+
+- 语言从 16 种扩到 47 种：新增 Kotlin、C#、Swift、Dart、Scala、Groovy、Objective-C、Zig、PHP、Ruby、Perl、Lua、PowerShell、R、Elixir、Haskell、Julia、Clojure、Erlang、OCaml、F#、VB.NET、Solidity、LaTeX、GraphQL、Protobuf、HCL/Terraform、Nginx、Dockerfile、Makefile、diff
+- 修复：Kotlin 与 C# 之前套用 Java 的关键字表，`fun` / `val` / `when` / `namespace` / `using` 等基本词都不着色；现在各自独立词表，并支持 C# 的 `@"…"` 逐字字符串
+- 新增 diff / patch 着色：新增行与删除行整行带底色，`+++` / `---` 文件头、`@@` hunk 头与 `diff --git` 分节头分别区分
+- Nginx / Dockerfile / Makefile 改用行导向扫描：指令、目标、变量赋值按行结构着色，`$(VAR)` 与 `--flag` 都能认出来
+- 补齐扩展名别名：`mts` / `cts`（TypeScript）、`sass` / `styl`、`json5`、`pyi`、`kts`、`cu` / `cuda`、`tf` / `tfvars` 等；`text` / `console` / `log` 明确按纯文本处理
+- 修复：JSON / TOML 遇到负数（`-1.5e-3`）会死循环——`number_end` 不认前导符号，原地返回后调用方不推进；现在负数整段按数字着色，模糊用例的字符集也补上了数字与 `+`
+- 修复：内联 `<script>` / `<style>` 找闭合标签时只看前缀，JS 字符串里的 `"</scriptx>"` 会被当成闭合、脚本被提前截断；现在校验标签名后的边界（`>` / `/` / 空白），并按字节窗口比较，不再每次调用都复制一份小写副本
+- 新增 `src-tauri/tests/fixtures/highlight-all.md`：47 种语言各一段刻意写复杂的样张，外加未闭合字符串、多字节标识符、未知语言等边界用例；`fixture_highlights_every_supported_language` 逐块校验「有语言就该有 token」
+
 ## [0.2.0] - 2026-11-23
 
 多窗口与富文本剪贴板是这个版本的主线：一个进程可以开多个窗口，每个窗口独立文档、独立脏标记与外部修改监听；粘贴 HTML 会转成 Markdown，复制同时写 `text/html`。此外补上了 VSCode 式查找替换、状态栏字数、链接/图片行内编辑与 Lucide 图标。
