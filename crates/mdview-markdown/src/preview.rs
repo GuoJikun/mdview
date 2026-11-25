@@ -451,12 +451,18 @@ fn write_segment(
             );
         }
         SpanKind::Break { .. } => {
-            // 换行不占列宽但占一列位置。列表里换成 `.li` 边界，让每项各带项目符号；
-            // 其余情况交给 <br>。只标 before，让下一个字符元素承担 after，
-            // 光标才不会定位到零高矩形上。
-            if matches!(block.kind, BlockKind::List { .. }) {
+            // 换行不占列宽但占一列位置。只有**真的跨到下一个列表项**时才换成
+            // `.li` 边界（每项各带一个项目符号）；项内的软换行、Shift+Enter 只是
+            // 这一项里的折行，必须交给 <br>，否则「一个列表项的第二行」会长出
+            // 第二个项目符号、层级也归零。`list_depth_after` 由投影层的 Item
+            // 事件驱动，项内换行根本没有对应项，所以它是最准的判据。
+            // 只标 before，让下一个字符元素承担 after，光标才不会定位到零高矩形上。
+            if let Some(depth) = block
+                .list_depth_after(stop.byte)
+                .filter(|_| matches!(block.kind, BlockKind::List { .. }))
+            {
                 out.push_str("</div>");
-                out.push_str(&li_open(block.list_depth_after(stop.byte)));
+                out.push_str(&li_open(Some(depth)));
                 // 有序项把序号附着在这个新行上：`1. ` 那几个字节是折叠的，
                 // 视图里必须有个东西代替它，否则整份列表都长成圆点。
                 push_item_marker(out, src, stop.byte + 1);
@@ -1194,6 +1200,23 @@ mod tests {
             assert!(frame.html.contains("class=\"p list\""), "{}", frame.html);
             assert!(frame.html.contains("data-m="), "{}", frame.html);
         }
+    }
+
+    #[test]
+    fn soft_break_inside_an_item_does_not_start_a_new_bullet() {
+        // 一个列表项里的折行（软换行 / Shift+Enter）只是这一项的第二行。
+        // 拆成新的 `.li` 会多长一个项目符号，层级还归零。
+        let soft = preview_html("- 第一行\n  第二行\n");
+        assert_eq!(soft.matches("class=\"li\"").count(), 1, "{soft}");
+        assert!(soft.contains("<br class=\"nl\""), "{soft}");
+
+        let hard = preview_html("- 甲  \n  乙\n");
+        assert_eq!(hard.matches("class=\"li\"").count(), 1, "{hard}");
+        assert!(hard.contains("<br class=\"nl\""), "{hard}");
+
+        // 真的跨到下一项时仍要拆，否则两项挤成同一行
+        let two = preview_html("- 甲\n- 乙\n");
+        assert_eq!(two.matches("class=\"li\"").count(), 2, "{two}");
     }
 
     #[test]
