@@ -519,8 +519,10 @@ impl AppState {
 
     /// 光标所在表格的 (块索引, 当前 byte, 行, 列)。不在表格里返回 None。
     fn caret_table_cell(&self) -> Option<(usize, usize, usize, usize)> {
-        let (id, local) = self.layout.locate(self.selection.head)?;
-        let byte = self.layout.byte(local)?;
+        let (id, _) = self.layout.locate(self.selection.head)?;
+        // `DocumentLayout::byte` 吃的是**全局**停靠点；`locate` 返回的块内序号
+        // 直接传进去会在第二个块之后整段错位（Tab 把光标拉回表格开头）。
+        let byte = self.layout.byte(self.selection.head)?;
         let block = self.parsed.blocks.get(id.0)?;
         if !matches!(block.kind, BlockKind::Table) {
             return None;
@@ -896,6 +898,13 @@ impl AppState {
     fn insert_text(&mut self, text: &str) -> Vec<Effect> {
         if self.composing || text.is_empty() {
             return Vec::new();
+        }
+        // 全选要整篇重写。停靠点区间不含首块的折叠标记（`# `、`- `），也不含
+        // 文末换行，按它替换会剩下半个标记——`# 标题` 全选后打字变成 `# 新`。
+        // 和 cut 一样，整篇选中时直接用文档全长。
+        if self.selects_whole_document() {
+            let len = self.document.len_chars();
+            return self.apply(0..len, text);
         }
         match self.selection_chars() {
             Some(sel) => self.apply(sel, text),
@@ -1588,6 +1597,21 @@ mod tests {
         assert_eq!(caret_byte(&app), 42, "行末 Tab 应接到下一行行首");
     }
 
+    /// 表格不是首块时，`locate` 给的块内序号不等于全局停靠点。旧实现把它
+    /// 直接喂给 `DocumentLayout::byte`，Tab 会把光标拉回表格前面的段落。
+    #[test]
+    fn table_tab_works_when_the_table_is_not_the_first_block() {
+        let mut files = InMemoryFileStore::default();
+        let src = "前言\n\n| a | b |\n| --- | --- |\n| c | d |\n";
+        let mut app = open(&mut files, src);
+        let c = src.find("| c").expect("表格第二行") + 2;
+        let d = src.find("| d").expect("d 单元格") + 2;
+        click(&mut app, &files, c);
+        assert_eq!(caret_byte(&app), c, "光标应停在 c 单元格");
+        app.update(Message::TableMoveCell { delta: 1 }, &files);
+        assert_eq!(caret_byte(&app), d, "Tab 应移到右边一格，而不是跳回前文");
+    }
+
     #[test]
     fn table_shift_tab_wraps_to_prev_row() {
         let mut files = InMemoryFileStore::default();
@@ -1900,6 +1924,17 @@ mod tests {
         );
 
         // 选中之后打字就是整体替换
+        type_text(&mut app, &files, "新");
+        assert_eq!(app.document.text(), "新");
+    }
+
+    /// 块首折叠标记左边没有停靠点，全选的停靠点区间从 `# ` 之后才开始。
+    /// 输入若照着停靠点区间替换，整篇重写会剩下半个标记（`# 标题` → `# 新`）。
+    #[test]
+    fn select_all_then_typing_leaves_no_leading_marker() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "# 标题\n\n正文\n");
+        app.update(Message::SelectAll, &files);
         type_text(&mut app, &files, "新");
         assert_eq!(app.document.text(), "新");
     }
