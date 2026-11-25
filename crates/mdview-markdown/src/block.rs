@@ -660,9 +660,24 @@ pub(crate) fn escape_attr(s: &str) -> String {
 /// 列表项起始式一致；无序项（`-` / `*` / `+`）与普通正文都落到 `None`。
 /// 标记文本要**原样**保留分隔符：`1)` 就该显示成 `1)`，不能被统一成 `1.`。
 pub(crate) fn item_marker(src: &str, start: usize) -> Option<String> {
+    item_marker_at(src, start, 3)
+}
+
+/// 同 [`item_marker`]，但放宽缩进上限。
+///
+/// 调用方已经从投影层确认「这一行就是列表项」（`BlockKind::List` 或
+/// `list_depth_after`），缩进再深也只说明嵌套层级更深，不可能是正文。
+/// 此时仍套 CommonMark 的「最多三个空格」，三级及以下的有序项就拿不到
+/// 标记：`1. 甲\n    1. 乙\n        1. 丙` 里只有第一层有 `data-m`，
+/// 其余退化成 CSS 项目符号，与源码里的序号对不上。
+pub(crate) fn item_marker_in_list(src: &str, start: usize) -> Option<String> {
+    item_marker_at(src, start, usize::MAX)
+}
+
+fn item_marker_at(src: &str, start: usize, max_indent: usize) -> Option<String> {
     let line = src.get(start..)?;
     let indent = line.len() - line.trim_start_matches(' ').len();
-    if indent > 3 {
+    if indent > max_indent {
         return None;
     }
     let rest = &line[indent..];

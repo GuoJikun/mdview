@@ -17,7 +17,7 @@
 use std::{fmt::Write as _, ops::Range};
 
 use crate::block::{
-    Block, BlockKind, ColumnAlign, ParseResult, SpanKind, escape, escape_attr, item_marker,
+    Block, BlockKind, ColumnAlign, ParseResult, SpanKind, escape, escape_attr, item_marker_in_list,
 };
 use crate::highlight::language_word;
 use crate::layout::DocumentLayout;
@@ -566,7 +566,8 @@ fn li_open(depth: Option<usize>) -> String {
 }
 
 fn push_item_marker(out: &mut String, src: &str, start: usize) {
-    if let Some(marker) = item_marker(src, start) {
+    // 这里的 start 一定是列表项的行首（块首或项边界之后），缩进只反映嵌套层级
+    if let Some(marker) = item_marker_in_list(src, start) {
         let _ = write!(out, " data-m=\"{}\"", escape(&marker));
     }
 }
@@ -628,7 +629,9 @@ fn wrapper(kind: &BlockKind) -> (&'static str, &'static str) {
         BlockKind::Heading(2) => ("<h2>", "</h2>"),
         BlockKind::Heading(3) => ("<h3>", "</h3>"),
         BlockKind::Heading(4) => ("<h4>", "</h4>"),
-        BlockKind::Heading(_) => ("<h5>", "</h5>"),
+        BlockKind::Heading(5) => ("<h5>", "</h5>"),
+        // 六级标题以前和五级共用 `<h5>`，字体大小与阅读视图对不上
+        BlockKind::Heading(_) => ("<h6>", "</h6>"),
         BlockKind::CodeBlock { .. } => ("<div class=\"code\">", "</div>"),
         BlockKind::BlockQuote => ("<blockquote>", "</blockquote>"),
         BlockKind::Table => ("<div class=\"p table\">", "</div>"),
@@ -1022,6 +1025,34 @@ const SCRIPT: &str = r#"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heading_levels_match_the_source() {
+        // 六级标题以前和五级共用 `<h5>`，字号与阅读视图对不上
+        for (src, tag) in [
+            ("# 一", "h1"),
+            ("## 二", "h2"),
+            ("### 三", "h3"),
+            ("#### 四", "h4"),
+            ("##### 五", "h5"),
+            ("###### 六", "h6"),
+        ] {
+            let html = preview_html(src);
+            assert!(html.contains(&format!("<{tag}>")), "{src} 应为 <{tag}>: {html}");
+        }
+    }
+
+    #[test]
+    fn nested_ordered_items_keep_their_numbers() {
+        // 三级有序列表的缩进是 4 / 8 个空格，不能因为「超过三个空格」就不认标记
+        let html = preview_html("1. 甲\n    1. 乙\n        1. 丙\n");
+        assert_eq!(
+            html.matches("data-m=\"").count(),
+            3,
+            "每层都该带自己的序号: {html}"
+        );
+        assert!(html.contains("data-m=\"1.\""), "{html}");
+    }
 
     #[test]
     fn every_visible_char_gets_an_element() {
