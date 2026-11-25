@@ -48,7 +48,10 @@ export function buildMatcher(query, options = {}) {
     ? `(?<!${WORD})(?:${body})(?!${WORD})`
     : body;
   try {
-    return { re: new RegExp(source, options.caseSensitive ? 'g' : 'gi') };
+    // 正则模式下补 `m`：查找对象是整篇源码，`^` / `$` 应当匹配每一行的首尾，
+    // 否则「搜 `^## `」只在文档第一个字符命中，行首锚点基本没法用。
+    const flags = options.caseSensitive ? 'g' : 'gi';
+    return { re: new RegExp(source, options.regex ? `${flags}m` : flags) };
   } catch {
     return { error: true };
   }
@@ -71,19 +74,58 @@ export function findMatches(text, matcher) {
 /**
  * 单体命中的替换文本。
  *
- * 正则模式下用同一份模式重放一次 `String.replace`，这样 `$1` / `$&` 这类
- * 捕获组写法与 VSCode 一致；非正则模式就是字面替换。
+ * 正则模式下按 ECMAScript 的 `$` 语义展开捕获组，与 VSCode 一致。
+ *
+ * 注意不能拿「孤立的命中文本」重放正则：`foo(?=bar)`、`(?<=# )title` 这类带
+ * 上下文断言的模式脱离前后文必然失配，`String.replace` 会原样返回，替换就成了
+ * 静默的空操作。所以这里在原文上从命中位置重新 exec 一次，拿到分组数组再手工展开。
  */
 export function replacementFor(text, match, replacement, options = {}) {
   const matched = text.slice(match.start, match.end);
   let piece = replacement;
   if (options.matcher && options.matcher.re) {
-    const re = options.matcher.re;
-    const single = new RegExp(re.source, re.flags.replace('g', ''));
-    piece = matched.replace(single, replacement);
+    const hit = execAt(text, options.matcher.re, match.start);
+    if (hit) piece = expandReplacement(replacement, text, hit);
   }
   if (options.preserveCase) piece = matchCase(piece, matched);
   return piece;
+}
+
+/** 在原文的指定位置重跑一次匹配，拿到带捕获组的 `exec` 结果。 */
+function execAt(text, re, index) {
+  re.lastIndex = index;
+  const hit = re.exec(text);
+  return hit && hit.index === index ? hit : null;
+}
+
+/**
+ * 展开替换模板里的 `$$`、`$&`、`` $` ``、`$'`、`$1..$99`、`$<name>`。
+ *
+ * 照规范的边界处理：`$0` 不指向任何分组（原样保留），`$nn` 没有两位分组时
+ * 退一位（`$12` 在只有 1 个分组时展开成「分组 1 + '2'」）。
+ */
+function expandReplacement(template, text, hit) {
+  const matched = hit[0];
+  const groups = hit.groups ?? {};
+  return template.replace(/\$(\$|&|`|'|<[^>]*>|\d{1,2})/g, (whole, token) => {
+    if (token === '$') return '$';
+    if (token === '&') return matched;
+    if (token === '`') return text.slice(0, hit.index);
+    if (token === "'") return text.slice(hit.index + matched.length);
+    if (token[0] === '<') {
+      const name = token.slice(1, -1);
+      return name in groups ? groups[name] : whole;
+    }
+    const n = Number(token);
+    if (!n) return whole;
+    const group = hit[n];
+    if (group !== undefined) return group;
+    if (token.length === 2) {
+      const first = hit[Number(token[0])];
+      if (first !== undefined) return first + token[1];
+    }
+    return whole;
+  });
 }
 
 /** 保留大小写：全大写/全小写跟着命中走，首字母大写沿用替换文本的「首字母大写」。 */
@@ -91,9 +133,11 @@ export function matchCase(replacement, matched) {
   if (!replacement) return replacement;
   const upper = matched.toUpperCase();
   const lower = matched.toLowerCase();
-  if (matched === upper && matched !== lower) return replacement.toUpperCase();
+  // 数字、CJK、符号没有大小写概念，upper 与 lower 相同，替换文本原样保留
+  if (upper === lower) return replacement;
+  if (matched === upper) return replacement.toUpperCase();
   if (matched === lower) return replacement.toLowerCase();
-  if (matched[0] === matched[0].toUpperCase()) {
+  if (matched[0] !== matched[0].toLowerCase()) {
     return replacement[0].toUpperCase() + replacement.slice(1);
   }
   return replacement;
