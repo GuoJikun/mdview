@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-/// 以空行为边界切块；围栏代码块内的空行不切分。
+/// 以空行为边界切块；围栏代码块内的空行不切分，缩进代码块内部的空行也不切分。
 ///
 /// 返回的区间已去掉尾部换行——块尾的 `\n` 不属于任何可见片段，
 /// 留在区间里会无谓地进入隐藏集。
@@ -12,15 +12,25 @@ pub fn split_blocks(src: &str) -> Vec<Range<usize>> {
     let mut spans: Vec<Range<usize>> = Vec::new();
     let mut current: Option<usize> = None;
     let mut in_fence: Option<(u8, usize)> = None;
-    let mut offset = 0usize;
+    // 当前块到目前为止是否「整块都是缩进代码」：块首缩进，且此后每一非空行也缩进
+    let mut indented_code = false;
     // 当前这段连续空行里每一行的起点，用来算「段落空行」
     let mut blank_run: Vec<usize> = Vec::new();
     // 空段落的插入点。零长块要等 `retain` 之后再并进去：
     // 那一步本意是丢掉 `trim_eol` 挤出来的空区间，会把空段落一起误杀。
     let mut paragraphs: Vec<usize> = Vec::new();
 
-    for line in src.split_inclusive('\n') {
-        let line_end = offset + line.len();
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
+    let mut starts = Vec::with_capacity(lines.len() + 1);
+    let mut at = 0usize;
+    for line in &lines {
+        starts.push(at);
+        at += line.len();
+    }
+    starts.push(at);
+
+    for (index, line) in lines.iter().enumerate() {
+        let offset = starts[index];
         let marker = fence_marker(line.trim_start().as_bytes());
 
         if let Some((open, len)) = in_fence {
@@ -36,18 +46,30 @@ pub fn split_blocks(src: &str) -> Vec<Range<usize>> {
 
         let blank = in_fence.is_none() && line.trim().is_empty();
         if blank {
+            // 缩进代码块里的空行是块内的一部分（CommonMark：`    a\n\n    b`
+            // 是一块缩进代码），切开会把后半段降级成普通段落，还会让片段区间
+            // 越过块边界。判据是「本块一直是缩进代码」+「下一个非空行仍缩进」。
+            if in_fence.is_none() && indented_code && next_line_stays_indented(&lines, index + 1) {
+                continue;
+            }
             if let Some(start) = current.take() {
                 spans.push(trim_eol(start, offset, src));
             }
+            indented_code = false;
             blank_run.push(offset);
         } else {
             collect_blank_paragraphs(&mut paragraphs, &blank_run, spans.is_empty());
             blank_run.clear();
-            if current.is_none() {
-                current = Some(offset);
+            match current {
+                None => {
+                    current = Some(offset);
+                    indented_code = is_indented_code(line);
+                }
+                // 中途出现非缩进行（懒续行、围栏闭合等），本块就不再是纯代码块
+                Some(_) if !is_indented_code(line) => indented_code = false,
+                Some(_) => {}
             }
         }
-        offset = line_end;
     }
 
     if let Some(start) = current {
@@ -65,6 +87,24 @@ pub fn split_blocks(src: &str) -> Vec<Range<usize>> {
         spans.push(src.len()..src.len());
     }
     spans
+}
+
+/// 这一行是否像缩进代码块的正文：缩进 4 个空格或一个制表符。
+fn is_indented_code(line: &str) -> bool {
+    if line.trim().is_empty() {
+        return false;
+    }
+    let body = line.trim_start_matches(' ');
+    body.starts_with('\t') || line.len() - body.len() >= 4
+}
+
+/// 从 `from` 起跳过空行后，下一行是否仍缩进（只有这样才能把空行留在代码块里）。
+/// 到文件末尾不算：收尾的空行要留给「末尾空段落」那条规则。
+fn next_line_stays_indented(lines: &[&str], from: usize) -> bool {
+    lines
+        .get(from..)
+        .and_then(|rest| rest.iter().find(|line| !line.trim().is_empty()))
+        .is_some_and(|line| is_indented_code(line))
 }
 
 /// 把一段**块与块之间**的连续空行翻译成空段落。
@@ -186,5 +226,25 @@ mod tests {
         // 收尾那段空行由 `ends_with_blank_line` 统一处理，不再重复造块
         assert_eq!(texts("甲\n\n\n\n"), vec!["甲", ""]);
         assert_eq!(split_blocks("甲\n\n\n\n").last().unwrap(), &(7..7));
+    }
+
+    #[test]
+    fn blank_line_inside_indented_code_does_not_split() {
+        // CommonMark：`    a\n\n    b` 是一块缩进代码，空行属于块内
+        assert_eq!(texts("    a\n\n    b\n"), vec!["    a\n\n    b"]);
+        assert_eq!(texts("    a\n\n\n    b\n"), vec!["    a\n\n\n    b"]);
+    }
+
+    #[test]
+    fn tab_indented_code_keeps_its_blank_lines() {
+        assert_eq!(texts("\ta\n\n\tb\n"), vec!["\ta\n\n\tb"]);
+    }
+
+    #[test]
+    fn blank_line_after_indented_code_still_splits() {
+        // 下一行不缩进，代码块到此为止
+        assert_eq!(texts("    a\n\n正文\n"), vec!["    a", "正文"]);
+        // 块首不是缩进行时，不能因为两侧都缩进就并块
+        assert_eq!(texts("正文\n   续行\n\n   代码\n").len(), 2);
     }
 }

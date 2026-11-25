@@ -1029,6 +1029,38 @@ mod tests {
     }
 
     #[test]
+    fn indented_code_keeps_the_blank_line_inside() {
+        // CommonMark：`    a\n\n    b` 是一块缩进代码，空行属于块内。
+        // 按空行切开的话后半段会被降级成段落，文字丢掉代码样式。
+        let src = "    a\n\n    b\n";
+        let parsed = MarkdownParser::gfm().parse(src);
+        assert_eq!(
+            parsed.blocks.len(),
+            1,
+            "应只有一块: {:?}",
+            parsed
+                .blocks
+                .iter()
+                .map(|b| (&b.kind, b.byte.clone()))
+                .collect::<Vec<_>>()
+        );
+        let block = &parsed.blocks[0];
+        assert_eq!(block.kind, BlockKind::CodeBlock { info: None });
+        let visible: String = block.spans.iter().map(|s| s.text.as_str()).collect();
+        assert!(visible.contains('a') && visible.contains('b'), "两行都该可见: {visible:?}");
+        // 片段不能落在块前面（旧实现里后半段的片段属于下一个块）
+        for span in &block.spans {
+            assert!(
+                span.byte.start >= block.byte.start && span.byte.end <= src.len(),
+                "片段 {:?} 越界（块 {:?}，源码 {} 字节）",
+                span.byte,
+                block.byte,
+                src.len()
+            );
+        }
+    }
+
+    #[test]
     fn fenced_code_keeps_body_and_hides_fence() {
         let src = "```rust\nlet a = 1;\n```";
         let block = first_block(src);
