@@ -890,4 +890,27 @@ mod tests {
         assert_eq!(caret.to_byte(&doc), Some(5));
         assert_eq!(doc.stops(), 5, "甲 两个停靠点、空段落一个、乙 两个");
     }
+
+    #[test]
+    fn last_stop_sits_on_the_block_end() {
+        // 分隔线与 HTML 块的 pulldown 区间含块尾换行，块区间却剔掉了它。
+        // 不夹回块区间时末停靠点会落到块外一个字节（`---\n` 的块是 0..3、末停靠点 4），
+        // 那个位置既不属于本块、也进不了下一块。
+        for src in [
+            "---\n\n正文\n",
+            "<div>x</div>\n\n正文\n",
+            "<!-- 注释 -->\n\n正文\n",
+        ] {
+            let (parsed, doc) = build(src);
+            for block in &parsed.blocks {
+                let layout = doc.layout(block.id).unwrap();
+                let last = layout.stops().last().unwrap();
+                assert_eq!(
+                    last.byte, block.byte.end,
+                    "{src:?}: 块 {} 末停靠点 {} 应等于块尾 {}",
+                    block.id.0, last.byte, block.byte.end
+                );
+            }
+        }
+    }
 }

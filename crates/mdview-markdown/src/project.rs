@@ -404,12 +404,15 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
             Event::Html(raw) | Event::InlineHtml(raw) => {
                 if let Some(owner) = owner_of(&ranges, range.start) {
                     if !raw.is_empty() {
+                        let (byte, text) = clamp_to_block(&ranges[owner], &range, &raw);
                         accs[owner].spans.push(Span {
                             kind: SpanKind::Text,
-                            byte: range.clone(),
-                            text: raw.to_string(),
+                            byte: byte.clone(),
+                            text,
                             style: style.clone(),
                         });
+                        accs[owner].covered.push(byte);
+                        continue;
                     }
                     accs[owner].covered.push(range);
                 }
@@ -428,13 +431,14 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
             }
             Event::Rule => {
                 if let Some(owner) = owner_of(&ranges, range.start) {
+                    let (byte, _) = clamp_to_block(&ranges[owner], &range, "");
                     accs[owner].spans.push(Span {
                         kind: SpanKind::Rule,
-                        byte: range.clone(),
+                        byte: byte.clone(),
                         text: String::new(),
                         style: style.clone(),
                     });
-                    accs[owner].covered.push(range);
+                    accs[owner].covered.push(byte);
                 }
             }
             Event::TaskListMarker(checked) => {
@@ -627,6 +631,30 @@ fn demote_to_paragraph(src: &str, block: Block) -> Block {
         list: None,
         tokens: Vec::new(),
     }
+}
+
+/// 把事件区间夹回块区间，文本同步裁掉被夹掉的那几个字节。
+///
+/// `split_blocks` 切块时用 `trim_eol` 去掉了块尾换行，而 `Event::Html` / `Event::Rule`
+/// 的区间把行尾那个 `\n` 也算在内：`<div>x</div>\n` 的块是 `0..13`、片段却是 `0..14`。
+/// 不夹的话最后一行会多出一个落在块外的停靠点，HTML 块还会在编辑视图里多渲染一个
+/// `<br>`（凭空多一行空白）。
+fn clamp_to_block(
+    block: &Range<usize>,
+    range: &Range<usize>,
+    text: &str,
+) -> (Range<usize>, String) {
+    if range.end <= block.end {
+        return (range.clone(), text.to_owned());
+    }
+    let mut byte = range.clone();
+    byte.end = block.end.max(range.start);
+    let mut text = text.to_owned();
+    // 被夹掉的是块尾换行（`\n` 或 `\r\n`），都是单字节字符，按字节数退字符即可
+    for _ in 0..(range.end - byte.end) {
+        text.pop();
+    }
+    (byte, text)
 }
 
 /// 在 `start` 之前找最近的换行，把它登记为可见的硬换行。
@@ -1060,7 +1088,10 @@ mod tests {
         let block = &parsed.blocks[0];
         assert_eq!(block.kind, BlockKind::CodeBlock { info: None });
         let visible: String = block.spans.iter().map(|s| s.text.as_str()).collect();
-        assert!(visible.contains('a') && visible.contains('b'), "两行都该可见: {visible:?}");
+        assert!(
+            visible.contains('a') && visible.contains('b'),
+            "两行都该可见: {visible:?}"
+        );
         // 片段不能落在块前面（旧实现里后半段的片段属于下一个块）
         for span in &block.spans {
             assert!(
@@ -1434,5 +1465,38 @@ mod tests {
         assert_eq!(merged, vec![1..5, 9..10]);
         assert_eq!(subtract(0..10, &merged), vec![0..1, 5..9]);
         assert_eq!(subtract(0..10, &[]), vec![0..10]);
+    }
+
+    #[test]
+    fn html_block_span_stops_at_the_block_end() {
+        // pulldown 的 Html 事件区间把块尾那个 `\n` 也算在内，而 split_blocks 切块时
+        // 已经剔掉了它。不夹回块区间的话片段比块长一个字节：末停靠点落到块外，
+        // 编辑视图还会多渲染一个 `<br>`（HTML 块凭空多一行空行）。
+        let src = "<div>x</div>\n\n正文\n";
+        let block = first_block(src);
+        assert_eq!(block.kind, BlockKind::Html);
+        let span = block.spans.last().expect("HTML 块应有可见片段");
+        assert!(
+            span.byte.end <= block.byte.end,
+            "片段 {:?} 越过块 {:?}",
+            span.byte,
+            block.byte
+        );
+        assert!(
+            !span.text.ends_with('\n'),
+            "片段文本不该带块尾换行：{:?}",
+            span.text
+        );
+    }
+
+    #[test]
+    fn rule_span_stops_at_the_block_end() {
+        // 同一个坑的另一半：`---\n` 的片段是 0..4，块却是 0..3。
+        let src = "---\n\n正文\n";
+        let block = first_block(src);
+        assert_eq!(block.kind, BlockKind::Rule);
+        let span = &block.spans[0];
+        assert_eq!(span.kind, SpanKind::Rule);
+        assert_eq!(span.byte, block.byte);
     }
 }
