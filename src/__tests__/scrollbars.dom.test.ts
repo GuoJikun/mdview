@@ -1,7 +1,7 @@
 // 源码视图的滚动回归：textarea 必须是定高、可滚动的容器，且自绘的
 // #vscroll 在 source 模式下改由它的 scrollTop 驱动（不再随 window 滚）。
 // 需要真实布局，故走 dom（chromium）project。
-import '../app.css';
+import '../styles/app.css';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 describe('源码视图滚动', () => {

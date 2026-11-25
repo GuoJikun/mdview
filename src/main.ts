@@ -6,9 +6,11 @@ import './platform';
 import { invoke } from '@tauri-apps/api/core';
 import { createApp, nextTick } from 'vue';
 import App from './App.vue';
-import './vue-overlay.css';
+// 样式都在 src/styles/。app.css 与 skin.css 由 index.html 的 <link> 先加载
+// （要赶在首帧前），这里只补 Vue 之外的两层：覆盖层与弹窗骨架。
+import './styles/vue-overlay.css';
 // 弹窗外壳（关于 / 检查更新）的共用骨架。
-import './dialog.css';
+import './styles/dialog.css';
 
 // bridge.ts 在模块求值时就把 window.__mdviewBridge 挂好，并主动拉一次快照。
 import { notify } from './bridge';

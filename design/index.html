@@ -695,14 +695,14 @@
 <section id="mapping">
   <div class="sec-head">
     <span class="idx">06</span>
-    <h2>落地到 src/app.css</h2>
+    <h2>落地到 src/styles/app.css</h2>
     <p>现有外壳已经是一套「Win11 尺寸 + macOS 配色」的混合体（<code>--chrome: #f6f6f7</code>、30px 标题栏、6px 圆角）。因此 <strong>B 套本质是对现状的精修</strong>，改动集中在材质与描边；<strong>A 套才是结构性重构</strong>，需要新增侧栏卡片化与状态栏胶囊两条布局规则。落地时把 A 套放进 <code>[data-skin="hyperos"]</code> 作用域，两套就能共存并实时切换，不必二选一。</p>
   </div>
 
   <div class="note">
-    <b>已落地为可切换皮肤。</b>两套方案没有替换 <code>src/app.css</code>，而是在它之上加了一层：
+    <b>已落地为可切换皮肤。</b>两套方案没有替换 <code>src/styles/app.css</code>，而是在它之上加了一层：
     <code>&lt;html data-skin="macos|hyperos"&gt;</code> 管风格，<code>data-theme</code> 管明暗，两个属性正交，
-    组合出四种外观。<code>src/skin.css</code> 用 <code>:root[data-skin="hyperos"]</code> 覆盖令牌，
+    组合出四种外观。<code>src/styles/skin.css</code> 用 <code>:root[data-skin="hyperos"]</code> 覆盖令牌，
     同时把标题栏高度、侧栏宽度、状态栏高度抽成 <code>--chrome-h</code> / <code>--outline-w</code> / <code>--bar-*</code>
     四个变量整体换挡，所以侧栏卡片化、状态栏胶囊化不需要复制布局规则。
     入口在 <b>视图 → 外观</b>，选择记进 localStorage，首帧由 <code>public/skin-boot.js</code> 提前写属性避免闪变。

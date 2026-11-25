@@ -102,7 +102,8 @@ src-tauri/          桌面端壳（原 crates/mdview-desktop 整体上提到仓�
 │  ├─ main.ts                 单入口：按序 import 全部脚本 + mount('#vue-app')
 │  ├─ platform.ts             首帧 UA 判定（原 index.html 内联脚本，为满足 CSP 挪出）
 │  ├─ App.vue / bridge.ts / menu.ts / scrollbars.ts
-│  ├─ app.css / vue-overlay.css
+│  ├─ styles/                 全部样式，四层：app → skin → dialog → vue-overlay
+│  ├─ assets/                 前端素材（logo.png，由应用图标降采样得到）
 │  ├─ components/             TitleBar / MenuPopup / StatusBar / Toast
 │  └─ editor/                 编辑内核，与外壳分家
 │     ├─ editor.ts            停靠点 → 像素、按键 → 消息、增量应用、自检入口

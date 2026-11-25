@@ -1,6 +1,6 @@
 /* ==========================================================================
    mdview · 两套皮肤的落地变量
-   用法：把需要的两块贴进 src/app.css，替换现有的 :root / :root[data-theme="dark"]，
+   用法：把需要的两块贴进 src/styles/app.css，替换现有的 :root / :root[data-theme="dark"]，
    再在 <html> 上写 data-skin="hyperos" | "macos"。
    变量名沿用 app.css 现有命名，组件规则不需要改。
 
