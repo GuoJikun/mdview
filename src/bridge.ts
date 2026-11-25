@@ -30,6 +30,8 @@ export interface BridgeState {
   words: number;
   /** 光标停靠点序号；无光标为 null。 */
   stop: number | null;
+  /** 光标所在块的索引（0 起）；无光标为 null。状态栏「块 x/y」用。 */
+  caretBlock: number | null;
   /** 视觉列；无光标为 null。 */
   column: number | null;
   /** 内核 revision，状态栏右侧的 r 值。 */
@@ -77,6 +79,7 @@ const store = reactive<BridgeState>({
   blocks: 0,
   words: 0,
   stop: null,
+  caretBlock: null,
   column: null,
   revision: 0,
   inTable: false,

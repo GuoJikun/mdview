@@ -1078,6 +1078,7 @@ function pushShellState() {
     blocks: docEl.children.length,
     words: meta.words,
     stop: caret ? caret.stop : null,
+    caretBlock: caret ? caret.block : null,
     column: caret && caret.visual !== null ? caret.visual : null,
     revision: meta.revision,
     inTable: inTable(),

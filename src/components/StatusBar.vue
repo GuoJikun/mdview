@@ -23,7 +23,9 @@ import { computed } from 'vue';
 import { state } from '../bridge';
 
 const dash = (v: number | null) => (v === null || v === undefined ? '-' : String(v));
+// 块号从内核的 caret.block 取：`stop` 是停靠点序号（整篇的字符位置），
+// 拿它当块号会显示「块 124/9」这种不可能的数字。
 const blockText = computed(() =>
-  (state.stop === null ? '-' : state.stop + 1) + '/' + state.blocks,
+  state.caretBlock === null ? '-' : state.caretBlock + 1 + '/' + state.blocks,
 );
 </script>
