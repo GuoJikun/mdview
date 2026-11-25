@@ -2533,6 +2533,15 @@ window.__mdviewSelfTest = async function () {
         document.documentElement.getAttribute('data-skin') === 'macos', mdviewSkin.mode());
     mdviewSkin.set(skinPref); // 恢复原始皮肤，别把评审者的选择改掉
 
+    // 标题栏标识走 asset import，路径写错时 <img> 只会静默空着，肉眼很难发现。
+    // 这里按解码后的实际尺寸判断，而不是看 src 有没有值。
+    {
+      const logo = document.querySelector<HTMLImageElement>('#titlebar .tb-logo img');
+      check('标题栏标识已加载',
+        !!logo && logo.complete && logo.naturalWidth > 0,
+        logo ? `${logo.naturalWidth}×${logo.naturalHeight}` : '无 img');
+    }
+
     // 三种视图必须真正切换 DOM，而不是只换菜单圆点、正文永远是所见即所得
     runAction('mode-source');
     check('切到源码视图 data-view=source',

@@ -491,6 +491,7 @@ html[data-style="macos"] .tb-title { font-size: 13px; }
   width: 20px; height: 20px; flex: none;
 }
 .tb-logo svg { width: 17px; height: 17px; display: block; }
+.tb-logo img { width: 17px; height: 17px; display: block; border-radius: 5px; }
 
 .tb-menu { display: flex; align-items: center; gap: 1px; height: 100%; }
 .tb-menu button {
