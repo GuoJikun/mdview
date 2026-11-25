@@ -229,6 +229,36 @@ impl MarkerEdit {
     }
 }
 
+/// 一行的缩进编辑：在 `at` 处删掉 `remove` 个字节、写入 `insert`。
+///
+/// 多行缩进先收集这些编辑，再从后往前打进文本——行首是升序的，倒着改，
+/// 前面那些编辑的偏移就不会被后面的插入/删除带跑。
+struct LineEdit {
+    at: usize,
+    remove: usize,
+    insert: String,
+    /// 这次编辑顺带改写成的有序序号（没有改写就是 None）。
+    number: Option<u64>,
+}
+
+/// 普通行（以及 `- ` 这类两字符标记）缩进一级的宽度。
+const INDENT_WIDTH: usize = 2;
+
+/// 选区端点在一串行首编辑之后的新位置（byte，基于**新**文本）。
+fn shift_by_edits(pos: usize, edits: &[LineEdit]) -> usize {
+    let mut out = pos as isize;
+    for edit in edits {
+        if edit.at + edit.remove <= pos {
+            // 编辑整体在端点之前：端点整体平移
+            out += edit.insert.len() as isize - edit.remove as isize;
+        } else if edit.at <= pos {
+            // 端点落在被删掉的空白里：贴到编辑后的位置
+            out = (edit.at + edit.insert.len()) as isize;
+        }
+    }
+    out.max(0) as usize
+}
+
 impl AppState {
     pub fn open(content: impl AsRef<str>, path: Option<PathBuf>, files: &impl FileStore) -> Self {
         let saved_fingerprint = path.as_deref().and_then(|p| files.fingerprint(p).ok());
@@ -513,6 +543,19 @@ impl AppState {
         insert: &str,
         caret: Option<usize>,
     ) -> Vec<Effect> {
+        let caret = caret.unwrap_or(span.start + insert.chars().count());
+        self.apply_with_selection(span, insert, caret, caret)
+    }
+
+    /// 与 [`Self::apply_with_caret`] 同一个写入口，但两端分别落在 `anchor` / `head`
+    /// （**新文本**里的 char 偏移），用来在多行缩进之后把选区原样保留下来。
+    fn apply_with_selection(
+        &mut self,
+        span: Range<usize>,
+        insert: &str,
+        anchor: usize,
+        head: usize,
+    ) -> Vec<Effect> {
         if span.is_empty() && insert.is_empty() {
             return Vec::new();
         }
@@ -520,20 +563,25 @@ impl AppState {
             return Vec::new();
         }
         self.dirty = true;
-        let caret = caret.unwrap_or(span.start + insert.chars().count());
         // 先摘走旧帧再重解析，避免为求差集克隆整份 HTML
         let old = std::mem::take(&mut self.frames);
         self.reparse();
-        self.selection = Selection::caret(self.stop_at_char(caret));
+        let anchor = self.stop_at_char(anchor);
+        let head = self.stop_at_char(head);
+        self.selection = Selection::new(anchor, head);
         let revision = self.document.revision().0;
-        vec![
+        let mut effects = vec![
             Effect::ScheduleParse { revision },
             Effect::Patch {
                 revision,
                 patch: diff_frames(&old, &self.frames),
             },
             self.cursor_effect(),
-        ]
+        ];
+        if let Some(sel) = self.selection_effect() {
+            effects.push(sel);
+        }
+        effects
     }
 
     // ---- 表格编辑 -------------------------------------------------------
@@ -666,69 +714,393 @@ impl AppState {
         self.replace_bytes(block_range, &new_text, Some(cell_byte))
     }
 
-    /// Tab / Shift+Tab。列表项按两个空格一级缩进、反缩进；普通块就是
-    /// 在光标处插两个空格（或删掉行首最多两个空格）。
+    /// Tab / Shift+Tab：**行级缩进命令**，不是「输入两个空格」。
     ///
-    /// 只改行首空白，不碰标记：把 `- 乙` 变成 `  - 乙` 才是「降一级」，
-    /// 在标记后面插空格只会把内容推远，列表层级不变。
+    /// 有选区时选区只决定动哪几行，一个字都不改（Tab 加一级、Shift+Tab 减一级，
+    /// 严格互逆）；无选区时只动光标所在行。
+    ///
+    /// 缩进量按行首标记的宽度算：`- ` 是 2、`1. ` 是 3、`10. ` 是 4。固定两格对
+    /// 有序列表是不够的——`1. 甲\n  2. 乙` 解析出来层级仍是 0，用户看到缩进却
+    /// 没嵌套。引用块里的列表（`> - 甲`）则要把空格插在 `> ` 之后，插在行首
+    /// 会把整个引用缩进去。
     fn indent(&mut self, outdent: bool) -> Vec<Effect> {
         if self.composing {
             return Vec::new();
         }
-        // 有选区时保持原语义：Tab 用两个空格替换选区，反缩进不动。
         if self.selection_chars().is_some() {
-            return if outdent {
-                Vec::new()
-            } else {
-                self.insert_text("  ")
-            };
+            return self.indent_selection(outdent);
         }
         let Some(byte) = self.caret_byte() else {
             return Vec::new();
         };
-        let Some((id, _)) = self.layout.locate(self.selection.head) else {
+        let Some((line_start, _)) = self.line_prefix() else {
             return Vec::new();
         };
-        let Some((line_start, prefix)) = self.line_prefix() else {
+        let Some(line) = self.line_at(line_start) else {
             return Vec::new();
         };
-        let is_list = matches!(self.parsed.blocks[id.0].kind, BlockKind::List { .. });
-        let lead = prefix.len() - prefix.trim_start_matches([' ', '\t']).len();
+        // 表格行不参与缩进：行首插空格会把整行推出表格（表格的层级本来也不靠缩进）
+        if self.line_is_in_table(line_start) {
+            return Vec::new();
+        }
+        let line_end = line_start + line.len();
+        // 正文里 Tab 就是在光标处插缩进（与 VSCode 一致）；列表项与反缩进走「行」的规则
+        if !outdent && self.line_list_position(line_start, line_end).is_none() {
+            let at = self.caret_char_offset();
+            return self.apply(at..at, &" ".repeat(INDENT_WIDTH));
+        }
+        let src = self.document.text();
+        let Some(edit) = self.line_indent_edit(&src, line_start, line_end, outdent, None) else {
+            return Vec::new();
+        };
+        // 光标落点：行首之前的字符数 + 写入的字符数 + 被删区间之后到光标的那几个字符
+        // （行首缩进全是 ASCII，字节差就是字符差）
+        let tail_start = (edit.at + edit.remove).min(byte);
+        let tail = if tail_start < byte {
+            self.document.slice_bytes(tail_start..byte).chars().count()
+        } else {
+            0
+        };
+        let caret = self.document.byte_to_char(edit.at) + edit.insert.chars().count() + tail;
+        let start = self.document.byte_to_char(edit.at);
+        let end = self.document.byte_to_char(edit.at + edit.remove);
+        self.apply_with_caret(start..end, &edit.insert, Some(caret))
+    }
 
+    /// 有选区时的缩进：把选区覆盖到的每一行都按行首缩进一级（或减一级）。
+    ///
+    /// 三件事必须一起做，否则就会出「Tab 吃掉选区」那类事故：
+    ///
+    /// 1. 内容一个字都不动，只在行首插/删空白；
+    /// 2. 所有行一次事务写完（一次撤销）；
+    /// 3. 选区两端按「自己之前插入了多少字节」平移，重新吸附回停靠点。
+    fn indent_selection(&mut self, outdent: bool) -> Vec<Effect> {
+        let (lo_stop, hi_stop) = self.selection.normalized();
+        let (Some(lo), Some(hi)) = (self.layout.byte(lo_stop), self.layout.byte(hi_stop)) else {
+            return Vec::new();
+        };
+        let src = self.document.text();
+        let edits = self.line_indent_edits(&src, lo..hi, outdent);
+        if edits.is_empty() {
+            return Vec::new();
+        }
+        // 选区方向要保住：anchor 与 head 分别平移，不能拿归一化后的两端重建
+        let anchor_byte = self.layout.byte(self.selection.anchor).unwrap_or(lo);
+        let head_byte = self.layout.byte(self.selection.head).unwrap_or(hi);
+        // 从后往前改：每行的编辑点都是行首，后面的先改，前面的字节偏移就不会被打乱
+        let mut text = src;
+        for edit in edits.iter().rev() {
+            text.replace_range(edit.at..edit.at + edit.remove, &edit.insert);
+        }
+        // 选区端点在**新**文本里的位置：加上它之前所有编辑的长度差
+        let anchor = shift_by_edits(anchor_byte, &edits);
+        let head = shift_by_edits(head_byte, &edits);
+        let anchor = text[..anchor].chars().count();
+        let head = text[..head].chars().count();
+        let len = self.document.len_chars();
+        // 整篇替换是一步事务；增量帧由 diff_frames 求，只有真正变的块会重绘
+        self.apply_with_selection(0..len, &text, anchor, head)
+    }
+
+    /// 选区覆盖到的行的缩进编辑（byte 偏移，按行首升序）。
+    ///
+    /// 规则与单光标路径一致：空行跳过、表格行跳过、顶层第一项列表跳过、
+    /// 引用块里的缩进落在 `> ` 之后、列表按标记宽度缩进。
+    fn line_indent_edits(&self, src: &str, range: Range<usize>, outdent: bool) -> Vec<LineEdit> {
+        let mut edits = Vec::new();
+        // 上一行刚被改写过的序号：连续缩进的有序项要接着数（1、2、3），
+        // 而不是每行都写成 1
+        let mut renumbered: Option<(usize, u64)> = None;
+        let mut line_start = src
+            .get(..range.start.min(src.len()))
+            .and_then(|head| head.rfind('\n'))
+            .map_or(0, |nl| nl + 1);
+        // 选区终点落在行首时那一行不算（与 VSCode 一致，避免多缩进一行）
+        while line_start < range.end && line_start < src.len() {
+            let line_end = src[line_start..]
+                .find('\n')
+                .map_or(src.len(), |nl| line_start + nl);
+            let next = match renumbered {
+                Some((prev, number)) if self.same_block(prev, line_start) => Some(number + 1),
+                _ => None,
+            };
+            match self.line_indent_edit(src, line_start, line_end, outdent, next) {
+                Some(edit) => {
+                    renumbered = edit.number.map(|number| (line_start, number));
+                    edits.push(edit);
+                }
+                // 空行不断开同一段列表（松散列表的项之间就隔着空行）
+                None => {
+                    if !src[line_start..line_end].trim().is_empty() {
+                        renumbered = None;
+                    }
+                }
+            }
+            line_start = line_end + 1;
+        }
+        edits
+    }
+
+    /// 两个行首是不是同一块（同一个列表被空行切成多块时，序号各自从头算）。
+    fn same_block(&self, a: usize, b: usize) -> bool {
+        match (
+            self.source_map.block_at_byte(a),
+            self.source_map.block_at_byte(b),
+        ) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        }
+    }
+
+    fn line_indent_edit(
+        &self,
+        src: &str,
+        line_start: usize,
+        line_end: usize,
+        outdent: bool,
+        next_number: Option<u64>,
+    ) -> Option<LineEdit> {
+        if self.line_is_in_table(line_start) {
+            return None;
+        }
+        let line = &src[line_start..line_end];
+        let anchor = line_start + Self::quote_prefix_len(line);
+        let body = &src[anchor..line_end];
+        // 空行不缩进：否则按一次 Tab 会留下一整片「只有空格」的行
+        if body.trim().is_empty() {
+            return None;
+        }
+        let lead = body.len() - body.trim_start_matches([' ', '\t']).len();
+        let unit = Self::marker_width(body).unwrap_or(INDENT_WIDTH);
         if outdent {
-            if lead == 0 {
-                return Vec::new();
+            let list = self.line_list_position(line_start, line_end);
+            if lead == 0 || matches!(list, Some((0, _))) {
+                return None;
             }
-            // 顶层列表项没有可反缩进的父级；段落则允许删掉行首空格
-            if is_list && self.list_position(id.0, line_start).0 == 0 {
-                return Vec::new();
-            }
-            let take = if prefix.starts_with('\t') {
+            let ws = if body.starts_with('\t') {
                 1
             } else {
-                lead.min(2)
+                lead.min(unit)
             };
-            // 行首空白都是 ASCII，删掉的字节数就是字符数；光标用**字符**偏移报，
-            // 不能拿新文本里的字节位置当旧文本的字节（会在多字节字符中间截断）。
-            let start = self.document.byte_to_char(line_start);
-            let end = self.document.byte_to_char(line_start + take);
-            let caret = self.document.byte_to_char(byte).saturating_sub(take);
-            return self.apply_with_caret(start..end, "", Some(caret));
-        }
-
-        if is_list {
-            // 顶层第一项没有父级，缩进只会留下视觉上看不出来的两个空格
-            let (depth, first) = self.list_position(id.0, line_start);
-            if depth == 0 && first {
-                return Vec::new();
+            let mut remove = ws;
+            let mut insert = " ".repeat(lead - ws);
+            let mut number = None;
+            // 序号还原：Tab 把「父级首个子项」改写成了 1，反缩进时按上一项 +1 补回来，
+            // 这样 Tab / Shift+Tab 才是真正互逆的。同一批里上一行刚改过就接着数；
+            // 否则只补我们自己写进去的 `1`，用户自己写的数字一律不动。
+            if let Some((digits, current)) = Self::number_at(src, line_start) {
+                let restored = next_number.or_else(|| {
+                    (current == 1)
+                        .then(|| self.outdent_number(src, line_start, line_end))
+                        .flatten()
+                });
+                if let Some(value) = restored {
+                    remove = lead + digits;
+                    insert.push_str(&value.to_string());
+                    number = Some(value);
+                }
             }
-            let start = self.document.byte_to_char(line_start);
-            let caret = self.document.byte_to_char(byte) + 2;
-            return self.apply_with_caret(start..start, "  ", Some(caret));
+            return Some(LineEdit {
+                at: anchor,
+                remove,
+                insert,
+                number,
+            });
         }
+        if matches!(
+            self.line_list_position(line_start, line_end),
+            Some((0, true))
+        ) {
+            return None;
+        }
+        let mut remove = 0;
+        let mut insert = " ".repeat(unit);
+        let mut number = None;
+        // 有序项缩进成父级的第一个子项时必须改写成 `1`：`   2. 乙` 打断不了上一项
+        // 的段落，pulldown 会把它当成续行——用户看到缩进，层级一点没变。
+        // 同一批里连续缩进的兄弟项接着数（1、2、3），不是每行都写成 1。
+        if let Some(digits) = self.first_child_number_len(src, line_start, line_end) {
+            let value = next_number.unwrap_or(1);
+            remove = lead + digits;
+            insert.push_str(&value.to_string());
+            number = Some(value);
+        }
+        Some(LineEdit {
+            at: anchor,
+            remove,
+            insert,
+            number,
+        })
+    }
 
-        let at = self.caret_char_offset();
-        self.apply(at..at, "  ")
+    /// 这一行缩进后会成为「父级的第一个子项」且序号不是 1 时，返回数字的字节长度。
+    ///
+    /// CommonMark 只允许以 `1` 开头的列表打断段落，所以嵌套列表的第一项必须是 1，
+    /// 否则整行退化成上一项的续行。前一项已经是同一层的兄弟时保持原序号。
+    fn first_child_number_len(
+        &self,
+        src: &str,
+        line_start: usize,
+        line_end: usize,
+    ) -> Option<usize> {
+        let id = self.source_map.block_at_byte(line_start)?;
+        let items = self
+            .parsed
+            .blocks
+            .get(id.0)?
+            .list
+            .as_ref()?
+            .items
+            .as_slice();
+        let index = self.list_item_index(id.0, line_start, line_end)?;
+        let item = items.get(index)?;
+        if !item.ordered {
+            return None;
+        }
+        if index > 0 && items[index - 1].depth == item.depth + 1 {
+            return None;
+        }
+        let line = &src[line_start..line_end];
+        let body = &line[Self::quote_prefix_len(line)..];
+        let body = body.trim_start_matches([' ', '\t']);
+        let digits = body.chars().take_while(char::is_ascii_digit).count();
+        if digits == 0 || &body[..digits] == "1" {
+            return None;
+        }
+        Some(digits)
+    }
+
+    /// 反缩进时要补回的序号（上一项 / 父项的序号 + 1）。
+    ///
+    /// 只在「本项是有序项、且缩进过」时给出；是否真的改写由调用方按
+    /// 「当前是不是 1」或「同一批里刚改过」决定。
+    fn outdent_number(&self, src: &str, line_start: usize, line_end: usize) -> Option<u64> {
+        let id = self.source_map.block_at_byte(line_start)?;
+        let items = self
+            .parsed
+            .blocks
+            .get(id.0)?
+            .list
+            .as_ref()?
+            .items
+            .as_slice();
+        let index = self.list_item_index(id.0, line_start, line_end)?;
+        let item = items.get(index)?;
+        if !item.ordered || item.depth == 0 {
+            return None;
+        }
+        let prev = items[..index]
+            .iter()
+            .rev()
+            .find(|other| other.depth == item.depth)
+            .or_else(|| {
+                // 它是父级的第一个子项：按父项的序号 +1 接上
+                items[..index]
+                    .iter()
+                    .rev()
+                    .find(|other| other.depth < item.depth)
+            })?;
+        let (_, prev_number) = Self::number_at(src, prev.byte)?;
+        Some(prev_number + 1)
+    }
+
+    /// 某一行（或某一项的标记处）的有序序号：`(数字字节数, 值)`。
+    ///
+    /// 只借源文本、不切字符串：整篇选区里每行都要问一次，按 `slice_bytes` 实现
+    /// 会退化成「每行复制一遍剩余文档」。
+    fn number_at(src: &str, byte: usize) -> Option<(usize, u64)> {
+        let tail = src.get(byte..)?;
+        let body = tail.trim_start_matches([' ', '\t']);
+        let digits = body.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 {
+            return None;
+        }
+        // 标记后面必须跟分隔符，否则只是恰好以数字开头的正文
+        let delim = body.as_bytes().get(digits).copied()?;
+        if delim != b'.' && delim != b')' {
+            return None;
+        }
+        Some((digits, body[..digits].parse().ok()?))
+    }
+
+    /// 光标所在行（不含换行符）。
+    fn line_at(&self, line_start: usize) -> Option<String> {
+        let end = self.document.len_bytes();
+        if line_start >= end {
+            return None;
+        }
+        let tail = self.document.slice_bytes(line_start..end);
+        Some(match tail.find('\n') {
+            Some(nl) => tail[..nl].to_owned(),
+            None => tail,
+        })
+    }
+
+    /// 行首的引用前缀长度：`>` 加其后至多一个空格，可重复。
+    ///
+    /// `> - 甲` 的缩进必须落在 `> ` 之后（`>   - 甲`），插在行首只会把整段引用
+    /// 缩进去，列表层级一点没变。
+    fn quote_prefix_len(line: &str) -> usize {
+        let mut len = 0usize;
+        let mut rest = line;
+        loop {
+            let trimmed = rest.trim_start_matches([' ', '\t']);
+            // 只有「空白 + `>`」才算引用前缀：普通行的行首空白属于缩进本身，
+            // 不能算进来（否则 `  - 乙` 的 body 会被当成 `- 乙`，缩进量永远读成 0）
+            let Some(after) = trimmed.strip_prefix('>') else {
+                break;
+            };
+            len += (rest.len() - trimmed.len()) + 1;
+            rest = after;
+            if let Some(after) = rest.strip_prefix(' ') {
+                len += 1;
+                rest = after;
+            }
+        }
+        len
+    }
+
+    /// 列表标记的宽度（`- ` = 2、`1. ` = 3、`10. ` = 4），不是列表行返回 None。
+    ///
+    /// 这个宽度就是「缩进一级」要补的空格数：`1. ` 只补两格时 pulldown 仍把下一行
+    /// 当作同级项（层级 `[0,0]`），用户看到缩进了、结构却没变。
+    fn marker_width(body: &str) -> Option<usize> {
+        let rest = body.trim_start_matches([' ', '\t']);
+        if let Some(after) = rest.strip_prefix(['-', '*', '+'])
+            && after.starts_with(' ')
+        {
+            return Some(2);
+        }
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        if digits == 0 || digits > 9 {
+            return None;
+        }
+        let delim = rest[digits..].chars().next()?;
+        if delim != '.' && delim != ')' {
+            return None;
+        }
+        rest[digits + 1..].starts_with(' ').then_some(digits + 2)
+    }
+
+    /// 这一行是不是表格里的行：表格行的行首缩进会把整行推出表格。
+    fn line_is_in_table(&self, line_start: usize) -> bool {
+        self.source_map
+            .block_at_byte(line_start)
+            .and_then(|id| self.parsed.blocks.get(id.0))
+            .is_some_and(|block| matches!(block.kind, BlockKind::Table))
+    }
+
+    /// 这一行在列表里的 (层级, 是否本块第一项)；不是列表项返回 None。
+    ///
+    /// 用 `Block::list` 而不是块类型判定：`> - 甲` 的块类型是引用，
+    /// 列表信息挂在块上但块本身不是 `BlockKind::List`。
+    fn line_list_position(&self, line_start: usize, line_end: usize) -> Option<(usize, bool)> {
+        let id = self.source_map.block_at_byte(line_start)?;
+        let block = self.parsed.blocks.get(id.0)?;
+        if block.list.as_ref()?.items.is_empty() {
+            return None;
+        }
+        Some(self.list_position(id.0, line_start, line_end))
     }
 
     /// 当前行在列表里的「层级 / 是否本块第一项」。找不到时按顶层第一项处理。
@@ -736,22 +1108,26 @@ impl AppState {
     /// `ListItem.byte` 指向的是这一项的行内标记（`-` / `1.`），不是行首：
     /// 缩进过的列表项在行首之后还有空白，直接拿 `byte <= line_start` 比较会把
     /// 它认成上一项。这里先找「同一行上、位于行首之后」的那一项。
-    fn list_position(&self, block: usize, line_start: usize) -> (usize, bool) {
+    fn list_position(&self, block: usize, line_start: usize, line_end: usize) -> (usize, bool) {
         let Some(list) = self.parsed.blocks[block].list.as_ref() else {
             return (0, true);
         };
-        let text = self.document.text();
-        let same_line = list.items.iter().position(|item| {
-            item.byte >= line_start
-                && text
-                    .get(line_start..item.byte)
-                    .is_some_and(|gap| !gap.contains('\n'))
-        });
-        let index =
-            same_line.or_else(|| list.items.iter().rposition(|item| item.byte <= line_start));
-        index
+        self.list_item_index(block, line_start, line_end)
             .and_then(|i| list.items.get(i).map(|item| (item.depth, i == 0)))
             .unwrap_or((0, true))
+    }
+
+    /// 这一行是列表里的第几项（`ListItem` 的下标）。
+    ///
+    /// `ListItem.byte` 指向的是这一项的行内标记（`-` / `1.`），不是行首：
+    /// 缩进过的列表项在行首之后还有空白，直接拿 `byte <= line_start` 比较会把
+    /// 它认成上一项。这里先找「同一行上、位于行首之后」的那一项。
+    fn list_item_index(&self, block: usize, line_start: usize, line_end: usize) -> Option<usize> {
+        let list = self.parsed.blocks.get(block)?.list.as_ref()?;
+        list.items
+            .iter()
+            .position(|item| item.byte >= line_start && item.byte < line_end)
+            .or_else(|| list.items.iter().rposition(|item| item.byte <= line_start))
     }
 
     /// 改链接 / 图片。`stop` 只需要落在目标内部，片段由内核自己找。
@@ -3379,6 +3755,129 @@ mod tests {
         click(&mut app, &files, 2);
         app.update(Message::Indent { outdent: true }, &files);
         assert_eq!(app.document.text(), "- 甲", "顶层项不能再往外缩");
+    }
+
+    /// 回归：Tab 曾经是「用两个空格替换选区」，选中一段按 Tab 等于删掉那一段。
+    /// 现在选区只决定动哪几行，一个字都不能少。
+    #[test]
+    fn tab_with_a_selection_keeps_the_selected_text() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲乙丙丁\n");
+        app.update(Message::Select { anchor: 3, head: 9 }, &files);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(app.document.text(), "  甲乙丙丁\n", "只在行首加缩进");
+    }
+
+    #[test]
+    fn tab_indents_every_selected_line_and_shift_tab_restores_it() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\n乙\n丙\n");
+        app.update(Message::SelectAll, &files);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(app.document.text(), "  甲\n  乙\n  丙\n", "每一行都要缩进");
+        // 选区方向与两端都保住：仍然覆盖整篇
+        let (lo, hi) = app.selection.normalized();
+        assert_eq!((lo, hi), (0, app.layout.stops() - 1));
+        assert_eq!(app.selection.head, 0, "全选的方向应保留（光标在文首）");
+
+        app.update(Message::Indent { outdent: true }, &files);
+        assert_eq!(
+            app.document.text(),
+            "甲\n乙\n丙\n",
+            "Shift+Tab 必须严格还原"
+        );
+    }
+
+    #[test]
+    fn multi_line_indent_skips_blank_lines_and_table_rows() {
+        let mut files = InMemoryFileStore::default();
+        let src = "甲\n\n| a | b |\n| --- | --- |\n| c | d |\n";
+        let mut app = open(&mut files, src);
+        app.update(Message::SelectAll, &files);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(
+            app.document.text(),
+            "  甲\n\n| a | b |\n| --- | --- |\n| c | d |\n",
+            "空行与表格行不能动"
+        );
+    }
+
+    #[test]
+    fn tab_inside_a_table_does_not_insert_spaces() {
+        let mut files = InMemoryFileStore::default();
+        let src = "| a | b |\n| --- | --- |\n| c | d |\n";
+        let mut app = open(&mut files, src);
+        click(&mut app, &files, 9);
+        let effects = app.update(Message::Indent { outdent: false }, &files);
+        assert!(effects.is_empty(), "表格里的 Tab 由前端分流成跨格");
+        assert_eq!(app.document.text(), src);
+    }
+
+    /// `1. ` 的标记宽 3：补两格时 pulldown 仍当成同级项（层级 `[0,0]`），
+    /// 用户看到缩进、结构却没变。缩进成父级首个子项时序号还得改写成 1，
+    /// 否则 `   2. 乙` 打断不了上一项的段落，只能算续行。
+    #[test]
+    fn tab_nests_an_ordered_item_and_shift_tab_restores_its_number() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "1. 甲\n2. 乙\n");
+        click(&mut app, &files, 10);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(app.document.text(), "1. 甲\n   1. 乙\n");
+        let items = app.parsed.blocks[0].list.as_ref().unwrap();
+        assert_eq!(
+            items.items.iter().map(|i| i.depth).collect::<Vec<_>>(),
+            vec![0, 1],
+            "必须真的嵌套一级"
+        );
+
+        app.update(Message::Indent { outdent: true }, &files);
+        assert_eq!(app.document.text(), "1. 甲\n2. 乙\n", "序号要补回来");
+    }
+
+    /// `> - 甲` 的块类型是引用，不是列表：旧实现按块类型判列表，于是 Tab 变成
+    /// 「在光标处插两格」（`> -   乙`），层级一点没动。
+    #[test]
+    fn tab_demotes_a_list_item_inside_a_blockquote() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "> - 甲\n> - 乙\n");
+        click(&mut app, &files, 12);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(
+            app.document.text(),
+            "> - 甲\n>   - 乙\n",
+            "缩进落在 `> ` 之后"
+        );
+        let items = app.parsed.blocks[0].list.as_ref().unwrap();
+        assert_eq!(
+            items.items.iter().map(|i| i.depth).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+
+        app.update(Message::Indent { outdent: true }, &files);
+        assert_eq!(app.document.text(), "> - 甲\n> - 乙\n");
+    }
+
+    /// 连续缩进多个有序项：序号要接着数（1、2），反缩进要都补回来（2、3）。
+    #[test]
+    fn multi_line_indent_renumbers_ordered_items_in_sequence() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "1. 甲\n2. 乙\n3. 丙\n");
+        app.update(Message::SelectAll, &files);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(app.document.text(), "1. 甲\n   1. 乙\n   2. 丙\n");
+        app.update(Message::Indent { outdent: true }, &files);
+        assert_eq!(app.document.text(), "1. 甲\n2. 乙\n3. 丙\n");
+    }
+
+    #[test]
+    fn multi_line_indent_is_one_undo_step() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\n乙\n");
+        app.update(Message::SelectAll, &files);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(app.document.text(), "  甲\n  乙\n");
+        app.update(Message::Undo, &files);
+        assert_eq!(app.document.text(), "甲\n乙\n", "一次撤销回到缩进前");
     }
 
     #[test]

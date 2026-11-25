@@ -537,9 +537,9 @@ pub fn parse(src: &str, options: Options) -> ParseResult {
         let hidden = subtract(byte.clone(), &merge(covered));
         let markers = collect_markers(&hidden, &containers, &spans);
         let table = table.map(|build| finish_table(build, &spans));
-        let list = matches!(kind, BlockKind::List { .. })
-            .then(|| ListInfo { items: list_items })
-            .filter(|info| !info.items.is_empty());
+        // 列表信息不只看块类型：`> - 甲` 的块是引用，但项层级同样要能查到
+        // （Tab 升降级、渲染缩进都依赖它）。只要这一块里出现过 `Item` 事件就带上。
+        let list = (!list_items.is_empty()).then_some(ListInfo { items: list_items });
         // 代码块在投影完成后做一次词法着色。区间取可见片段的并集，围栏本身
         // 落在 `hidden` 里，不会被当成代码。
         let tokens = match &kind {
