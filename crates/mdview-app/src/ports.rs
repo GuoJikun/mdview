@@ -25,7 +25,13 @@ pub struct StdFileStore;
 
 impl FileStore for StdFileStore {
     fn load(&self, path: &Path) -> Result<String, AppError> {
-        Ok(fs::read_to_string(path)?)
+        let text = fs::read_to_string(path)?;
+        // UTF-8 BOM 解码后是正文首字符 U+FEFF：首个 `# ` 不再被识别成标题、
+        // 字数多算一个、保存时还会被当作内容写回。读取时一律剥掉。
+        Ok(match text.strip_prefix('\u{feff}') {
+            Some(rest) => rest.to_owned(),
+            None => text,
+        })
     }
 
     fn save(&self, path: &Path, content: &str) -> Result<(), AppError> {
@@ -42,7 +48,15 @@ impl FileStore for StdFileStore {
     }
 
     fn fingerprint(&self, path: &Path) -> Result<Fingerprint, AppError> {
-        let meta = fs::metadata(path)?;
+        // 文件不存在要报 NotFound，不能混进 Io：上层据此区分「被删了，
+        // 允许写回重建」与「读不了，状态未知，保守按冲突处理」。
+        let meta = fs::metadata(path).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                AppError::not_found(path)
+            } else {
+                AppError::Io(err)
+            }
+        })?;
         let modified = meta
             .modified()
             .ok()
@@ -107,6 +121,11 @@ pub struct InMemoryFileStore {
 impl InMemoryFileStore {
     pub fn insert(&mut self, path: impl Into<PathBuf>, content: impl Into<String>) {
         self.files.get_mut().insert(path.into(), content.into());
+    }
+
+    /// 模拟外部删除：之后 `load` / `fingerprint` 都返回 `NotFound`。
+    pub fn remove(&mut self, path: impl AsRef<Path>) {
+        self.files.get_mut().remove(path.as_ref());
     }
 }
 
@@ -338,6 +357,25 @@ mod tests {
         let after = StdFileStore.fingerprint(&path).unwrap();
 
         assert_ne!(before, after, "内容变了指纹必须变，外部冲突检测才有效");
+    }
+
+    #[test]
+    fn load_strips_a_utf8_bom() {
+        // BOM 解码后是正文首字符，会让首个 `# ` 认不出来，保存时还被写回去。
+        let dir = TempDir::new("bom");
+        let path = dir.file("bom.md");
+        fs::write(&path, "\u{feff}# 标题\n").unwrap();
+        assert_eq!(StdFileStore.load(&path).unwrap(), "# 标题\n");
+    }
+
+    #[test]
+    fn fingerprint_reports_a_missing_file_as_not_found() {
+        // 上层靠 NotFound 区分「文件被删，可以写回重建」和「读不了，按冲突处理」。
+        let dir = TempDir::new("fpmiss");
+        let err = StdFileStore
+            .fingerprint(&dir.file("gone.md"))
+            .expect_err("文件不存在应当报错");
+        assert!(err.is_not_found(), "实际错误：{err}");
     }
 
     #[test]

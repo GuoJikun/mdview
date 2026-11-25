@@ -374,11 +374,22 @@ impl AppState {
                     // 没有路径 ≠ 保存成功。什么都不动，等宿主拿到路径补发 SaveTo。
                     return vec![Effect::NeedsPath];
                 };
-                if let Some(expected) = self.saved_fingerprint
-                    && files.fingerprint(&path).ok() != Some(expected)
-                {
-                    warn!("保存被拒：{} 已被外部修改", path.display());
-                    return vec![Effect::Conflict];
+                if let Some(expected) = self.saved_fingerprint {
+                    match files.fingerprint(&path) {
+                        Ok(now) if now != expected => {
+                            warn!("保存被拒：{} 已被外部修改", path.display());
+                            return vec![Effect::Conflict];
+                        }
+                        // 文件被外部删除：允许直接写回重建。若也按冲突处理，
+                        // 用户点「保存」只会一直弹冲突，只能「另存为」。
+                        Err(err) if err.is_not_found() => {}
+                        // 其它读失败（权限、盘符离线）：内容状态未知，不覆盖。
+                        Err(err) => {
+                            warn!("保存被拒：{} 指纹读不到（{err}）", path.display());
+                            return vec![Effect::Conflict];
+                        }
+                        Ok(_) => {}
+                    }
                 }
                 self.save_into(&path, files)
             }
@@ -2063,6 +2074,19 @@ mod tests {
         files.insert("note.md", "external change\n");
         assert_eq!(app.update(Message::Save, &files), vec![Effect::Conflict]);
         assert!(app.dirty);
+    }
+
+    #[test]
+    fn save_recreates_a_file_deleted_outside() {
+        // 被外部删掉的文件，指纹读不到。这不该算「被外部修改」——否则
+        // 用户点保存只会一直弹冲突，除了另存为没有别的出路。
+        let (mut files, mut app) = fixture();
+        files.remove("note.md");
+        type_text(&mut app, &files, "补一笔");
+        assert_eq!(app.update(Message::Save, &files), vec![Effect::Persist]);
+        assert!(!app.dirty);
+        let saved = files.load(Path::new("note.md")).expect("文件应被重建");
+        assert!(saved.contains("补一笔"), "实际写入：{saved}");
     }
 
     #[test]
