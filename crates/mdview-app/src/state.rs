@@ -219,6 +219,16 @@ enum MarkerEdit {
     Run(Range<usize>),
 }
 
+impl MarkerEdit {
+    /// 这次编辑在源码上盖住的 byte 区间，供「这段能不能删」的判断使用。
+    fn byte_range(&self) -> Range<usize> {
+        match self {
+            MarkerEdit::Pair { open, close } => open.start..close.end,
+            MarkerEdit::Run(range) => range.clone(),
+        }
+    }
+}
+
 impl AppState {
     pub fn open(content: impl AsRef<str>, path: Option<PathBuf>, files: &impl FileStore) -> Self {
         let saved_fingerprint = path.as_deref().and_then(|p| files.fingerprint(p).ok());
@@ -814,14 +824,32 @@ impl AppState {
         self.apply_with_caret(start..end, &replacement, Some(start))
     }
 
+    /// 一行空单元格的源码：`|  |  |`。
+    ///
+    /// 不能写 `format!("|{}|", "  |".repeat(cols))`——每格自带一个收尾竖线，外层再包
+    /// 一个就多出来一根（两列得到 `|  |  ||`）。用 `join_row` 拼，列数才和表头一致。
+    fn blank_row(cols: usize) -> String {
+        Self::join_row(&vec!["  "; cols]).0
+    }
+
     fn table_insert_row(&mut self, after: bool) -> Vec<Effect> {
         let Some((id, _, row, _)) = self.caret_table_cell() else {
             return Vec::new();
         };
         let src = self.document.text();
-        let block = &self.parsed.blocks[id];
-        let cols = block.table.as_ref().unwrap().rows[0].cells.len();
-        let mut lines = Self::table_lines(&src, &block.byte);
+        let block_range = self.parsed.blocks[id].byte.clone();
+        let Some(cols) = self.parsed.blocks[id]
+            .table
+            .as_ref()
+            .and_then(|grid| grid.rows.first())
+            .map(|row| row.cells.len())
+        else {
+            return Vec::new();
+        };
+        if cols == 0 {
+            return Vec::new();
+        }
+        let mut lines = Self::table_lines(&src, &block_range);
         // 表头后面必须紧接分隔行，新行只能插到分隔行之后（源码第 2 行）
         let at = if row == 0 {
             2
@@ -831,7 +859,6 @@ impl AppState {
         if at > lines.len() {
             return Vec::new();
         }
-        let blank = format!("|{}|", "  |".repeat(cols));
         let target_line = if row == 0 {
             at
         } else if after {
@@ -839,8 +866,42 @@ impl AppState {
         } else {
             at
         };
-        lines.insert(at, blank);
-        self.replace_table(id, block.byte.clone(), &lines, target_line, 0)
+        lines.insert(at, Self::blank_row(cols));
+        self.replace_table(id, block_range, &lines, target_line, 0)
+    }
+
+    /// 表格里的回车：在当前行**下面**加一行，光标落到新行第一格。
+    ///
+    /// 与工具条的「插入行」不同，这里光标必须跟到新行——用户按回车就是想接着往下填。
+    fn table_newline(&mut self) -> Vec<Effect> {
+        let Some((id, _, row, _)) = self.caret_table_cell() else {
+            return Vec::new();
+        };
+        let src = self.document.text();
+        let block_range = self.parsed.blocks[id].byte.clone();
+        let Some(cols) = self.parsed.blocks[id]
+            .table
+            .as_ref()
+            .and_then(|grid| grid.rows.first())
+            .map(|row| row.cells.len())
+        else {
+            return Vec::new();
+        };
+        if cols == 0 {
+            return Vec::new();
+        }
+        let mut lines = Self::table_lines(&src, &block_range);
+        // 表头之后的第一行是分隔行，新行要排在它下面
+        let at = if row == 0 {
+            2
+        } else {
+            Self::table_source_row(row) + 1
+        };
+        if at > lines.len() {
+            return Vec::new();
+        }
+        lines.insert(at, Self::blank_row(cols));
+        self.replace_table(id, block_range, &lines, at, 0)
     }
 
     fn table_delete_row(&mut self) -> Vec<Effect> {
@@ -1074,6 +1135,40 @@ impl AppState {
         )
     }
 
+    /// 表格里删除区间的合法性：只允许删**单元格内部**的字节。
+    ///
+    /// 表格的竖线、行尾换行与 `| --- |` 分隔行在投影里也是折叠区间 / 换行片段，
+    /// 跟 `**` 前缀走的是同一套「整段抽掉」的规则——对 `**` 是对的（半个 `*` 会把
+    /// 语法写坏），对表格却是灾难：抽掉两格之间的 `|` 会让两格粘成一格，抽掉行尾
+    /// 换行会把分隔行一起吞掉，一张表一次退格就退化成普通段落。
+    ///
+    /// 非表格块、以及拿不到结构化投影的块一律放行（保持原来的删除语义）。
+    fn table_delete_allowed(&self, range: &Range<usize>) -> bool {
+        let Some(block) = self
+            .parsed
+            .blocks
+            .iter()
+            .find(|b| b.byte.start <= range.start && range.start < b.byte.end)
+        else {
+            return true;
+        };
+        if !matches!(block.kind, BlockKind::Table) {
+            return true;
+        }
+        let Some(grid) = block.table.as_ref() else {
+            return true;
+        };
+        // 起点不在任何单元格里 = 起点是竖线 / 分隔行 / 换行，属于结构
+        let Some((row, col)) = grid.locate(range.start) else {
+            return false;
+        };
+        // 终点越过本格 = 要跨过一根竖线，同样属于结构
+        grid.rows[row]
+            .cells
+            .get(col)
+            .is_some_and(|cell| range.end <= cell.byte.end)
+    }
+
     fn delete_backward(&mut self) -> Vec<Effect> {
         if self.composing {
             return Vec::new();
@@ -1091,9 +1186,17 @@ impl AppState {
         // 前一个字符若落在折叠标记里，按整体删除，绝不啃单个字节
         let prev = self.document.char_to_byte(at - 1);
         if let Some(edit) = self.marker_edit_at(prev) {
+            if !self.table_delete_allowed(&edit.byte_range()) {
+                return Vec::new();
+            }
             return self.delete_marker(edit);
         }
-        self.apply(self.expand_deletion(at - 1..at), "")
+        let span = self.expand_deletion(at - 1..at);
+        // 表格里贴到竖线/分隔行就算到头了，不能顺着折叠区间把结构吃掉
+        if !self.table_delete_allowed(&span) {
+            return Vec::new();
+        }
+        self.apply(span, "")
     }
 
     fn delete_forward(&mut self) -> Vec<Effect> {
@@ -1117,9 +1220,16 @@ impl AppState {
             BlockEndDelete::Plain => {}
         }
         if let Some(edit) = self.marker_edit_at(byte) {
+            if !self.table_delete_allowed(&edit.byte_range()) {
+                return Vec::new();
+            }
             return self.delete_marker(edit);
         }
-        self.apply(self.expand_deletion(at..at + 1), "")
+        let span = self.expand_deletion(at..at + 1);
+        if !self.table_delete_allowed(&span) {
+            return Vec::new();
+        }
+        self.apply(span, "")
     }
 
     /// 段末 Delete 的三种走向。
@@ -1191,6 +1301,11 @@ impl AppState {
         if end > block.byte.end {
             return span;
         }
+        // 表格只按选区原样删：向两端吃折叠区间会把竖线、分隔行一起吞掉
+        // （`| ab |` 就是这么来的）。结构改动走行列工具条，不走删除。
+        if matches!(block.kind, BlockKind::Table) {
+            return span;
+        }
 
         let (mut lo, mut hi) = (start, end);
         for pair in &block.markers {
@@ -1235,11 +1350,9 @@ impl AppState {
     fn marker_edit_at(&self, byte: usize) -> Option<MarkerEdit> {
         let block = self.parsed.blocks.iter().find(|b| {
             (b.byte.start <= byte && byte < b.byte.end)
-                    // 原子控件的 span 可能越过块尾：split_blocks 用 trim_eol 剔掉
-                    // 块尾换行，pulldown 的 span 却保留它（分隔线 `---\n` 的 span
-                    // 是 5..9、块却是 5..8）。光标停在控件右端停靠点、退格取到的
-                    // prev 正是这个换行；只按 block.byte 找块会漏掉它，退化成
-                    // 删换行、把分隔线并进后一段。按 span 一起判定即可命中整块。
+                    // 兜底：投影层已经保证片段不越出块（见 `clamp_to_block`），
+                    // 这里仍按片段一起判定，避免将来出现「片段落点在块尾之后」
+                    // 时又退化成删换行、把整块并进后一段。
                     || b.spans.iter().any(|s| s.byte.start <= byte && byte < s.byte.end)
         })?;
         if let Some(pair) = block.marker_pair_at(byte) {
@@ -1251,9 +1364,27 @@ impl AppState {
         if let Some(run) = block.hidden_range_at(byte) {
             return Some(MarkerEdit::Run(run));
         }
-        block
-            .control_span_at(byte)
-            .map(|span| MarkerEdit::Run(span.byte.clone()))
+        let span = block.control_span_at(byte)?;
+        let mut range = span.byte.clone();
+        // 分隔线是**整行**控件：块区间剔掉了行尾换行，只删 `---` 会在原地留下
+        // 三行空行（中间凭空多出一个空段落）。连同那个换行一起删，块才整块消失。
+        if matches!(span.kind, SpanKind::Rule) {
+            range.end = self.trailing_newline_end(range.end);
+        }
+        Some(MarkerEdit::Run(range))
+    }
+
+    /// `end` 处若是换行，返回它之后的 byte（`\r\n` 算两字节）；否则原样返回。
+    fn trailing_newline_end(&self, end: usize) -> usize {
+        let stop = (end + 2).min(self.document.len_bytes());
+        let tail = self.document.slice_bytes(end..stop);
+        if tail.starts_with("\r\n") {
+            end + 2
+        } else if tail.starts_with('\n') {
+            end + 1
+        } else {
+            end
+        }
     }
 
     fn delete_marker(&mut self, edit: MarkerEdit) -> Vec<Effect> {
@@ -1278,6 +1409,11 @@ impl AppState {
 
     fn hard_break(&mut self) -> Vec<Effect> {
         if self.composing {
+            return Vec::new();
+        }
+        // 表格里没有「段内换行」这种东西：写进单元格的裸换行会把这一行劈成两行
+        // 不完整的行，整张表立刻不再是表格。宁可没反应，也不能悄悄拆表。
+        if self.caret_table_cell().is_some() {
             return Vec::new();
         }
         if let Some(sel) = self.selection_chars() {
@@ -1306,10 +1442,13 @@ impl AppState {
         };
         let kind = self.parsed.blocks[id.0].kind.clone();
         match kind {
-            BlockKind::CodeBlock { .. } | BlockKind::Html | BlockKind::Table => {
+            BlockKind::CodeBlock { .. } | BlockKind::Html => {
                 let at = self.caret_char_offset();
                 self.apply(at..at, "\n")
             }
+            // 表格的换行是**结构**分隔符，不是内容：插一个裸换行等于把这一行劈成
+            // 两行不完整的行，整张表立刻失效。回车在这里的语义取「加一行」。
+            BlockKind::Table => self.table_newline(),
             BlockKind::List { .. } | BlockKind::BlockQuote => {
                 let Some((line_start, prefix)) = self.line_prefix() else {
                     return self.split_paragraph();
@@ -1680,8 +1819,10 @@ mod tests {
 
     /// 光标停在分隔线右端停靠点（pt 的 end stop）时退格，必须整块删掉 `---`，
     /// 而不是删掉它后面的换行、把分隔线和后一段并成一个段落（那样视觉上分隔线
-    /// 没消失、只是"挪下去了")。根因是 rule 的 span 含块尾换行（5..9）、块范围
-    /// 却不含（5..8），marker_edit_at 只按 block.byte 找块就漏掉了原子控件。
+    /// 没消失、只是"挪下去了"）。
+    ///
+    /// 分隔线的片段区间已经夹回块区间（`5..8`，不含行尾换行），删的时候由
+    /// `trailing_newline_end` 把那个换行一起吃掉，块才整块消失。
     #[test]
     fn backspace_at_rule_end_stop_removes_whole_rule() {
         let mut files = InMemoryFileStore::default();
@@ -1694,7 +1835,7 @@ mod tests {
             },
             &files,
         );
-        assert_eq!(caret_byte(&app), 9, "右移一步应到 rule 的 end stop");
+        assert_eq!(caret_byte(&app), 8, "右移一步应到 rule 的 end stop");
         app.update(Message::Backspace, &files);
         assert!(!app.document.text().contains("---"), "分隔线应整块消失");
         // 不能把 --- 当作行内原子并进后一段：解析结果里不应再有 rule 块
@@ -1820,6 +1961,90 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_eq!(grid.rows.len(), 3, "{:?}", app.document.text());
+    }
+
+    /// 表格的结构字符（竖线、行尾换行、分隔行）不能被单次退格/Delete 抽掉：
+    /// 它们和 `**` 一样是折叠区间，但「整段删除」的规则套到表格上就是拆表。
+    #[test]
+    fn backspace_at_a_cell_start_does_not_merge_cells() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        click(&mut app, &files, 8); // 中列内容起点
+        let effects = app.update(Message::Backspace, &files);
+        assert!(effects.is_empty(), "不该产生编辑");
+        assert_eq!(app.document.text(), TABLE, "表格源码应原样保留");
+        assert!(app.parsed.blocks[0].table.is_some(), "表格仍然应当是表格");
+    }
+
+    #[test]
+    fn delete_at_a_cell_end_does_not_swallow_the_delimiter_row() {
+        let src = "| a | b |\n| --- | --- |\n| c | d |\n";
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        // 最后一格内容之后：Delete 既不能吃掉竖线，也不能吃到分隔行
+        click(&mut app, &files, src.find("| d").unwrap() - 1);
+        let effects = app.update(Message::DeleteForward, &files);
+        assert!(effects.is_empty(), "不该产生编辑");
+        assert_eq!(app.document.text(), src);
+        assert!(app.parsed.blocks[0].table.is_some());
+    }
+
+    /// 回归：`format!("|{}|", "  |".repeat(cols))` 每格自带收尾竖线，外层再包一个
+    /// 就多出来一根（两列 → `|  |  ||`）。列数必须和表头一致。
+    #[test]
+    fn inserted_row_has_the_same_column_count() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        click(&mut app, &files, 15);
+        app.update(Message::TableInsertRow { after: true }, &files);
+        let src = app.document.text();
+        let blank = src
+            .lines()
+            .find(|line| line.trim_matches(['|', ' ']).is_empty())
+            .expect("应插入一行空行");
+        assert_eq!(blank, "|  |  |  |", "空行应与三列表头同宽：{src:?}");
+    }
+
+    /// 回车在表格里的语义是「加一行」：插裸换行会把这一行劈成两行不完整的行，
+    /// 整张表立刻失效（`| \na | b |`），所以不能和代码块共用同一个分支。
+    #[test]
+    fn enter_in_a_cell_adds_a_row_instead_of_splitting_the_line() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        click(&mut app, &files, 3);
+        app.update(Message::Newline, &files);
+        let src = app.document.text();
+        assert!(
+            app.parsed.blocks[0].table.is_some(),
+            "回车之后仍应是表格：{src:?}"
+        );
+        let grid = app.parsed.blocks[0].table.as_ref().unwrap();
+        assert_eq!(grid.rows.len(), 4, "应当多出一行：{src:?}");
+        assert!(
+            grid.rows.iter().all(|row| row.cells.len() == 3),
+            "新行应与表头同宽：{src:?}"
+        );
+        // 光标跟着落到新行（而不是留在原来那一行）
+        let blank_line = src
+            .lines()
+            .position(|line| line.trim_matches(['|', ' ']).is_empty())
+            .expect("应有一行空行");
+        let caret = caret_byte(&app);
+        assert_eq!(
+            src[..caret].matches('\n').count(),
+            blank_line,
+            "光标应落在新插入的空行上：{src:?}"
+        );
+    }
+
+    #[test]
+    fn shift_enter_in_a_cell_does_nothing() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        click(&mut app, &files, 3);
+        let effects = app.update(Message::HardBreak, &files);
+        assert!(effects.is_empty());
+        assert_eq!(app.document.text(), TABLE);
     }
 
     #[test]
