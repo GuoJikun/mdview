@@ -99,12 +99,16 @@ impl UpdateState {
         }
     }
 
+    /// 用 `send_replace` 而不是 `send`：`send` 在没有任何接收者时直接失败、
+    /// **不更新值**，而这两处恰恰经常发生在订阅之前。取消过一次后接收端随
+    /// 下载结束被丢弃，再拿 `send(false)` 复位是空操作，下一轮下载一订阅
+    /// 就立刻看到 `true`，被秒判为「已取消」。
     fn reset_cancel(&self) {
-        let _ = self.cancel_tx.send(false);
+        self.cancel_tx.send_replace(false);
     }
 
     fn request_cancel(&self) {
-        let _ = self.cancel_tx.send(true);
+        self.cancel_tx.send_replace(true);
     }
 
     fn cancel_rx(&self) -> watch::Receiver<bool> {
@@ -243,4 +247,25 @@ pub fn install_update(app: tauri::AppHandle) -> Result<(), UpdateError> {
 /// 等取消信号变成 `true`。起始值为 `false`，`reset_cancel` 保证每轮重新等。
 async fn wait_cancel(mut rx: watch::Receiver<bool>) {
     let _ = rx.wait_for(|cancelled| *cancelled).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UpdateState;
+
+    /// 下载结束会丢掉接收端；此后再复位取消标志必须真的写进去，否则
+    /// 「取消一次 → 重新下载」永远立刻失败，只能重启应用。
+    #[test]
+    fn cancel_flag_is_cleared_after_the_previous_download_ends() {
+        let state = UpdateState::new();
+
+        let rx = state.cancel_rx(); // 下载开始，订阅取消信号
+        state.request_cancel(); // 用户点「取消」
+        assert!(*rx.borrow(), "取消应当写进信号");
+        drop(rx); // 下载结束，接收端被丢弃
+
+        state.reset_cancel(); // 下一轮下载开始前复位
+        let next = state.cancel_rx();
+        assert!(!*next.borrow(), "新一轮下载不应继承上一轮的取消状态");
+    }
 }
