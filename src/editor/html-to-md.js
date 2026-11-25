@@ -296,11 +296,36 @@ function normalizeInline(text) {
 }
 
 function normalizeParagraph(text) {
-  return text
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
+  return escapeLineStarts(
+    text
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim(),
+  );
+}
+
+/**
+ * 行首的块级标记补反斜杠。
+ *
+ * `escapeText` 只能按文本节点判断，而节点并不知道自己是不是在行首（`<br>` 之后
+ * 的下一个节点就是新行）。这里在段落拼接完成、行边界确定之后再处理：
+ * 粘贴过来的 `# 标题` / `- 项目` / `1. 步骤` 否则会被解析成标题、列表。
+ *
+ * 只认「标记后跟空白或行尾」，`#标签`、`a-b` 这类不算；`*` 与 `>` 已被
+ * `escapeText` 转义，不需要重复处理。
+ */
+function escapeLineStarts(text) {
+  return text.replace(
+    /^([ \t]*)(#{1,6}|[-+]|\d{1,9}[.)])(?=[ \t]|$)/gm,
+    (whole, pad, marker) => {
+      if (/^\d/.test(marker)) {
+        // 有序列表的标记是「数字 + 分隔符」，反斜杠要落在分隔符前：`1\. 步骤`
+        return `${pad}${marker.slice(0, -1)}\\${marker.slice(-1)}`;
+      }
+      return `${pad}\\${marker}`;
+    },
+  );
 }
 
 function collapse(text) {
@@ -309,7 +334,7 @@ function collapse(text) {
 
 /** 字面量里的 Markdown 元字符转义，避免粘贴进来的文字被重新解释。 */
 function escapeText(text) {
-  return text.replace(/([\\`*[\]<>])/g, '\\$1');
+  return text.replace(/([\\`*[\]<>_])/g, '\\$1');
 }
 
 function escapeDestination(url) {
