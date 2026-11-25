@@ -732,52 +732,85 @@ fn list_li_open(depth: Option<usize>) -> String {
 pub fn align(src: &str, text: &str, target: usize) -> usize {
     let mut si = 0usize;
     let mut ti = 0usize;
+    // 文本侧的字节游标：实体校验要拿「当前字符之后的文本」做反证，
+    // 用字节游标直接切片比按字符重新计数省事。
+    let mut tb = 0usize;
     let mut chars = text.chars().peekable();
     while ti < target {
         let Some(sc) = src[si..].chars().next() else {
             return src.len();
         };
+        let Some(tc) = chars.next() else {
+            return src.len();
+        };
+        ti += 1;
+        tb += tc.len_utf8();
         // 转义前缀只存在于源码侧，文本侧不消耗额外字符：`a\*b` 的 4 个字节
         // 对应 3 个字符。这里必须把「前缀 + 被转义字符」一次吃掉——只跳前缀
         // 会让下一轮把 `a\\b` 的第二个反斜杠又当前缀，整体前移并吞掉末尾字符。
         if sc == '\\' && si + 1 < src.len() {
             let escaped = src[si + 1..].chars().next();
             si += 1 + escaped.map_or(0, char::len_utf8);
-            chars.next();
-            ti += 1;
             continue;
         }
         // 实体在源码侧多字节、文本侧一个字符
         if sc == '&'
-            && let Some(len) = entity_len(&src[si..])
+            && let Some(len) = entity_len(&src[si..], tc, &text[tb..])
         {
             si += len;
-            chars.next();
-            ti += 1;
             continue;
         }
         si += sc.len_utf8();
-        chars.next();
-        ti += 1;
     }
     si
 }
 
-fn entity_len(s: &str) -> Option<usize> {
+/// 校验 `&…;` 是不是 pulldown 真的会解码的实体，成立时返回它在源码里的字节长度。
+///
+/// 只校验形状不够：`&foo;`、`&#xZZ;` 这类不合法的写法 pulldown 原样留在文本里，
+/// 若这里也认作实体，源码侧会跳过 5 个字节、文本侧只消费 1 个字符，
+/// 映射整体前移，后面的字符被吞掉、连停靠点都没有。
+///
+/// 调用方已消费掉文本里的 `&`（`decoded` 是它的位置上的字符，`text_after` 从其后
+/// 开始），所以：
+///
+/// - 数字实体能精确解码，把解码结果和 `decoded` 比对即可；
+/// - 命名实体没有表可比对，但没被解码时文本里会**原样**跟着 `name;`，拿它反证。
+fn entity_len(s: &str, decoded: char, text_after: &str) -> Option<usize> {
     if !s.starts_with('&') {
         return None;
     }
+    // 命名实体最长 31 个字符（`&CounterClockwiseContourIntegral;`）
     let end = s.find(';')?;
-    if !(2..=10).contains(&end) {
+    if !(2..=32).contains(&end) {
         return None;
     }
+    let len = end + 1;
     let body = &s[1..end];
-    let valid = body.chars().all(|c| c.is_ascii_alphanumeric() || c == '#')
-        && body
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '#');
-    valid.then_some(end + 1)
+    if let Some(num) = body.strip_prefix('#') {
+        let (radix, digits) = match num.strip_prefix(['x', 'X']) {
+            Some(hex) => (16, hex),
+            None => (10, num),
+        };
+        if digits.is_empty() || digits.len() > 8 {
+            return None;
+        }
+        let value = u32::from_str_radix(digits, radix).ok()?;
+        // 非法码点（0、代理区）pulldown 输出替换字符 U+FFFD
+        let want = char::from_u32(value)
+            .filter(|c| *c != '\0')
+            .unwrap_or('\u{FFFD}');
+        return (decoded == want).then_some(len);
+    }
+    let alphabetic = body.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
+    if !alphabetic || !body.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    // 没被解码时文本里原样留着 `name;`：此时绝不能按实体跳字节
+    if text_after.starts_with(&s[1..len]) {
+        return None;
+    }
+    Some(len)
 }
 
 #[cfg(test)]
@@ -813,6 +846,22 @@ mod tests {
         // 源码 "&amp;x"（6 字节），文本 "&x"（2 字符）
         assert_eq!(align("&amp;x", "&x", 1), 5);
         assert_eq!(align("&amp;x", "&x", 2), 6);
+        // 数字实体同理：`&#65;x` → `Ax`
+        assert_eq!(align("&#65;x", "Ax", 1), 5);
+        assert_eq!(align("&#x41;x", "Ax", 1), 6);
+    }
+
+    #[test]
+    fn align_does_not_treat_literal_ampersand_text_as_entity() {
+        // `&foo;` 与 `&#xZZ;` 都不是合法实体，pulldown 原样留在文本里。
+        // 旧实现只校验形状就把它们当实体：源码侧多跳 4 个字节、文本侧只消费
+        // 1 个字符，映射整体前移，后面的字符被吞。
+        assert_eq!(align("&foo; 尾", "&foo; 尾", 4), 4);
+        assert_eq!(align("&#xZZ; 尾", "&#xZZ; 尾", 7), 7);
+        // 同一片段里还带转义时也会走到 align，不能因为 `&` 的形状再次错位
+        assert_eq!(align(r"a\* &foo; 尾", "a* &foo; 尾", 4), 5);
+        assert_eq!(align(r"a\* &foo; 尾", "a* &foo; 尾", 9), 10);
+        assert_eq!(align(r"a\* &foo; 尾", "a* &foo; 尾", 10), 13);
     }
 
     #[test]

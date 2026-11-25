@@ -619,6 +619,32 @@ mod tests {
     }
 
     #[test]
+    fn padded_inline_code_keeps_every_char() {
+        // 两端带填充空格的内联代码：pulldown 的 text 已经去掉填充，源码区间
+        // 必须跟着收窄。否则 byte 比 text 宽，映射退回 align，`\` 被当成转义
+        // 前缀，后面的 `a` 连停靠点都没有，视图里显示成 `C:\ `。
+        let layout = first("` C:\\a `");
+        assert_eq!(
+            pairs(&layout),
+            vec![(2, 0), (3, 1), (4, 2), (5, 3), (6, 4), (8, 4)]
+        );
+        assert_eq!(layout.width(), 4);
+    }
+
+    #[test]
+    fn literal_ampersand_text_keeps_every_stop() {
+        // `&foo;` 不是合法实体，pulldown 原样保留在文本里；同一片段里还有转义时
+        // 映射会走 align，旧实现按形状认作实体、源码侧多跳 4 个字节，
+        // 后面的字符既显示不出来、也没有停靠点。
+        let src = "a\\* &foo; 尾";
+        let layout = first(src);
+        let bytes: Vec<usize> = layout.stops().iter().map(|s| s.byte).collect();
+        for byte in 0..=10 {
+            assert!(bytes.contains(&byte), "byte {byte} 缺停靠点：{bytes:?}");
+        }
+    }
+
+    #[test]
     fn empty_table_cell_has_a_stop() {
         // 空单元格在投影里整段是折叠区间。没有停靠点的话，点击和 Tab 都会吸附到
         // 隔壁格子，这一格永远进不去——插出来的新列就等于不可编辑。

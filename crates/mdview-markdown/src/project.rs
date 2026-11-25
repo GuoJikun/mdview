@@ -664,11 +664,24 @@ fn code_inner(src: &str, range: &Range<usize>) -> Range<usize> {
         .get(range.clone())
         .map(|s| s.bytes().take_while(|b| *b == b'`').count())
         .unwrap_or(0);
-    if delims > 0 && range.len() >= delims * 2 {
-        (range.start + delims)..(range.end - delims)
-    } else {
-        range.clone()
+    if delims > 0 && range.len() < delims * 2 {
+        return range.clone();
     }
+    let mut inner = (range.start + delims)..(range.end - delims);
+    // 内联代码两端的填充空格：CommonMark 在「首尾都有空格、内容又不全是空格」时
+    // 各去掉一个，pulldown 给出的 `text` 已经是去掉之后的样子。源码区间必须跟着
+    // 收，否则 `span.byte` 比 `text` 宽、映射退回 `align`，里面的 `\` 被当成转义
+    // 前缀，后面那个字符直接被吞：`` ` C:\a ` `` 会显示成 `C:\ `。
+    // 多出来的填充空格落进差集、折叠为零宽，与真正的渲染结果一致。
+    if let Some(s) = src.get(inner.clone())
+        && s.len() >= 2
+        && s.starts_with(' ')
+        && s.ends_with(' ')
+        && !s.trim().is_empty()
+    {
+        inner = (inner.start + 1)..(inner.end - 1);
+    }
+    inner
 }
 
 /// 去掉数学事件的 `$` / `$$` 定界符，只留公式源码。
