@@ -42,9 +42,12 @@
               @pointerenter.stop
               @click="run(item.action)"
             >
-              <span class="gutter">
-                <Check v-if="isChecked(item) && item.mark !== 'dot'" :size="14" :stroke-width="2.4" />
-                <span v-else-if="isChecked(item)" class="dot"></span>
+              <span
+                class="gutter"
+                :data-mark="isChecked(item) ? (item.mark ?? 'check') : null"
+              >
+                <Check class="mark-check" :size="14" :stroke-width="2.4" />
+                <span class="mark-dot"></span>
               </span>
               <span class="label">{{ item.label }}</span>
               <span v-if="item.acc" class="acc">{{ item.acc }}</span>
@@ -64,9 +67,12 @@
         @pointerenter="openSubIndex = null"
         @click="run(entry.action)"
       >
-        <span class="gutter">
-          <Check v-if="isChecked(entry) && entry.mark !== 'dot'" :size="14" :stroke-width="2.4" />
-          <span v-else-if="isChecked(entry)" class="dot"></span>
+        <span
+          class="gutter"
+          :data-mark="isChecked(entry) ? (entry.mark ?? 'check') : null"
+        >
+          <Check class="mark-check" :size="14" :stroke-width="2.4" />
+          <span class="mark-dot"></span>
         </span>
         <span class="label">{{ entry.label }}</span>
         <span v-if="entry.acc" class="acc">{{ entry.acc }}</span>
@@ -117,9 +123,10 @@ function recentEntries(): MenuEntry[] {
 
 function isChecked(entry: MenuEntry): boolean {
   if (!entry.checked) return false;
-  // 勾选态来自两处：编辑内核推上来的主题/模式，以及纯外壳的自动检查开关。
+  // 勾选态来自两处：编辑内核推上来的主题/皮肤/模式，以及纯外壳的自动检查开关。
   return !!entry.checked({
     themeMode: state.themeMode,
+    skin: state.skin,
     mode: state.mode,
     autoUpdate: update.autoUpdate,
   });
