@@ -7,7 +7,7 @@ use log::{info, warn};
 use mdview_core::Document;
 use mdview_markdown::{
     BlockFrame, BlockKind, Caret, DocumentLayout, Gravity, MarkdownParser, ParseResult, Patch,
-    Selection, SourceMap, SpanKind, block_frames, diff_frames,
+    Selection, SourceMap, SpanKind, TableGrid, block_frames, diff_frames,
 };
 
 use crate::ports::{FileStore, Fingerprint, RenderFrame};
@@ -554,6 +554,25 @@ impl AppState {
         self.apply_with_caret(span, insert, caret)
     }
 
+    /// 整块替换，光标用**新文本内**的 byte 偏移表示。
+    ///
+    /// [`Self::replace_bytes`] 把光标当旧文档的 byte 去换算；列操作会改变块内长度，
+    /// 旧映射到不了新位置（插列后光标会飘回表头）。
+    fn replace_block_text(
+        &mut self,
+        block: Range<usize>,
+        new_text: &str,
+        caret_in_new: usize,
+    ) -> Vec<Effect> {
+        let start = self.document.byte_to_char(block.start);
+        let end = self.document.byte_to_char(block.end);
+        let offset = new_text
+            .get(..caret_in_new)
+            .map(|head| head.chars().count())
+            .unwrap_or_else(|| new_text.chars().count());
+        self.apply_with_caret(start..end, new_text, Some(start + offset))
+    }
+
     /// Tab / Shift+Tab：在当前表格里跨一格。
     fn table_move_cell(&mut self, delta: i32) -> Vec<Effect> {
         let Some((id, _, row, col)) = self.caret_table_cell() else {
@@ -844,26 +863,54 @@ impl AppState {
         self.replace_table(id, block.byte.clone(), &lines, target, 0)
     }
 
-    /// 在源码某一行的第 `col` 个单元格处插入/删除一格，返回新行。
-    fn table_line_cell(line: &str, col: usize, insert: Option<&str>) -> String {
+    /// 用 `TableGrid` 记下的单元格区间取出每行原文。
+    ///
+    /// 不能按 `|` 切分源码：GFM 允许 `\|` 转义竖线，行内代码里的 `|`
+    /// （`` `a|b` ``）也不该当列边界。`TableCell::byte` 由解析器给出，只切真正的列边界。
+    fn grid_cells<'a>(src: &'a str, grid: &TableGrid) -> Vec<Vec<&'a str>> {
+        grid.rows
+            .iter()
+            .map(|row| {
+                row.cells
+                    .iter()
+                    .map(|cell| src.get(cell.byte.clone()).unwrap_or(""))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// 分隔行（`| --- | :---: |`）不是 `TableGrid` 的行：pulldown 不给它发单元格事件。
+    /// 这一行只可能由 `-`、`:`、空白和竖线组成，不存在转义竖线，按 `|` 拆是安全的。
+    fn delimiter_cells(line: &str) -> Vec<&str> {
         let mut parts: Vec<&str> = line.split('|').collect();
-        let leading = parts.first() == Some(&"");
-        let index = col + usize::from(leading);
-        match insert {
-            Some(fill) => {
-                if index <= parts.len() {
-                    parts.insert(index, fill);
-                }
-            }
-            None => {
-                // 尾部空串是结尾竖线造成的，最后一格是 parts[len-2]
-                let last = parts.len().saturating_sub(1 + usize::from(leading));
-                if col <= last && index < parts.len() {
-                    parts.remove(index);
-                }
-            }
+        if parts.first() == Some(&"") {
+            parts.remove(0);
         }
-        parts.join("|")
+        if parts.last() == Some(&"") {
+            parts.pop();
+        }
+        parts
+    }
+
+    /// 把若干单元格原文拼回 `|a|b|`，同时给出每格在新行里的起始偏移。
+    fn join_row(cells: &[&str]) -> (String, Vec<usize>) {
+        let capacity = 2 + cells.iter().map(|cell| cell.len() + 1).sum::<usize>();
+        let mut line = String::with_capacity(capacity);
+        let mut starts = Vec::with_capacity(cells.len());
+        line.push('|');
+        for cell in cells {
+            starts.push(line.len());
+            line.push_str(cell);
+            line.push('|');
+        }
+        (line, starts)
+    }
+
+    /// 单元格内的光标落点：跳过左侧填充空格；空格填满整格时退回格内最后一个字节。
+    /// 与 `TableGrid::caret_byte` 的「空单元格」规则一致。
+    fn cell_caret(cell: &str) -> usize {
+        let lead = cell.len() - cell.trim_start_matches([' ', '\t']).len();
+        lead.min(cell.len().saturating_sub(1))
     }
 
     fn table_insert_column(&mut self, after: bool) -> Vec<Effect> {
@@ -871,19 +918,60 @@ impl AppState {
             return Vec::new();
         };
         let src = self.document.text();
-        let block = &self.parsed.blocks[id];
-        let mut lines = Self::table_lines(&src, &block.byte);
-        if lines.is_empty() {
+        let raw = Self::table_lines(&src, &self.parsed.blocks[id].byte);
+        // 第 0 行表头、第 1 行分隔行
+        let Some(delimiter_line) = raw.get(1) else {
+            return Vec::new();
+        };
+        let delimiter = Self::delimiter_cells(delimiter_line);
+        let Some(grid) = self.parsed.blocks[id].table.as_ref() else {
+            return Vec::new();
+        };
+        let rows = Self::grid_cells(&src, grid);
+        let block_range = self.parsed.blocks[id].byte.clone();
+        if rows.is_empty() {
             return Vec::new();
         }
+
         let at = col + usize::from(after);
-        // 分隔行按列对齐补 `---`，其余行补两个空格
-        for (index, line) in lines.iter_mut().enumerate() {
-            let fill = if index == 1 { "---" } else { "  " };
-            *line = Self::table_line_cell(line, at, Some(fill));
+        let caret_line = Self::table_source_row(row);
+        let mut lines: Vec<String> = Vec::with_capacity(rows.len() + 1);
+        let mut caret_starts: Vec<usize> = Vec::new();
+
+        // 表头
+        let mut cells = rows[0].clone();
+        cells.insert(at.min(cells.len()), "  ");
+        let (line, starts) = Self::join_row(&cells);
+        if caret_line == 0 {
+            caret_starts = starts;
         }
-        let target_row = Self::table_source_row(row);
-        self.replace_table(id, block.byte.clone(), &lines, target_row, at)
+        lines.push(line);
+
+        // 分隔行：新列补一个 `---`，否则整张表不再是表格
+        let mut cells = delimiter;
+        cells.insert(at.min(cells.len()), " --- ");
+        lines.push(format!("|{}|", cells.join("|")));
+
+        // 数据行
+        for (index, row_cells) in rows.iter().enumerate().skip(1) {
+            let mut cells = row_cells.clone();
+            cells.insert(at.min(cells.len()), "  ");
+            let (line, starts) = Self::join_row(&cells);
+            if index + 1 == caret_line {
+                caret_starts = starts;
+            }
+            lines.push(line);
+        }
+
+        let Some(&start) = caret_starts.get(at).or_else(|| caret_starts.last()) else {
+            return Vec::new();
+        };
+        let new_text = lines.join("\n");
+        let line_start =
+            block_range.start + lines.iter().take(caret_line).map(|l| l.len() + 1).sum::<usize>();
+        // 新插入的格是两格空格，光标落在格内（空单元格的通行落点）
+        let caret = line_start - block_range.start + start + Self::cell_caret("  ");
+        self.replace_block_text(block_range, &new_text, caret)
     }
 
     fn table_delete_column(&mut self) -> Vec<Effect> {
@@ -891,31 +979,77 @@ impl AppState {
             return Vec::new();
         };
         let src = self.document.text();
-        let block = &self.parsed.blocks[id];
-        let cols = block.table.as_ref().unwrap().rows[0].cells.len();
-        if cols <= 1 {
+        let raw = Self::table_lines(&src, &self.parsed.blocks[id].byte);
+        let Some(delimiter_line) = raw.get(1) else {
+            return Vec::new();
+        };
+        let delimiter = Self::delimiter_cells(delimiter_line);
+        let Some(grid) = self.parsed.blocks[id].table.as_ref() else {
+            return Vec::new();
+        };
+        let rows = Self::grid_cells(&src, grid);
+        let block_range = self.parsed.blocks[id].byte.clone();
+        // 只剩一列时删掉就不成表了
+        if rows.first().is_none_or(|cells| cells.len() <= 1) || col >= rows[0].len() {
             return Vec::new();
         }
-        let mut lines = Self::table_lines(&src, &block.byte);
-        for line in &mut lines {
-            *line = Self::table_line_cell(line, col, None);
+
+        let caret_line = Self::table_source_row(row);
+        let mut lines: Vec<String> = Vec::with_capacity(rows.len() + 1);
+        let mut caret_starts: Vec<usize> = Vec::new();
+        let mut caret_cells: Vec<&str> = Vec::new();
+
+        // 表头
+        let mut cells = rows[0].clone();
+        cells.remove(col);
+        let (line, starts) = Self::join_row(&cells);
+        if caret_line == 0 {
+            caret_starts = starts;
+            caret_cells = cells;
         }
-        let target_col = col.saturating_sub(1);
-        let target_row = Self::table_source_row(row);
-        let _ = cols;
-        self.replace_table(id, block.byte.clone(), &lines, target_row, target_col)
+        lines.push(line);
+
+        // 分隔行
+        let mut cells = delimiter;
+        if col < cells.len() {
+            cells.remove(col);
+        }
+        lines.push(format!("|{}|", cells.join("|")));
+
+        // 数据行（个别行可能比表头短，越界就原样保留）
+        for (index, row_cells) in rows.iter().enumerate().skip(1) {
+            let mut cells = row_cells.clone();
+            if col < cells.len() {
+                cells.remove(col);
+            }
+            let (line, starts) = Self::join_row(&cells);
+            if index + 1 == caret_line {
+                caret_starts = starts;
+                caret_cells = cells;
+            }
+            lines.push(line);
+        }
+
+        let Some(&start) = caret_starts
+            .get(col.saturating_sub(1))
+            .or_else(|| caret_starts.last())
+        else {
+            return Vec::new();
+        };
+        let target = col
+            .saturating_sub(1)
+            .min(caret_cells.len().saturating_sub(1));
+        let cell = caret_cells.get(target).copied().unwrap_or("");
+        let new_text = lines.join("\n");
+        let line_start =
+            block_range.start + lines.iter().take(caret_line).map(|l| l.len() + 1).sum::<usize>();
+        let caret = line_start - block_range.start + start + Self::cell_caret(cell);
+        self.replace_block_text(block_range, &new_text, caret)
     }
 
     fn insert_text(&mut self, text: &str) -> Vec<Effect> {
         if self.composing || text.is_empty() {
             return Vec::new();
-        }
-        // 全选要整篇重写。停靠点区间不含首块的折叠标记（`# `、`- `），也不含
-        // 文末换行，按它替换会剩下半个标记——`# 标题` 全选后打字变成 `# 新`。
-        // 和 cut 一样，整篇选中时直接用文档全长。
-        if self.selects_whole_document() {
-            let len = self.document.len_chars();
-            return self.apply(0..len, text);
         }
         match self.selection_chars() {
             Some(sel) => self.apply(sel, text),
@@ -1285,6 +1419,13 @@ impl AppState {
     fn selection_chars(&self) -> Option<Range<usize>> {
         if self.selection.is_collapsed() {
             return None;
+        }
+        // 全选就是整篇。停靠点区间不含块首的折叠标记（`# `、`- `）与文末换行，
+        // 照它替换/删除会剩下半个标记——`# 标题` 全选后退格得到 `# `。
+        // 所有「有选区就替换」的入口（输入、退格、删除、回车、硬换行）共用这里，
+        // 单在某一个入口打补丁必然会漏掉其余几个。
+        if self.selects_whole_document() {
+            return Some(0..self.document.len_chars());
         }
         let byte = self.selection.byte_range(&self.layout)?;
         Some(self.document.byte_to_char(byte.start)..self.document.byte_to_char(byte.end))
@@ -1948,6 +2089,90 @@ mod tests {
         app.update(Message::SelectAll, &files);
         type_text(&mut app, &files, "新");
         assert_eq!(app.document.text(), "新");
+    }
+
+    /// 全选后不只是「输入」要整篇重写：退格、删除、回车、硬换行走的都是
+    /// 「有选区就替换」，必须共用同一套整篇语义，否则会剩下半个块首标记。
+    fn after_select_all(src: &str, message: Message) -> String {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        app.update(Message::SelectAll, &files);
+        app.update(message, &files);
+        app.document.text()
+    }
+
+    #[test]
+    fn select_all_then_backspace_clears_the_whole_document() {
+        assert_eq!(
+            after_select_all("# 标题\n\n正文\n", Message::Backspace),
+            "",
+            "退格应清空整篇，而不是留下 `# `"
+        );
+        assert_eq!(after_select_all("- 甲\n- 乙\n", Message::Backspace), "");
+    }
+
+    #[test]
+    fn select_all_then_forward_delete_clears_the_whole_document() {
+        assert_eq!(after_select_all("# 标题\n\n正文\n", Message::DeleteForward), "");
+        assert_eq!(after_select_all("- 甲\n- 乙\n", Message::DeleteForward), "");
+    }
+
+    #[test]
+    fn select_all_then_enter_replaces_the_whole_document() {
+        assert_eq!(after_select_all("# 标题\n\n正文\n", Message::Newline), "\n\n");
+        assert_eq!(after_select_all("# 标题\n\n正文\n", Message::HardBreak), "\\\n");
+    }
+
+    /// 表格单元格里的 `\|` 是转义竖线，属于同一格。按裸 `|` 切分源码会把它当列边界，
+    /// 一次插列就能把整张表拆散（旧实现：`| x\|  |y | d |`）。
+    #[test]
+    fn table_column_ops_keep_escaped_pipe_inside_one_cell() {
+        let src = "| a | b |\n| --- | --- |\n| x\\|y | d |\n";
+        let at = src.find("x\\|y").expect("单元格") + 1;
+
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        app.update(Message::Click { byte_offset: at }, &files);
+        app.update(Message::TableInsertColumn { after: true }, &files);
+        assert_eq!(
+            app.document.text(),
+            "| a |  | b |\n| --- | --- | --- |\n| x\\|y |  | d |\n"
+        );
+        // 光标落在新插入的那一格：空单元格必须能停光标，否则插出来的列没法输入
+        let cell = app.caret_table_cell().expect("光标应仍在表格里");
+        assert_eq!((cell.2, cell.3), (1, 1), "光标应停在第 1 个数据行的新列");
+
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        app.update(Message::Click { byte_offset: at }, &files);
+        app.update(Message::TableDeleteColumn, &files);
+        assert_eq!(app.document.text(), "| b |\n| --- |\n| d |\n");
+    }
+
+    /// Tab 必须能进空单元格。投影里空格的整段都是折叠区间，补停靠点之前
+    /// 光标会吸附回左边的格子，表现为「Tab 卡住、后面几列都去不了」。
+    #[test]
+    fn tab_moves_into_an_empty_table_cell() {
+        let src = "| a |  | b |\n| --- | --- | --- |\n| c | d | e |\n";
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        let a = src.find("a |").expect("表头第一格");
+        app.update(Message::Click { byte_offset: a }, &files);
+        app.update(Message::TableMoveCell { delta: 1 }, &files);
+        let cell = app.caret_table_cell().expect("光标应仍在表格里");
+        assert_eq!(cell.3, 1, "Tab 应进入空单元格");
+    }
+
+    /// 列操作按单元格区间重拼，分隔行里的 `:---:` 对齐要原样保留。
+    #[test]
+    fn table_column_ops_preserve_column_alignment() {
+        let src = "| a | b |\n| :--- | ---: |\n| c | d |\n";
+        let at = src.find("c | d").expect("数据行") + 2;
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        app.update(Message::Click { byte_offset: at }, &files);
+        app.update(Message::TableDeleteColumn, &files);
+        assert_eq!(app.document.text(), "| b |\n| ---: |\n| d |\n");
     }
 
     #[test]
