@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-style="hyperos" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mdview · 图标与界面设计规范</title>
+<link rel="stylesheet" href="design.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">mdview <em>Design</em></div>
+  <nav>
+    <a href="#appicon">应用图标</a>
+    <a href="#icons">图标系统</a>
+    <a href="#ui">界面</a>
+    <a href="#components">组件</a>
+    <a href="#tokens">设计令牌</a>
+    <a href="#mapping">落地</a>
+  </nav>
+  <div class="spacer"></div>
+  <div class="seg" data-group="style">
+    <button type="button" data-value="hyperos" class="on">HyperOS 4.0</button>
+    <button type="button" data-value="macos">macOS · Mica</button>
+  </div>
+  <div class="seg" data-group="theme">
+    <button type="button" data-value="light" class="on">浅色</button>
+    <button type="button" data-value="dark">深色</button>
+  </div>
+</header>
+
+<main class="wrap">
+
+<!-- ================= 概览 ================= -->
+<section id="overview" style="padding-top:56px">
+  <div class="sec-head">
+    <span class="idx">00</span>
+    <h2>两套视觉语言，同一个编辑器</h2>
+    <p>mdview 是 Rust 内核 + Tauri 2 + Vue 3 的 Markdown 编辑器，界面元素不多但语义密集：三种视图、一个大纲、一条状态栏、三层浮层。下面两套方案针对同一份功能结构给出不同的材质、圆角与图标语言，切换上方标签可实时对比。</p>
+  </div>
+
+  <div class="spec-row">
+    <div class="spec">
+      <div class="k">风格 A · HyperOS 4.0</div>
+      <div class="v">
+        大圆角（窗口 22 / 卡片 18）+ 强毛玻璃，侧栏与正文各成一张浮起卡片；
+        强调色走蓝→紫渐变；图标 1.85 描边、圆端点、局部 16% 填充形成双色调。
+      </div>
+    </div>
+    <div class="spec">
+      <div class="k">风格 B · macOS + Mica</div>
+      <div class="v">
+        macOS 控件尺度（窗口 12 / 控件 26px 高）+ Win11 Mica 云母底层；
+        侧栏为 vibrancy 半透明、正文直接铺在窗口上不画卡片；图标 1.5 细描边线性。
+      </div>
+    </div>
+    <div class="spec">
+      <div class="k">共同约束</div>
+      <div class="v">
+        正文排版、代码高亮、选区与光标在两侧保持一致 —— 阅读体验不随皮肤变化；
+        所有交互元素保留键盘焦点环；对比度正文 ≥ 7:1、次要文本 ≥ 4.5:1。
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 应用图标 ================= -->
+<section id="appicon">
+  <div class="sec-head">
+    <span class="idx">01</span>
+    <h2>应用图标</h2>
+    <p>构图取「Markdown 文档 + 可编辑」两层语义：一张带折角的纸，代表源码与折叠标记；一条插入光标，代表所见即所得；向下箭头点出 Markdown 的 ↓。两套方案共用构图，但底座几何、光泽与强调元素完全不同。</p>
+  </div>
+
+  <div class="appicon-row">
+    <!-- A. HyperOS -->
+    <div class="appicon-card">
+      <div class="hd"><span class="nm">HyperOS 4.0</span><span class="sub">圆角方形 · 22.6%</span></div>
+      <div class="big">
+        <svg viewBox="0 0 1024 1024" role="img" aria-label="mdview HyperOS 图标">
+          <defs>
+            <linearGradient id="hxBase" x1="0.08" y1="0" x2="0.92" y2="1">
+              <stop offset="0" stop-color="#5C7DFF"/><stop offset="0.46" stop-color="#4A62F2"/><stop offset="1" stop-color="#7B45FF"/>
+            </linearGradient>
+            <radialGradient id="hxGloss" cx="0.28" cy="0.04" r="0.86">
+              <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.34"/>
+              <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0.06"/>
+              <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="hxVignette" x1="0" y1="0.55" x2="0" y2="1">
+              <stop offset="0" stop-color="#1B1B6E" stop-opacity="0"/>
+              <stop offset="1" stop-color="#1B1B6E" stop-opacity="0.28"/>
+            </linearGradient>
+            <linearGradient id="hxPaper" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F4F6FF"/>
+            </linearGradient>
+            <linearGradient id="hxFold" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#D6DEF8"/><stop offset="1" stop-color="#C3CDF0"/>
+            </linearGradient>
+            <linearGradient id="hxTextLine" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#C9D3F0"/><stop offset="1" stop-color="#DCE3F7"/>
+            </linearGradient>
+            <filter id="hxPaperShadow" x="-28%" y="-18%" width="156%" height="152%">
+              <feDropShadow dx="0" dy="20" stdDeviation="26" flood-color="#141E5A" flood-opacity="0.30"/>
+            </filter>
+            <filter id="hxBadgeShadow" x="-40%" y="-40%" width="180%" height="180%">
+              <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#101B52" flood-opacity="0.34"/>
+            </filter>
+            <linearGradient id="hxRim" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+              <stop offset="0.42" stop-color="#FFFFFF" stop-opacity="0.10"/>
+              <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.22"/>
+            </linearGradient>
+          </defs>
+          <rect width="1024" height="1024" rx="232" fill="url(#hxBase)"/>
+          <rect width="1024" height="1024" rx="232" fill="url(#hxGloss)"/>
+          <rect width="1024" height="1024" rx="232" fill="url(#hxVignette)"/>
+          <rect x="1.5" y="1.5" width="1021" height="1021" rx="230.5" fill="none" stroke="url(#hxRim)" stroke-width="3"/>
+          <g filter="url(#hxPaperShadow)">
+            <path d="M296 200 H636 L776 340 V780 Q776 824 732 824 H296 Q252 824 252 780 V244 Q252 200 296 200 Z" fill="url(#hxPaper)"/>
+          </g>
+          <path d="M636 200 L776 340 H684 Q636 340 636 292 Z" fill="url(#hxFold)"/>
+          <path d="M636 200 L776 340" fill="none" stroke="#AEB9E0" stroke-width="3" stroke-opacity="0.55"/>
+          <rect x="330" y="420" width="336" height="30" rx="15" fill="url(#hxTextLine)"/>
+          <rect x="330" y="490" width="246" height="30" rx="15" fill="url(#hxTextLine)" opacity="0.92"/>
+          <rect x="330" y="560" width="300" height="30" rx="15" fill="url(#hxTextLine)" opacity="0.84"/>
+          <rect x="330" y="630" width="20" height="34" rx="10" fill="#3B5BFF"/>
+          <g filter="url(#hxBadgeShadow)"><circle cx="752" cy="756" r="108" fill="#FFFFFF"/></g>
+          <path d="M752 714 V798" fill="none" stroke="#3B5BFF" stroke-width="28" stroke-linecap="round"/>
+          <path d="M712 758 L752 798 L792 758" fill="none" stroke="#3B5BFF" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="sizes">
+        <div><img src="icons/app-hyperos.svg" alt="" style="width:16px;height:16px"><span>16</span></div>
+        <div><img src="icons/app-hyperos.svg" alt="" style="width:32px;height:32px"><span>32</span></div>
+        <div><img src="icons/app-hyperos.svg" alt="" style="width:48px;height:48px"><span>48</span></div>
+        <div><img src="icons/app-hyperos.svg" alt="" style="width:64px;height:64px"><span>64</span></div>
+        <div><img src="icons/app-hyperos.svg" alt="" style="width:96px;height:96px"><span>96</span></div>
+      </div>
+      <div class="desc">
+        <b>构成：</b>蓝紫对角渐变底座 + 顶部径向光泽 + 底部暗角；白纸右上折角对应 Markdown 的折叠标记；右下白色圆形角标内嵌向下箭头，是整套图标唯一的「圆形」元素，用来在启动器网格中拉开记忆点。
+      </div>
+    </div>
+
+    <!-- B. macOS -->
+    <div class="appicon-card">
+      <div class="hd"><span class="nm">macOS · Mica</span><span class="sub">超椭圆 · G2 连续</span></div>
+      <div class="big">
+        <svg viewBox="0 0 1024 1024" role="img" aria-label="mdview macOS 图标">
+          <defs>
+            <linearGradient id="mcBase" x1="0.12" y1="0" x2="0.88" y2="1">
+              <stop offset="0" stop-color="#4A86FF"/><stop offset="0.38" stop-color="#3B6FF5"/>
+              <stop offset="0.72" stop-color="#5A5BF0"/><stop offset="1" stop-color="#7B4EF0"/>
+            </linearGradient>
+            <linearGradient id="mcGlass" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.30"/>
+              <stop offset="0.30" stop-color="#FFFFFF" stop-opacity="0.09"/>
+              <stop offset="0.62" stop-color="#FFFFFF" stop-opacity="0"/>
+            </linearGradient>
+            <linearGradient id="mcReflect" x1="0" y1="0.82" x2="0" y2="1">
+              <stop offset="0" stop-color="#BBD0FF" stop-opacity="0"/>
+              <stop offset="1" stop-color="#BBD0FF" stop-opacity="0.16"/>
+            </linearGradient>
+            <linearGradient id="mcPaper" x1="0.2" y1="0" x2="0.8" y2="1">
+              <stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F2F5FC"/>
+            </linearGradient>
+            <linearGradient id="mcFold" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#E6ECFA"/><stop offset="1" stop-color="#CFD9F0"/>
+            </linearGradient>
+            <linearGradient id="mcRim" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.62"/>
+              <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.12"/>
+              <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.28"/>
+            </linearGradient>
+            <filter id="mcIconShadow" x="-25%" y="-20%" width="150%" height="150%">
+              <feDropShadow dx="0" dy="16" stdDeviation="26" flood-color="#0A1430" flood-opacity="0.30"/>
+            </filter>
+            <filter id="mcPaperShadow" x="-30%" y="-20%" width="160%" height="155%">
+              <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#152A5C" flood-opacity="0.26"/>
+            </filter>
+          </defs>
+          <g filter="url(#mcIconShadow)">
+            <path d="M512 0 L784 0 C908 0 1024 116 1024 240 L1024 784 C1024 908 908 1024 784 1024 L240 1024 C116 1024 0 908 0 784 L0 240 C0 116 116 0 240 0 Z" fill="url(#mcBase)"/>
+          </g>
+          <path d="M512 0 L784 0 C908 0 1024 116 1024 240 L1024 784 C1024 908 908 1024 784 1024 L240 1024 C116 1024 0 908 0 784 L0 240 C0 116 116 0 240 0 Z" fill="url(#mcGlass)"/>
+          <path d="M512 0 L784 0 C908 0 1024 116 1024 240 L1024 784 C1024 908 908 1024 784 1024 L240 1024 C116 1024 0 908 0 784 L0 240 C0 116 116 0 240 0 Z" fill="url(#mcReflect)"/>
+          <path d="M512 0 L784 0 C908 0 1024 116 1024 240 L1024 784 C1024 908 908 1024 784 1024 L240 1024 C116 1024 0 908 0 784 L0 240 C0 116 116 0 240 0 Z" fill="none" stroke="url(#mcRim)" stroke-width="3"/>
+          <g filter="url(#mcPaperShadow)">
+            <path d="M304 180 H620 L784 344 V784 Q784 836 732 836 H304 Q252 836 252 784 V232 Q252 180 304 180 Z" fill="url(#mcPaper)"/>
+          </g>
+          <path d="M620 180 L784 344 H672 Q620 344 620 292 Z" fill="url(#mcFold)"/>
+          <path d="M620 180 L784 344" fill="none" stroke="#B4C1DE" stroke-width="2.5" stroke-opacity="0.7"/>
+          <rect x="334" y="404" width="330" height="26" rx="13" fill="#CBD5E8"/>
+          <rect x="318" y="464" width="392" height="52" rx="10" fill="#E6EFFF"/>
+          <rect x="334" y="477" width="200" height="26" rx="13" fill="#A9C2EE"/>
+          <rect x="334" y="546" width="246" height="26" rx="13" fill="#CBD5E8"/>
+          <rect x="334" y="612" width="286" height="26" rx="13" fill="#CBD5E8" opacity="0.9"/>
+          <rect x="336" y="602" width="16" height="46" rx="8" fill="#0A84FF"/>
+        </svg>
+      </div>
+      <div class="sizes">
+        <div><img src="icons/app-macos.svg" alt="" style="width:16px;height:16px"><span>16</span></div>
+        <div><img src="icons/app-macos.svg" alt="" style="width:32px;height:32px"><span>32</span></div>
+        <div><img src="icons/app-macos.svg" alt="" style="width:48px;height:48px"><span>48</span></div>
+        <div><img src="icons/app-macos.svg" alt="" style="width:64px;height:64px"><span>64</span></div>
+        <div><img src="icons/app-macos.svg" alt="" style="width:96px;height:96px"><span>96</span></div>
+      </div>
+      <div class="desc">
+        <b>构成：</b>超椭圆底座（G2 连续角，比圆角矩形更饱满）+ 顶部玻璃光泽 + 底部环境反射 + 3px 内描边收边；纸张留白更大，第二行做成选区高亮并压一枚 macOS 蓝光标，暗示编辑态。整枚图标只留两层语义（纸 / 光标），比 HyperOS 版少一个元素 —— 这是 Apple 图标常见的克制处理。
+      </div>
+    </div>
+  </div>
+
+  <h3 class="sub">构图层次 <span class="tag">按绘制顺序</span></h3>
+  <div class="anatomy">
+    <figure>
+      <svg viewBox="0 0 1024 1024" aria-hidden="true">
+        <rect width="1024" height="1024" rx="232" fill="url(#hxBase)"/>
+        <rect width="1024" height="1024" rx="232" fill="url(#hxGloss)"/>
+        <rect width="1024" height="1024" rx="232" fill="url(#hxVignette)"/>
+      </svg>
+      <figcaption><b>① 底色</b>对角渐变 + 顶部光泽 + 底部暗角，三层叠出体积</figcaption>
+    </figure>
+    <figure>
+      <svg viewBox="0 0 1024 1024" aria-hidden="true">
+        <rect width="1024" height="1024" rx="232" fill="#4A62F2"/>
+        <path d="M296 200 H636 L776 340 V780 Q776 824 732 824 H296 Q252 824 252 780 V244 Q252 200 296 200 Z" fill="#FFFFFF"/>
+        <path d="M636 200 L776 340 H684 Q636 340 636 292 Z" fill="#C3CDF0"/>
+      </svg>
+      <figcaption><b>② 纸张</b>右上折角，纸面占底座约 31% 面积</figcaption>
+    </figure>
+    <figure>
+      <svg viewBox="0 0 1024 1024" aria-hidden="true">
+        <rect width="1024" height="1024" rx="232" fill="#4A62F2"/>
+        <path d="M296 200 H636 L776 340 V780 Q776 824 732 824 H296 Q252 824 252 780 V244 Q252 200 296 200 Z" fill="#FFFFFF"/>
+        <rect x="330" y="420" width="336" height="30" rx="15" fill="#C9D3F0"/>
+        <rect x="330" y="490" width="246" height="30" rx="15" fill="#C9D3F0"/>
+        <rect x="330" y="560" width="300" height="30" rx="15" fill="#C9D3F0"/>
+        <rect x="330" y="630" width="20" height="34" rx="10" fill="#3B5BFF"/>
+      </svg>
+      <figcaption><b>③ 内容</b>行宽 246–336，不等长才有文本节奏</figcaption>
+    </figure>
+    <figure>
+      <svg viewBox="0 0 1024 1024" aria-hidden="true">
+        <rect width="1024" height="1024" rx="232" fill="#4A62F2"/>
+        <path d="M296 200 H636 L776 340 V780 Q776 824 732 824 H296 Q252 824 252 780 V244 Q252 200 296 200 Z" fill="#FFFFFF"/>
+        <circle cx="752" cy="756" r="108" fill="#FFFFFF"/>
+        <path d="M752 714 V798" fill="none" stroke="#3B5BFF" stroke-width="28" stroke-linecap="round"/>
+        <path d="M712 758 L752 798 L792 758" fill="none" stroke="#3B5BFF" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <figcaption><b>④ 角标</b>白圆 r=108，越出纸角形成第三层</figcaption>
+    </figure>
+  </div>
+
+  <div class="note">
+    <b>小尺寸规则：</b>≤ 32px 时移除三条文本行，只保留纸张与箭头角标；≤ 16px 时折角也省略，简化为「白纸 + 单箭头」。当前两版 SVG 在 16px 下仍可辨认轮廓，但箭头笔画会糊成一团 —— 如需发布，建议另出 16 / 32px 的简化变体，而不是等比缩放。
+  </div>
+</section>
+
+<!-- ================= 图标系统 ================= -->
+<section id="icons">
+  <div class="sec-head">
+    <span class="idx">02</span>
+    <h2>功能图标系统</h2>
+    <p>图标清单严格对应 mdview 的实际功能入口，共 26 枚：文件操作 4、查找替换 4、三视图切换 3、主题 3、表格行列 5、内容元素 4、更新与关于 2、窗口与导航 1。两套方案不是同一批路径换线宽 —— 三视图、大纲、阅读、源码等 8 枚语义核心图标重新构造了形体，其余基础形保持同族以便长期维护。</p>
+  </div>
+
+  <!-- A 套路径 -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="hxi-new" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="5"/><path d="M12 8.5v7M8.5 12h7"/></symbol>
+    <symbol id="hxi-open" viewBox="0 0 24 24"><path d="M3.5 8.5V7a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v1"/><path d="M3.5 9.5h17l-1.7 8.3a2 2 0 0 1-2 1.6H7.2a2 2 0 0 1-2-1.6L3.5 9.5Z"/></symbol>
+    <symbol id="hxi-recent" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.6V12l3.1 1.9"/></symbol>
+    <symbol id="hxi-save" viewBox="0 0 24 24"><path d="M12 3.5v9.5"/><path d="m8.2 9.2 3.8 3.8 3.8-3.8"/><path d="M4.5 15.5v3a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3"/></symbol>
+    <symbol id="hxi-find" viewBox="0 0 24 24"><circle cx="10.6" cy="10.6" r="6.6"/><path d="m20.4 20.4-4.9-4.9"/></symbol>
+    <symbol id="hxi-replace" viewBox="0 0 24 24"><path d="M4.5 8.2h12.8l-3.2-3.2"/><path d="M19.5 15.8H6.7l3.2 3.2"/></symbol>
+    <symbol id="hxi-up" viewBox="0 0 24 24"><path d="M12 19.5V5"/><path d="m5.8 11.2 6.2-6.2 6.2 6.2"/></symbol>
+    <symbol id="hxi-down" viewBox="0 0 24 24"><path d="M12 4.5V19"/><path d="m5.8 12.8 6.2 6.2 6.2-6.2"/></symbol>
+    <symbol id="hxi-close" viewBox="0 0 24 24"><path d="M6.2 6.2 17.8 17.8"/><path d="M17.8 6.2 6.2 17.8"/></symbol>
+    <symbol id="hxi-wys" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="5"/><path d="M8 8.8h8M8 12.2h5.4"/><path d="M15.8 11.4v5.4" stroke="#3482ff" stroke-width="2.4"/></symbol>
+    <symbol id="hxi-read" viewBox="0 0 24 24"><path d="M12 6.4C10.4 5.3 8.4 4.9 5 4.9v13.2c3.4 0 5.4.4 7 1.5 1.6-1.1 3.6-1.5 7-1.5V4.9c-3.4 0-5.4-.4-7-1.5Z"/><path d="M12 6.4v13.2"/><path d="M7.6 9.6h2M7.6 12.6h2"/></symbol>
+    <symbol id="hxi-source" viewBox="0 0 24 24"><path d="m8.6 8.6-4 3.4 4 3.4"/><path d="m15.4 8.6 4 3.4-4 3.4"/><path d="m13.4 6.6-2.8 10.8" stroke="#3482ff" stroke-width="2.1"/></symbol>
+    <symbol id="hxi-outline" viewBox="0 0 24 24"><path d="M4 6.2h5"/><path d="M7.5 12h7"/><path d="M11 17.8h9"/></symbol>
+    <symbol id="hxi-light" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.1"/><path d="M12 2.6v2.1M12 19.3v2.1M2.6 12h2.1M19.3 12h2.1M5.4 5.4l1.5 1.5M17.1 17.1l1.5 1.5M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5"/><circle cx="12" cy="12" r="1.7" fill="#3482ff" stroke="none"/></symbol>
+    <symbol id="hxi-dark" viewBox="0 0 24 24"><path d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8Z"/><circle cx="16.6" cy="7.4" r="1.1" fill="#3482ff" stroke="none"/></symbol>
+    <symbol id="hxi-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M12 3.6v16.8"/><path fill="#3482ff" fill-opacity=".24" stroke="none" d="M12 3.6a8.4 8.4 0 0 1 0 16.8Z"/></symbol>
+    <symbol id="hxi-table" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 4.5v15M14.5 4.5v15"/></symbol>
+    <symbol id="hxi-row-add" viewBox="0 0 24 24"><rect x="3" y="4.5" width="12.5" height="12.5" rx="3.5"/><path d="M3 9h12.5"/><path d="M18.6 13.8v6.4M15.4 17h6.4"/></symbol>
+    <symbol id="hxi-row-del" viewBox="0 0 24 24"><rect x="3" y="4.5" width="12.5" height="12.5" rx="3.5"/><path d="M3 9h12.5"/><path d="M15.4 17h6.4"/></symbol>
+    <symbol id="hxi-col-add" viewBox="0 0 24 24"><rect x="3" y="4.5" width="12.5" height="12.5" rx="3.5"/><path d="M7.5 4.5v12.5"/><path d="M18.6 13.8v6.4M15.4 17h6.4"/></symbol>
+    <symbol id="hxi-col-del" viewBox="0 0 24 24"><rect x="3" y="4.5" width="12.5" height="12.5" rx="3.5"/><path d="M7.5 4.5v12.5"/><path d="M15.4 17h6.4"/></symbol>
+    <symbol id="hxi-link" viewBox="0 0 24 24"><path d="M10.6 13.4a3.6 3.6 0 0 0 5.1 0l2.4-2.4a3.6 3.6 0 0 0-5.1-5.1l-1.2 1.2"/><path d="M13.4 10.6a3.6 3.6 0 0 0-5.1 0l-2.4 2.4a3.6 3.6 0 0 0 5.1 5.1l1.2-1.2"/></symbol>
+    <symbol id="hxi-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><circle cx="8.6" cy="9.4" r="1.5"/><path d="m4.6 17 4.6-4.6 3.2 3.2 2.6-2.6 4.4 4.4"/></symbol>
+    <symbol id="hxi-task" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="5"/><path d="m8.2 12.2 2.8 2.8 5.4-5.6"/></symbol>
+    <symbol id="hxi-update" viewBox="0 0 24 24"><path d="M7 17.6a4 4 0 0 1-.4-8A5.5 5.5 0 0 1 17.6 10a3.8 3.8 0 0 1 .4 7.6"/><path d="M12 10.6v6.6" stroke="#3482ff" stroke-width="2.2"/><path d="m9.5 14.7 2.5 2.5 2.5-2.5" stroke="#3482ff" stroke-width="2.2"/></symbol>
+    <symbol id="hxi-about" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M12 11.2v5.4"/><circle cx="12" cy="7.9" r="1" fill="currentColor" stroke="none"/></symbol>
+  </svg>
+
+  <!-- B 套路径 -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="mci-new" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M12 8.6v6.8M8.6 12h6.8"/></symbol>
+    <symbol id="mci-open" viewBox="0 0 24 24"><path d="M3.5 8.6V6.8A1.8 1.8 0 0 1 5.3 5h3.9l1.9 1.9h7.6A1.8 1.8 0 0 1 20.5 8.6"/><path d="M3.5 9.4h17l-1.6 8.2a1.8 1.8 0 0 1-1.8 1.4H6.9a1.8 1.8 0 0 1-1.8-1.4L3.5 9.4Z"/></symbol>
+    <symbol id="mci-recent" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7.8V12l2.9 1.8"/></symbol>
+    <symbol id="mci-save" viewBox="0 0 24 24"><path d="M12 4v9.2"/><path d="m8.6 9.8 3.4 3.4 3.4-3.4"/><path d="M5 15.6v2.6a1.8 1.8 0 0 0 1.8 1.8h10.4a1.8 1.8 0 0 0 1.8-1.8v-2.6"/></symbol>
+    <symbol id="mci-find" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.2"/><path d="m19.5 19.5-4.4-4.4"/></symbol>
+    <symbol id="mci-replace" viewBox="0 0 24 24"><path d="M5 8.4h11.6l-2.8-2.8"/><path d="M19 15.6H7.4l2.8 2.8"/></symbol>
+    <symbol id="mci-up" viewBox="0 0 24 24"><path d="M12 19V5.4"/><path d="m6.4 11 5.6-5.6 5.6 5.6"/></symbol>
+    <symbol id="mci-down" viewBox="0 0 24 24"><path d="M12 5v13.6"/><path d="m6.4 13 5.6 5.6 5.6-5.6"/></symbol>
+    <symbol id="mci-close" viewBox="0 0 24 24"><path d="m6.6 6.6 10.8 10.8"/><path d="M17.4 6.6 6.6 17.4"/></symbol>
+    <symbol id="mci-wys" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M8 8.8h8M8 12.1h8M8 15.4h4.6"/></symbol>
+    <symbol id="mci-read" viewBox="0 0 24 24"><path d="M12 6.6C10.5 5.6 8.5 5.2 5.2 5.2V17.9C8.5 17.9 10.5 18.3 12 19.3C13.5 18.3 15.5 17.9 18.8 17.9V5.2C15.5 5.2 13.5 5.6 12 6.6Z"/><path d="M12 6.6V19.3"/><path d="M7.6 9.6H9.4M7.6 12.6H9.4"/></symbol>
+    <symbol id="mci-source" viewBox="0 0 24 24"><path d="m8.8 8.8-3.6 3.2 3.6 3.2"/><path d="m15.2 8.8 3.6 3.2-3.6 3.2"/></symbol>
+    <symbol id="mci-outline" viewBox="0 0 24 24"><path d="M4 6.4h5.2"/><path d="M4 12h9.6"/><path d="M4 17.6h14.4"/></symbol>
+    <symbol id="mci-light" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.8"/><path d="M12 3v1.8M12 19.2V21M3 12h1.8M19.2 12H21M5.6 5.6l1.3 1.3M17.1 17.1l1.3 1.3M18.4 5.6l-1.3 1.3M6.9 17.1l-1.3 1.3"/></symbol>
+    <symbol id="mci-dark" viewBox="0 0 24 24"><path d="M19.8 14.4A8 8 0 0 1 9.6 4.2a8 8 0 1 0 10.2 10.2Z"/></symbol>
+    <symbol id="mci-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4v16"/><path d="M12 4a8 8 0 0 1 0 16Z" fill="#007aff" fill-opacity=".14" stroke="none"/></symbol>
+    <symbol id="mci-table" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 4.5v15M14.5 4.5v15"/></symbol>
+    <symbol id="mci-row-add" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="11.5" height="12" rx="2.5"/><path d="M3.5 8.5h11.5M3.5 12.5h11.5"/><path d="M18.5 14v6.4M15.3 17.2h6.4"/></symbol>
+    <symbol id="mci-row-del" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="11.5" height="12" rx="2.5"/><path d="M3.5 8.5h11.5M3.5 12.5h11.5"/><path d="M15.3 17.2h6.4"/></symbol>
+    <symbol id="mci-col-add" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="11.5" height="12" rx="2.5"/><path d="M7.5 4.5v12M11.5 4.5v12"/><path d="M18.5 14v6.4M15.3 17.2h6.4"/></symbol>
+    <symbol id="mci-col-del" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="11.5" height="12" rx="2.5"/><path d="M7.5 4.5v12M11.5 4.5v12"/><path d="M15.3 17.2h6.4"/></symbol>
+    <symbol id="mci-link" viewBox="0 0 24 24"><path d="M10.7 13.3a3.4 3.4 0 0 0 4.8 0l2.3-2.3a3.4 3.4 0 0 0-4.8-4.8l-1.1 1.1"/><path d="M13.3 10.7a3.4 3.4 0 0 0-4.8 0l-2.3 2.3a3.4 3.4 0 0 0 4.8 4.8l1.1-1.1"/></symbol>
+    <symbol id="mci-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="8.6" cy="9.4" r="1.4"/><path d="m4.6 17 4.6-4.6 3.2 3.2 2.6-2.6 4.4 4.4"/></symbol>
+    <symbol id="mci-task" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="m7.8 12 3 3 5.6-5.8"/></symbol>
+    <symbol id="mci-update" viewBox="0 0 24 24"><path d="M7 17.6a4 4 0 0 1-.4-8A5.5 5.5 0 0 1 17.6 10a3.8 3.8 0 0 1 .4 7.6"/><path d="M12 11v6.2"/><path d="m9.7 14.9 2.3 2.3 2.3-2.3"/></symbol>
+    <symbol id="mci-about" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 11.2v5.2"/><circle cx="12" cy="8" r=".9" fill="currentColor" stroke="none"/></symbol>
+  </svg>
+
+  <h3 class="sub">风格 A · HyperOS 4.0 <span class="tag">1.85 描边 · 圆端点 · 16% 填充双色调</span></h3>
+  <div class="icon-grid icons-a">
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-new"/></svg><span class="nm">新建窗口</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-open"/></svg><span class="nm">打开</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-recent"/></svg><span class="nm">最近打开</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-save"/></svg><span class="nm">保存</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-find"/></svg><span class="nm">查找</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-replace"/></svg><span class="nm">替换</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-up"/></svg><span class="nm">上一个</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-down"/></svg><span class="nm">下一个</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-close"/></svg><span class="nm">关闭</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-wys"/></svg><span class="nm">所见即所得</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-read"/></svg><span class="nm">阅读</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-source"/></svg><span class="nm">源码</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-outline"/></svg><span class="nm">大纲</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-light"/></svg><span class="nm">浅色</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-dark"/></svg><span class="nm">深色</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-auto"/></svg><span class="nm">跟随系统</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-table"/></svg><span class="nm">表格</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-row-add"/></svg><span class="nm">插入行</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-row-del"/></svg><span class="nm">删除行</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-col-add"/></svg><span class="nm">插入列</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-col-del"/></svg><span class="nm">删除列</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-link"/></svg><span class="nm">链接</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-image"/></svg><span class="nm">图片</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-task"/></svg><span class="nm">任务项</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-update"/></svg><span class="nm">检查更新</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#hxi-about"/></svg><span class="nm">关于</span></div>
+  </div>
+
+  <h3 class="sub">风格 B · macOS <span class="tag">1.5 描边 · 纯线性 · 统一视觉重量</span></h3>
+  <div class="icon-grid icons-b">
+    <div class="icon-cell"><svg class="ic"><use href="#mci-new"/></svg><span class="nm">新建窗口</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-open"/></svg><span class="nm">打开</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-recent"/></svg><span class="nm">最近打开</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-save"/></svg><span class="nm">保存</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-find"/></svg><span class="nm">查找</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-replace"/></svg><span class="nm">替换</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-up"/></svg><span class="nm">上一个</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-down"/></svg><span class="nm">下一个</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-close"/></svg><span class="nm">关闭</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-wys"/></svg><span class="nm">所见即所得</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-read"/></svg><span class="nm">阅读</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-source"/></svg><span class="nm">源码</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-outline"/></svg><span class="nm">大纲</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-light"/></svg><span class="nm">浅色</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-dark"/></svg><span class="nm">深色</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-auto"/></svg><span class="nm">跟随系统</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-table"/></svg><span class="nm">表格</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-row-add"/></svg><span class="nm">插入行</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-row-del"/></svg><span class="nm">删除行</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-col-add"/></svg><span class="nm">插入列</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-col-del"/></svg><span class="nm">删除列</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-link"/></svg><span class="nm">链接</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-image"/></svg><span class="nm">图片</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-task"/></svg><span class="nm">任务项</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-update"/></svg><span class="nm">检查更新</span></div>
+    <div class="icon-cell"><svg class="ic"><use href="#mci-about"/></svg><span class="nm">关于</span></div>
+  </div>
+
+  <div class="note">
+    <b>语义差异示例：</b>「源码视图」A 套是 <code>&lt; / &gt;</code> 加一条斜杠，强调代码的密度；B 套只留一对括号，去掉斜杠 —— macOS 在这类抽象语义上更倾向少一个元素。「大纲」A 套三条线起点逐级右移（阶梯感），B 套起点统一、长度递增（列表感）。这类差异不影响识别，但决定了两套图标放在一起时的气质区别。
+  </div>
+</section>
+
+<!-- ================= 界面 ================= -->
+<section id="ui">
+  <div class="sec-head">
+    <span class="idx">03</span>
+    <h2>界面还原</h2>
+    <p>按 mdview 的真实布局 1:1 还原：34px 自绘标题栏 + 232px 大纲侧栏 + 780px 正文栏 + 状态栏。两套风格的差别集中在<strong>分层方式</strong>：HyperOS 把侧栏与正文各做一张浮起卡片，边界靠圆角与投影；macOS + Mica 让侧栏与正文贴住窗口边缘，边界靠 1px 分隔线与材质明度差。</p>
+  </div>
+
+  <div class="stage">
+    <div class="win">
+      <!-- 标题栏 -->
+      <div class="tb">
+        <div class="tb-l">
+          <div class="lights"><i></i><i></i><i></i></div>
+          <span class="tb-logo">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <defs>
+                <linearGradient id="lgBar" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#5C7DFF"/><stop offset="1" stop-color="#7B45FF"/>
+                </linearGradient>
+              </defs>
+              <rect width="24" height="24" rx="6.5" fill="url(#lgBar)"/>
+              <path d="M7 5.5h7.2L18 9.3V18a.6.6 0 0 1-.6.6H7a.6.6 0 0 1-.6-.6V6.1A.6.6 0 0 1 7 5.5Z" fill="#fff"/>
+              <path d="M12 10.6v4.6" stroke="#3B5BFF" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+              <path d="m10.2 13.4 1.8 1.8 1.8-1.8" stroke="#3B5BFF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </svg>
+          </span>
+          <nav class="tb-menu">
+            <button type="button">文件</button>
+            <button type="button">编辑</button>
+            <button type="button" class="open">视图</button>
+            <button type="button">帮助</button>
+          </nav>
+        </div>
+        <div class="tb-c"><span class="tb-title">PLAN.md</span></div>
+        <div class="tb-r">
+          <button class="tb-ctl" type="button" aria-label="最小化">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 12h14"/></svg>
+          </button>
+          <button class="tb-ctl" type="button" aria-label="最大化">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5.5" y="5.5" width="13" height="13" rx="2"/></svg>
+          </button>
+          <button class="tb-ctl close" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 6 18 18M18 6 6 18"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 主体 -->
+      <div class="win-body">
+        <aside class="side">
+          <div class="side-h">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h5M7.5 12h7M11 18h9"/></svg>
+            大纲
+          </div>
+          <a class="lv1 on">mdview</a>
+          <a class="lv2">投影模型</a>
+          <a class="lv3">停靠点表</a>
+          <a class="lv3">折叠标记</a>
+          <a class="lv2">渲染管线</a>
+          <a class="lv2">性能预算</a>
+          <a class="lv2">文件安全</a>
+          <a class="lv3">原子写入</a>
+          <a class="lv2">多窗口</a>
+          <a class="lv2">外壳与主题</a>
+        </aside>
+
+        <div class="doc">
+          <div class="doc-inner">
+            <h1>mdview</h1>
+            <p class="meta">Rust 内核 · 源码即视图 · v0.3.0</p>
+            <p>Markdown 编辑器常见的问题是 round-trip：富文本模型重排一次源码，表格对齐与定界符风格就丢了。mdview 改成了字节区间替换 —— <strong>视图只是源码的投影</strong>。</p>
+
+            <h2>投影模型</h2>
+            <ul>
+              <li>三种视图共用同一份停靠点表</li>
+              <li>折叠标记在光标离开时收起，进入时展开</li>
+            </ul>
+
+            <h2>渲染管线</h2>
+            <div class="code"><span class="lang">rust</span><span class="tk-k">pub</span> <span class="tk-k">fn</span> <span class="tk-f">project</span>(src: &amp;<span class="tk-t">str</span>) -&gt; <span class="tk-t">Vec</span>&lt;<span class="tk-t">Block</span>&gt; {
+    <span class="tk-k">let</span> events = <span class="tk-f">parser::parse</span>(src);
+    events.<span class="tk-f">into_iter</span>().<span class="tk-f">map</span>(<span class="tk-t">Block</span>::from_event).<span class="tk-f">collect</span>()
+}</div>
+
+            <h2>性能预算</h2>
+            <table>
+              <thead><tr><th>场景</th><th>目标</th><th>实测</th></tr></thead>
+              <tbody>
+                <tr><td>打开 1 MB 文档</td><td>&lt; 80 ms</td><td>62 ms</td></tr>
+                <tr><td>输入单字符</td><td>&lt; 4 ms</td><td>1.8 ms</td></tr>
+                
+              </tbody>
+            </table>
+
+            <blockquote>视图不重排源码，所以撤销栈里只有字节区间 —— 这是所有行为一致性的来源。</blockquote>
+
+            <ul>
+              <li class="task done"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg></span><span>IME 候选窗按像素跟随光标</span></li>
+              <li class="task"><span class="box"></span><span>表格 Tab 跨格与列表缩进共用一套键位</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- 状态栏 -->
+      <div class="bar">
+        <span>块 <b>24/48</b></span>
+        <span class="sep-dot"></span>
+        <span>字数 <b>1,284</b></span>
+        <span class="sep-dot"></span>
+        <span>停靠点 <b>3,120</b></span>
+        <span class="sep-dot"></span>
+        <span>列 <b>18</b></span>
+        <span class="sep-dot"></span>
+        <span>r<b>7</b></span>
+        <span class="grow"></span>
+        <span class="hint">Ctrl+S 保存 · Ctrl+F 查找 · Tab 跨格</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>关键差异：</b>切换上方风格标签后注意三处 —— ① 侧栏与正文之间：A 套是 10px 间隙 + 两张卡片各自的投影，B 套是一条 1px 分隔线；② 状态栏：A 套是悬浮胶囊（左右各留 10px），B 套是贴底全宽细条；③ 标题栏：A 套右侧是自绘窗口按钮，B 套左侧是红黄绿交通灯、不显示菜单（macOS 走系统菜单栏）。
+  </div>
+</section>
+
+<!-- ================= 组件 ================= -->
+<section id="components">
+  <div class="sec-head">
+    <span class="idx">04</span>
+    <h2>组件细节</h2>
+    <p>mdview 的浮层只有四类，但每类都承载高频操作，尺寸与间距必须稳定。以下组件跟随上方风格与主题切换，可直接对照两套方案的控件高度、圆角与描边差异。</p>
+  </div>
+
+  <div class="comp-grid">
+    <!-- 菜单 -->
+    <div class="comp" data-label="View Menu · 视图菜单">
+      <div class="pop menu">
+        <button class="mi" type="button" aria-checked="true">
+          <span class="gut"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg></span>
+          <span class="lbl">大纲侧栏</span>
+          <span class="acc">Ctrl+Shift+O</span>
+        </button>
+        <hr>
+        <button class="mi" type="button" aria-checked="true">
+          <span class="gut"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg></span>
+          <span class="lbl">所见即所得</span>
+        </button>
+        <button class="mi" type="button" aria-checked="false">
+          <span class="gut"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg></span>
+          <span class="lbl">阅读</span>
+          <span class="acc">Ctrl+Shift+R</span>
+        </button>
+        <button class="mi" type="button" aria-checked="false">
+          <span class="gut"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg></span>
+          <span class="lbl">源码</span>
+          <span class="acc">Ctrl+Shift+M</span>
+        </button>
+        <hr>
+        <button class="mi focus" type="button" aria-checked="false">
+          <span class="gut"></span>
+          <span class="lbl">外观</span>
+          <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></span>
+        </button>
+        <button class="mi" type="button" aria-checked="false">
+          <span class="gut"></span>
+          <span class="lbl">重新载入</span>
+          <span class="acc">Ctrl+R</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 查找栏 -->
+    <div class="comp" data-label="Find &amp; Replace · 查找替换">
+      <div class="pop findbar">
+        <div class="row">
+          <button class="expand open" type="button" aria-label="收起替换">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
+          </button>
+          <div class="field">
+            <input type="text" value="投影" readonly aria-label="查找">
+            <button class="tg on" type="button" title="区分大小写">Aa</button>
+            <button class="tg" type="button" title="全词匹配">ab</button>
+            <button class="tg" type="button" title="正则">.*</button>
+          </div>
+          <span class="cnt">3/12</span>
+          <button class="ib" type="button" aria-label="上一个"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6.5 6.5L12 5l6.5 6.5"/></svg></button>
+          <button class="ib" type="button" aria-label="下一个"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14m-6.5-6.5L12 19l6.5-6.5"/></svg></button>
+          <button class="ib" type="button" aria-label="更多"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button>
+          <button class="ib" type="button" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6 18 18M18 6 6 18"/></svg></button>
+        </div>
+        <div class="row rep">
+          <div class="field">
+            <input type="text" placeholder="替换" aria-label="替换">
+            <button class="tg" type="button" title="保留大小写">AB</button>
+          </div>
+          <button class="ib" type="button" aria-label="替换"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7 3 3 3-3M6 10V5a2 2 0 0 1 2-2h2"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></button>
+          <button class="ib" type="button" aria-label="全部替换"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1M21 4a1 1 0 0 0-1-1"/><path d="m3 7 3 3 3-3M6 10V5a2 2 0 0 1 2-2h2"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 对话框 -->
+    <div class="comp" data-label="Update Dialog · 更新">
+      <div class="pop dialog">
+        <h4>发现新版本 0.3.0</h4>
+        <p>增量解析上线：1 MB 文档的全文重解析从 240 ms 降到 96 ms，同时修复 3 项表格对齐问题。</p>
+        <div class="kv"><span>当前版本</span><b>0.2.7</b></div>
+        <div class="kv"><span>下载大小</span><b>12.4 MB</b></div>
+        <div class="acts">
+          <button class="btn" type="button">稍后</button>
+          <button class="btn primary" type="button">下载并安装</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 链接编辑 -->
+    <div class="comp" data-label="Link Editor · 行内编辑">
+      <div class="pop linkedit">
+        <div class="le-row"><label>地址</label><input type="text" value="docs/plan.md#投影模型" readonly aria-label="链接地址"></div>
+        <div class="le-row"><label>文字</label><input type="text" value="投影模型" readonly aria-label="链接文字"></div>
+        <div class="le-acts">
+          <button class="btn" type="button">打开</button>
+          <button class="btn danger-ghost" type="button">删除</button>
+          <button class="btn" type="button">取消</button>
+          <button class="btn primary" type="button">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 状态栏表格态 -->
+    <div class="comp" data-label="Status Bar · 表格内">
+      <div class="bar bar-demo">
+        <span>块 <b>31/48</b></span>
+        <span class="sep-dot"></span>
+        <span>列 <b>第 2 列</b></span>
+        <span class="grow"></span>
+        <span class="tbl">
+          <button type="button">行+</button>
+          <button type="button">行−</button>
+          <button type="button">列+</button>
+          <button type="button">列−</button>
+        </span>
+      </div>
+      <p class="comp-cap">光标进入表格时才出现这组按钮 —— 状态栏是唯一会根据上下文改变结构的地方。</p>
+    </div>
+
+    <!-- Toast -->
+    <div class="comp center" data-label="Toast · 轻提示">
+      <div class="toast">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>
+        已保存到 PLAN.md
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 令牌 ================= -->
+<section id="tokens">
+  <div class="sec-head">
+    <span class="idx">05</span>
+    <h2>设计令牌</h2>
+    <p>两套方案用同一组语义变量名，差异全部收敛在值上。落地时只需替换 <code>:root</code> 与 <code>:root[data-theme="dark"]</code> 两块声明，组件规则不必重写 —— 唯一的例外是布局性差异（侧栏是否成卡片、状态栏是否成胶囊），那几条需要按 <code>[data-skin]</code> 单独覆盖。</p>
+  </div>
+
+  <h3 class="sub">几何与材质</h3>
+  <table class="tbl-token">
+    <thead><tr><th style="width:26%">令牌</th><th style="width:14%">用途</th><th style="width:24%">A · HyperOS</th><th style="width:24%">B · macOS + Mica</th><th>示意</th></tr></thead>
+    <tbody>
+      <tr><td><code>--w-radius</code></td><td>窗口圆角</td><td>22px</td><td>12px</td><td><span class="rad" style="border-radius:22px"></span><span class="rad" style="border-radius:12px"></span></td></tr>
+      <tr><td><code>--c-radius</code></td><td>卡片圆角</td><td>18px</td><td>10px</td><td><span class="rad" style="border-radius:18px"></span><span class="rad" style="border-radius:10px"></span></td></tr>
+      <tr><td><code>--k-radius</code></td><td>控件圆角</td><td>11px（按钮 999px）</td><td>6px</td><td><span class="rad" style="border-radius:11px"></span><span class="rad" style="border-radius:6px"></span></td></tr>
+      <tr><td><code>--chrome-h</code></td><td>标题栏高度</td><td>34px</td><td>30px</td><td>—</td></tr>
+      <tr><td><code>--ctl-h</code></td><td>控件高度</td><td>30px</td><td>26px</td><td>—</td></tr>
+      <tr><td><code>--blur</code></td><td>窗口背景模糊</td><td>44px</td><td>60px</td><td>—</td></tr>
+      <tr><td><code>--blur-sat</code></td><td>饱和度增强</td><td>160%</td><td>180%</td><td>—</td></tr>
+      <tr><td>窗口底色</td><td>自下而上的玻璃层</td><td>白 88% → 68%</td><td>白 80% → 72%，带壁纸色浸染</td><td>—</td></tr>
+    </tbody>
+  </table>
+
+  <h3 class="sub">色彩</h3>
+  <table class="tbl-token">
+    <thead><tr><th style="width:26%">令牌</th><th style="width:14%">用途</th><th style="width:24%">A · HyperOS</th><th style="width:24%">B · macOS + Mica</th><th>示意</th></tr></thead>
+    <tbody>
+      <tr><td><code>--accent</code></td><td>强调色</td><td>#3482FF</td><td>#007AFF</td><td><span class="sw" style="background:#3482ff"></span> <span class="sw" style="background:#007aff"></span></td></tr>
+      <tr><td><code>--t1</code></td><td>主文本</td><td>#14161C</td><td>#1D1D1F</td><td><span class="sw" style="background:#14161c"></span> <span class="sw" style="background:#1d1d1f"></span></td></tr>
+      <tr><td><code>--t2</code></td><td>次文本</td><td>#5B6272</td><td>#6E6E73</td><td><span class="sw" style="background:#5b6272"></span> <span class="sw" style="background:#6e6e73"></span></td></tr>
+      <tr><td><code>--t3</code></td><td>弱文本 / 占位</td><td>#8D94A5</td><td>#98989D</td><td><span class="sw" style="background:#8d94a5"></span> <span class="sw" style="background:#98989d"></span></td></tr>
+      <tr><td><code>--line</code></td><td>分隔线</td><td>rgba(20,22,28,.075)</td><td>rgba(0,0,0,.085)</td><td><span class="sw" style="background:rgba(20,22,28,.075)"></span> <span class="sw" style="background:rgba(0,0,0,.085)"></span></td></tr>
+      <tr><td><code>--danger</code></td><td>危险操作</td><td>#FF453A</td><td>#FF3B30</td><td><span class="sw" style="background:#ff453a"></span> <span class="sw" style="background:#ff3b30"></span></td></tr>
+    </tbody>
+  </table>
+
+  <h3 class="sub">图标</h3>
+  <table class="tbl-token">
+    <thead><tr><th style="width:26%">令牌</th><th style="width:14%">用途</th><th style="width:24%">A · HyperOS</th><th style="width:24%">B · macOS + Mica</th><th>示意</th></tr></thead>
+    <tbody>
+      <tr><td><code>--ic-stroke</code></td><td>描边宽度（24 网格）</td><td>1.85</td><td>1.5</td><td>—</td></tr>
+      <tr><td>端点 / 拐角</td><td>线条收口</td><td>round / round</td><td>round / round</td><td>—</td></tr>
+      <tr><td>双色调填充</td><td>主形体填充透明度</td><td>16%（强调蓝）</td><td>0–14%（仅 auto 用）</td><td>—</td></tr>
+      <tr><td>光学尺寸</td><td>工具栏显示尺寸</td><td>26px 网格对齐 24</td><td>16–18px 更常见</td><td>—</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <b>对比度核验：</b>两套的 <code>--t2</code> 在各自背景上均达到 4.6:1 以上（AA 正文级），<code>--t1</code> 达到 13:1 以上。HyperOS 的 <code>--t3</code>（#8D94A5）在纯白上为 3.4:1，仅用于占位符与禁用态，不承载正文信息。
+  </div>
+</section>
+
+<!-- ================= 落地 ================= -->
+<section id="mapping">
+  <div class="sec-head">
+    <span class="idx">06</span>
+    <h2>落地到 src/app.css</h2>
+    <p>现有外壳已经是一套「Win11 尺寸 + macOS 配色」的混合体（<code>--chrome: #f6f6f7</code>、30px 标题栏、6px 圆角）。因此 <strong>B 套本质是对现状的精修</strong>，改动集中在材质与描边；<strong>A 套才是结构性重构</strong>，需要新增侧栏卡片化与状态栏胶囊两条布局规则。落地时把 A 套放进 <code>[data-skin="hyperos"]</code> 作用域，两套就能共存并实时切换，不必二选一。</p>
+  </div>
+
+  <div class="note">
+    <b>已落地为可切换皮肤。</b>两套方案没有替换 <code>src/app.css</code>，而是在它之上加了一层：
+    <code>&lt;html data-skin="macos|hyperos"&gt;</code> 管风格，<code>data-theme</code> 管明暗，两个属性正交，
+    组合出四种外观。<code>src/skin.css</code> 用 <code>:root[data-skin="hyperos"]</code> 覆盖令牌，
+    同时把标题栏高度、侧栏宽度、状态栏高度抽成 <code>--chrome-h</code> / <code>--outline-w</code> / <code>--bar-*</code>
+    四个变量整体换挡，所以侧栏卡片化、状态栏胶囊化不需要复制布局规则。
+    入口在 <b>视图 → 外观</b>，选择记进 localStorage，首帧由 <code>public/skin-boot.js</code> 提前写属性避免闪变。
+    默认仍是 macOS —— 没选过的用户升级后观感不变。
+  </div>
+
+  <table class="map-table">
+    <thead><tr><th style="width:22%">现有变量</th><th style="width:18%">当前位置</th><th style="width:30%">A · HyperOS</th><th style="width:30%">B · macOS + Mica</th></tr></thead>
+    <tbody>
+      <tr><td><code>--chrome</code></td><td>标题栏底色</td><td>改为 <code>transparent</code>，玻璃由窗口层统一承担</td><td><code>rgba(248,248,250,.5)</code> + blur 20</td></tr>
+      <tr><td><code>--hairline</code></td><td>标题栏下边线</td><td>移除（改用投影分层）</td><td><code>rgba(0,0,0,.085)</code> 保留</td></tr>
+      <tr><td><code>--control</code></td><td>菜单 / 浮层底色</td><td><code>rgba(255,255,255,.86)</code> + blur 30</td><td><code>rgba(250,250,252,.82)</code> + blur 30</td></tr>
+      <tr><td><code>--text</code> / <code>--text2</code> / <code>--text3</code></td><td>三级文本</td><td>#14161C / #5B6272 / #8D94A5</td><td>#1D1D1F / #6E6E73 / #98989D</td></tr>
+      <tr><td><code>--accent</code></td><td>强调色</td><td>#3482FF</td><td>#007AFF（现值 #0A7CFF 已接近）</td></tr>
+      <tr><td><code>--accent-soft</code></td><td>强调浅底</td><td><code>rgba(52,130,255,.13)</code></td><td><code>rgba(0,122,255,.12)</code></td></tr>
+      <tr><td><code>--tile-border</code></td><td>浮层描边</td><td><code>rgba(255,255,255,.55)</code>（内亮边）</td><td><code>rgba(0,0,0,.1)</code>（外暗边）</td></tr>
+      <tr><td><code>--shadow-menu</code></td><td>浮层投影</td><td><code>0 16px 48px -12px rgba(26,40,92,.28)</code></td><td><code>0 14px 44px -10px rgba(0,0,0,.3)</code></td></tr>
+      <tr><td><code>--outline-bg</code></td><td>大纲侧栏底色</td><td><code>rgba(255,255,255,.58)</code> + blur 24 + radius 18 + 外边距 10px</td><td><code>rgba(246,246,248,.56)</code> + blur 60，贴边无圆角</td></tr>
+      <tr><td><code>--outline-active-bg</code></td><td>大纲当前项</td><td>90° 渐变 <code>rgba(52,130,255,.16)→rgba(0,198,255,.1)</code> + 内描边</td><td><code>rgba(0,122,255,.12)</code></td></tr>
+      <tr><td><code>--bar-bg</code></td><td>状态栏底色</td><td>改 <code>--panel-solid</code>，胶囊圆角 + 左右 10px 外边距</td><td><code>rgba(248,248,250,.5)</code> + blur 20，贴底全宽</td></tr>
+      <tr><td><code>--font-ui</code></td><td>UI 字体</td><td><code>"MiSans","HarmonyOS Sans SC",…</code></td><td><code>-apple-system,"SF Pro Text",…</code></td></tr>
+      <tr><td><code>--tb-close-hover</code></td><td>关闭按钮悬停</td><td>#C42B1C（保留）</td><td>不适用（交通灯由系统绘制）</td></tr>
+    </tbody>
+  </table>
+
+  <h3 class="sub">实施顺序</h3>
+  <div class="spec-row">
+    <div class="spec">
+      <div class="k">第 1 步 · 令牌替换</div>
+      <div class="v">只改 <code>:root</code> 两块声明与 <code>--font-ui</code>，不动任何布局规则。可立即看到 80% 的风格变化，风险最低。</div>
+    </div>
+    <div class="spec">
+      <div class="k">第 2 步 · 材质与描边</div>
+      <div class="v">给 <code>.win</code> 加 <code>backdrop-filter</code> 与顶部高光伪元素；浮层统一改用 <code>--pop-bg</code> + 30px 模糊。</div>
+    </div>
+    <div class="spec">
+      <div class="k">第 3 步 · 布局性差异</div>
+      <div class="v">A 套给 <code>#outline</code> 加外边距与圆角、给 <code>#bar</code> 改胶囊，都挂在 <code>html[data-skin="hyperos"]</code> 下。<b>已按此落地</b>：滚动条轨道改读元素实测边距，胶囊的 10px 外缝不会再被算进轨道。</div>
+    </div>
+    <div class="spec">
+      <div class="k">第 4 步 · 图标落地</div>
+      <div class="v">现有代码用 <code>lucide-vue-next</code> 与手写 sprite。若要换成自有图标，建议只替换 <code>index.html</code> 里的 sprite（查找栏用），菜单与按钮的 Lucide 组件按同网格重绘后再替换。</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>一处需要注意：</b>当前 <code>#bar</code> 使用 <code>backdrop-filter: blur(6px)</code> 且贴底全宽，<code>scrollbars.ts</code> 的 <code>edges()</code> 依赖它的实际高度来裁滚动条轨道。改成胶囊（有外边距、浮动）后需确认 <code>getBoundingClientRect()</code> 仍能取到正确下边界，否则纵向滚动条会短一截。
+  </div>
+
+  <div class="note">
+    <b>窗口级材质的真实约束：</b>两套方案的"透出桌面"效果都依赖 WebView 之外的系统背景。CSS 的 <code>backdrop-filter</code> 只能模糊 WebView 内部的内容，透不到桌面。若要让窗口真正呈现 Win11 Mica 或 macOS vibrancy，需在 Rust 侧启用系统背景：Windows 调用 <code>DwmSetWindowAttribute</code> 的 <code>DWMWA_SYSTEMBACKDROP_TYPE</code>（Mica / Acrylic），macOS 用 <code>NSVisualEffectView</code>。没有这层支持时，A 套的 <code>--chrome: transparent</code> 会退化成纯白，应改为半透明白并只保留 WebView 内模糊 —— 这也是当前 <code>--bar-bg: rgba(...,.94)</code> 取高不透明度的原因。
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <span>mdview · 图标与界面设计规范</span>
+  <span>风格 A：HyperOS 4.0 · 风格 B：macOS + Windows 11 Mica</span>
+</footer>
+
+<script src="design.js"></script>
+</body>
+</html>

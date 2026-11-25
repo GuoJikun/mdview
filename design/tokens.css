@@ -1,0 +1,193 @@
+/* ==========================================================================
+   mdview · 两套皮肤的落地变量
+   用法：把需要的两块贴进 src/app.css，替换现有的 :root / :root[data-theme="dark"]，
+   再在 <html> 上写 data-skin="hyperos" | "macos"。
+   变量名沿用 app.css 现有命名，组件规则不需要改。
+
+   前提：以下几个值的毛玻璃效果依赖 WebView 之外的系统背景。
+   backdrop-filter 只能模糊 WebView 内部内容，透不到桌面；
+   若要窗口真正透出壁纸，需在 Rust 侧启用 DWMWA_SYSTEMBACKDROP_TYPE（Windows）
+   或 NSVisualEffectView（macOS）。没有该支持时 --chrome 应改为半透明白，
+   而不是 transparent，否则标题栏会退化为纯色。
+   ========================================================================== */
+
+/* ---------- A. HyperOS 4.0 · 浅色 ---------- */
+:root[data-skin="hyperos"] {
+  /* 外壳 */
+  --chrome: transparent;
+  --hairline: transparent;
+  /* 菜单分隔线单独一条：--hairline 在 A 套必须透明（标题栏无边框），
+     分隔线复用它会一起消失，所以给菜单项分隔线自己的颜色。 */
+  --sk-line: rgba(20, 22, 28, .075);
+  --control: rgba(255, 255, 255, .86);
+  --text: #14161c;
+  --text2: #5b6272;
+  --text3: #8d94a5;
+  --icon: #3c4354;
+  --accent: #3482ff;
+  --accent-soft: rgba(52, 130, 255, .13);
+  --hover: rgba(20, 22, 28, .055);
+  --press: rgba(20, 22, 28, .1);
+  --danger: #ff453a;
+  --tile-border: rgba(255, 255, 255, .55);
+  --shadow-menu:
+    0 16px 48px -12px rgba(26, 40, 92, .28),
+    0 0 0 .5px rgba(20, 22, 28, .06);
+
+  /* 侧栏与状态栏 */
+  --outline-bg: rgba(255, 255, 255, .44);
+  --outline-hover: rgba(20, 22, 28, .05);
+  --outline-active-bg: linear-gradient(90deg, rgba(52, 130, 255, .16), rgba(0, 198, 255, .1));
+  --outline-active-fg: #2b6fe0;
+  --outline-border: transparent;
+  --bar-bg: rgba(255, 255, 255, .92);
+
+  /* 字体：MiSans 优先，未安装时退到鸿蒙 / 苹方 / 微软雅黑 */
+  --font-ui: "MiSans", "HarmonyOS Sans SC", "PingFang SC",
+    "Segoe UI Variable Text", "Microsoft YaHei UI", sans-serif;
+
+  /* 几何（供新增规则引用） */
+  --radius-window: 22px;
+  --radius-card: 18px;
+  --radius-control: 11px;
+  --radius-popup: 16px;
+  --chrome-h: 34px;
+  --blur: 44px;
+  --blur-sat: 160%;
+}
+
+/* ---------- A. HyperOS 4.0 · 深色 ---------- */
+:root[data-skin="hyperos"][data-theme="dark"] {
+  --chrome: transparent;
+  --hairline: transparent;
+  --sk-line: rgba(255, 255, 255, .085);
+  --control: rgba(44, 47, 57, .88);
+  --text: #f2f3f7;
+  --text2: #a2a9ba;
+  --text3: #767d8e;
+  --icon: #c8cfdd;
+  --accent: #4c8dff;
+  --accent-soft: rgba(76, 141, 255, .2);
+  --hover: rgba(255, 255, 255, .07);
+  --press: rgba(255, 255, 255, .12);
+  --danger: #ff6a60;
+  --tile-border: rgba(255, 255, 255, .1);
+  --shadow-menu:
+    0 18px 50px -12px rgba(0, 0, 0, .7),
+    0 0 0 .5px rgba(255, 255, 255, .1);
+
+  --outline-bg: rgba(38, 41, 50, .55);
+  --outline-hover: rgba(255, 255, 255, .06);
+  --outline-active-bg: linear-gradient(90deg, rgba(76, 141, 255, .24), rgba(58, 210, 255, .12));
+  --outline-active-fg: #7fb0ff;
+  --outline-border: transparent;
+  --bar-bg: rgba(38, 41, 50, .94);
+
+  --radius-window: 22px;
+  --radius-card: 18px;
+  --radius-control: 11px;
+  --radius-popup: 16px;
+  --chrome-h: 34px;
+  --blur: 44px;
+  --blur-sat: 150%;
+}
+
+/* ---------- B. macOS + Mica · 浅色 ---------- */
+:root[data-skin="macos"] {
+  --chrome: rgba(248, 248, 250, .5);
+  --hairline: rgba(0, 0, 0, .085);
+  --control: rgba(250, 250, 252, .82);
+  --text: #1d1d1f;
+  --text2: #6e6e73;
+  --text3: #98989d;
+  --icon: #48484c;
+  --accent: #007aff;
+  --accent-soft: rgba(0, 122, 255, .12);
+  --hover: rgba(0, 0, 0, .055);
+  --press: rgba(0, 0, 0, .1);
+  --danger: #ff3b30;
+  --tile-border: rgba(0, 0, 0, .1);
+  --shadow-menu:
+    0 14px 44px -10px rgba(0, 0, 0, .3),
+    0 0 0 .5px rgba(0, 0, 0, .1);
+
+  --outline-bg: rgba(238, 239, 244, .64);
+  --outline-hover: rgba(0, 0, 0, .05);
+  --outline-active-bg: rgba(0, 122, 255, .12);
+  --outline-active-fg: #007aff;
+  --outline-border: rgba(0, 0, 0, .085);
+  --bar-bg: rgba(248, 248, 250, .5);
+
+  --font-ui: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC",
+    "Microsoft YaHei UI", sans-serif;
+
+  --radius-window: 12px;
+  --radius-card: 10px;
+  --radius-control: 6px;
+  --radius-popup: 9px;
+  --chrome-h: 30px;
+  --blur: 60px;
+  --blur-sat: 180%;
+}
+
+/* ---------- B. macOS + Mica · 深色 ---------- */
+:root[data-skin="macos"][data-theme="dark"] {
+  --chrome: rgba(255, 255, 255, .03);
+  --hairline: rgba(255, 255, 255, .1);
+  --control: rgba(48, 50, 58, .86);
+  --text: #f5f5f7;
+  --text2: #a1a1a6;
+  --text3: #7c7c82;
+  --icon: #d3d3d9;
+  --accent: #0a84ff;
+  --accent-soft: rgba(10, 132, 255, .18);
+  --hover: rgba(255, 255, 255, .075);
+  --press: rgba(255, 255, 255, .13);
+  --danger: #ff453a;
+  --tile-border: rgba(255, 255, 255, .12);
+  --shadow-menu:
+    0 16px 48px -10px rgba(0, 0, 0, .75),
+    0 0 0 .5px rgba(255, 255, 255, .12);
+
+  --outline-bg: rgba(50, 52, 60, .56);
+  --outline-hover: rgba(255, 255, 255, .06);
+  --outline-active-bg: rgba(10, 132, 255, .2);
+  --outline-active-fg: #6fb2ff;
+  --outline-border: rgba(255, 255, 255, .1);
+  --bar-bg: rgba(255, 255, 255, .03);
+
+  --radius-window: 12px;
+  --radius-card: 10px;
+  --radius-control: 6px;
+  --radius-popup: 9px;
+  --chrome-h: 30px;
+  --blur: 60px;
+  --blur-sat: 170%;
+}
+
+/* ==========================================================================
+   结构差异补丁：只有 A 套需要这两条。B 套保持现有贴边布局。
+   ========================================================================== */
+
+/* A 套：大纲侧栏变成浮起卡片，正文与侧栏之间留出 10px 玻璃缝 */
+:root[data-skin="hyperos"] #outline {
+  top: 34px;
+  bottom: 10px;
+  left: 10px;
+  width: 212px;
+  border-right: 0;
+  border-radius: var(--radius-card);
+  backdrop-filter: blur(24px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, .6);
+}
+
+/* A 套：状态栏改成悬浮胶囊。注意 edges() 会读它的矩形，改完要回归滚动条长度。 */
+:root[data-skin="hyperos"] #bar {
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  border: 1px solid rgba(255, 255, 255, .7);
+  border-top: 1px solid rgba(255, 255, 255, .7);
+  border-radius: 999px;
+  backdrop-filter: blur(30px) saturate(170%);
+}
