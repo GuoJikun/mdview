@@ -722,9 +722,14 @@ pub fn align(src: &str, text: &str, target: usize) -> usize {
         let Some(sc) = src[si..].chars().next() else {
             return src.len();
         };
-        // 转义前缀只存在于源码侧，文本侧不消耗字符
+        // 转义前缀只存在于源码侧，文本侧不消耗额外字符：`a\*b` 的 4 个字节
+        // 对应 3 个字符。这里必须把「前缀 + 被转义字符」一次吃掉——只跳前缀
+        // 会让下一轮把 `a\\b` 的第二个反斜杠又当前缀，整体前移并吞掉末尾字符。
         if sc == '\\' && si + 1 < src.len() {
-            si += 1;
+            let escaped = src[si + 1..].chars().next();
+            si += 1 + escaped.map_or(0, char::len_utf8);
+            chars.next();
+            ti += 1;
             continue;
         }
         // 实体在源码侧多字节、文本侧一个字符
@@ -770,6 +775,14 @@ mod tests {
         assert_eq!(align(r"a\*b", "a*b", 0), 0);
         assert_eq!(align(r"a\*b", "a*b", 2), 3);
         assert_eq!(align(r"a\*b", "a*b", 3), 4);
+    }
+
+    #[test]
+    fn align_does_not_double_skip_escaped_backslash() {
+        // 源码 `a\\b`（4 字节）表示文本 `a\b`（3 字符）：第二个反斜杠是被转义的
+        // 字符本身，不能当前缀再跳一次——那样映射整体前移，末尾的 b 直接丢掉。
+        assert_eq!(align(r"a\\b", r"a\b", 1), 1);
+        assert_eq!(align(r"a\\b", r"a\b", 2), 3);
     }
 
     #[test]

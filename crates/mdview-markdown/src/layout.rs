@@ -19,7 +19,7 @@
 
 use std::ops::Range;
 
-use crate::block::{Block, BlockId, ParseResult, SpanKind, align};
+use crate::block::{Block, BlockId, ParseResult, SpanKind, TableGrid, align};
 use crate::sourcemap::SourceMap;
 
 /// 光标可停靠的一个位置。
@@ -137,6 +137,9 @@ impl Layout {
                 byte: block.byte.start,
                 visual: 0,
             });
+        }
+        if let Some(grid) = block.table.as_ref() {
+            stops = pad_table_cell_stops(stops, grid);
         }
 
         Self {
@@ -276,11 +279,58 @@ fn emit_visible(
     text: &str,
 ) {
     push_stop(stops, byte_start, *visual);
+    if text.is_empty() {
+        return;
+    }
+    // 代码跨度、公式这类片段不做反转义：`span.text` 就是原文，`\` 本身是可见字符。
+    // 若仍交给 `align`，它会把这个反斜杠当成转义前缀跳过，映射整体前移——
+    // `` `C:\Users\me` `` 会渲染成 `C:\sers\e`，被跳过的字符连停靠点都没有。
+    if src_slice == text {
+        for (offset, _) in text.char_indices().skip(1) {
+            *visual += 1;
+            push_stop(stops, byte_start + offset, *visual);
+        }
+        *visual += 1;
+        push_stop(stops, byte_start + text.len(), *visual);
+        return;
+    }
     for i in 1..=text.chars().count() {
         let rel = align(src_slice, text, i);
         *visual += 1;
         push_stop(stops, byte_start + rel, *visual);
     }
+}
+
+/// 空单元格在投影里整段都是折叠区间（`|  |` 中间没有可见片段），一个停靠点都没有：
+/// 点击和 Tab 都会吸附到相邻格子，这一格就永远进不去——插出来的新列等于不可编辑。
+/// 给每个「没有任何停靠点」的单元格补一个零宽停靠点，视觉列沿用左邻，不影响排版。
+fn pad_table_cell_stops(mut stops: Vec<Stop>, grid: &TableGrid) -> Vec<Stop> {
+    let mut extra: Vec<usize> = Vec::new();
+    for row in &grid.rows {
+        for cell in &row.cells {
+            let covered = stops
+                .iter()
+                .any(|stop| stop.byte >= cell.byte.start && stop.byte < cell.byte.end);
+            if !covered {
+                extra.push(cell.byte.start);
+            }
+        }
+    }
+    extra.sort_unstable();
+    extra.dedup();
+    for byte in extra {
+        if stops.iter().any(|stop| stop.byte == byte) {
+            continue;
+        }
+        let visual = stops
+            .iter()
+            .rev()
+            .find(|stop| stop.byte <= byte)
+            .map_or(0, |stop| stop.visual);
+        let at = stops.partition_point(|stop| stop.byte < byte);
+        stops.insert(at, Stop { byte, visual });
+    }
+    stops
 }
 
 fn char_index(s: &str, chars: usize) -> usize {
@@ -550,6 +600,46 @@ mod tests {
 
     fn pairs(layout: &Layout) -> Vec<(usize, usize)> {
         layout.stops().iter().map(|s| (s.byte, s.visual)).collect()
+    }
+
+    #[test]
+    fn inline_code_keeps_every_char_after_a_backslash() {
+        // 代码跨度不做反转义：`\` 是可见字符，不能当转义前缀跳过。
+        // 旧实现把 `C:\Users\me` 映射成 `C:\sers\e`，`U` 和 `m` 连停靠点都没有。
+        let layout = first(r"`C:\Users\me`");
+        let bytes: Vec<usize> = layout.stops().iter().map(|s| s.byte).collect();
+        // 反引号在 0 与 12，内容占 1..=11（ASCII，每个字节都是一个字符边界）
+        for byte in 1..=11 {
+            assert!(bytes.contains(&byte), "byte {byte} 缺停靠点：{bytes:?}");
+        }
+        assert!(
+            bytes.windows(2).all(|pair| pair[0] < pair[1]),
+            "停靠点必须严格单调：{bytes:?}"
+        );
+    }
+
+    #[test]
+    fn empty_table_cell_has_a_stop() {
+        // 空单元格在投影里整段是折叠区间。没有停靠点的话，点击和 Tab 都会吸附到
+        // 隔壁格子，这一格永远进不去——插出来的新列就等于不可编辑。
+        let src = "| a |  | b |\n| --- | --- | --- |\n| c | d | e |\n";
+        let (parsed, doc) = build(src);
+        let cell = parsed.blocks[0]
+            .table
+            .as_ref()
+            .expect("应解析出表格")
+            .rows[0]
+            .cells[1]
+            .byte
+            .clone();
+        let stop = doc
+            .stop_at_byte(cell.start + 1, Gravity::Upstream)
+            .expect("空单元格应有停靠点");
+        let byte = doc.byte(stop).expect("停靠点应能反查 byte");
+        assert!(
+            (cell.start..cell.end).contains(&byte),
+            "停靠点应落在空单元格 {cell:?} 内，实际 {byte}"
+        );
     }
 
     #[test]
