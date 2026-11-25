@@ -650,12 +650,7 @@ mod tests {
         // 隔壁格子，这一格永远进不去——插出来的新列就等于不可编辑。
         let src = "| a |  | b |\n| --- | --- | --- |\n| c | d | e |\n";
         let (parsed, doc) = build(src);
-        let cell = parsed.blocks[0]
-            .table
-            .as_ref()
-            .expect("应解析出表格")
-            .rows[0]
-            .cells[1]
+        let cell = parsed.blocks[0].table.as_ref().expect("应解析出表格").rows[0].cells[1]
             .byte
             .clone();
         let stop = doc

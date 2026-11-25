@@ -1044,7 +1044,10 @@ mod tests {
             ("###### 六", "h6"),
         ] {
             let html = preview_html(src);
-            assert!(html.contains(&format!("<{tag}>")), "{src} 应为 <{tag}>: {html}");
+            assert!(
+                html.contains(&format!("<{tag}>")),
+                "{src} 应为 <{tag}>: {html}"
+            );
         }
     }
 

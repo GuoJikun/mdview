@@ -1404,8 +1404,12 @@ impl AppState {
             return Vec::new();
         };
         let new_text = lines.join("\n");
-        let line_start =
-            block_range.start + lines.iter().take(caret_line).map(|l| l.len() + 1).sum::<usize>();
+        let line_start = block_range.start
+            + lines
+                .iter()
+                .take(caret_line)
+                .map(|l| l.len() + 1)
+                .sum::<usize>();
         // 新插入的格是两格空格，光标落在格内（空单元格的通行落点）
         let caret = line_start - block_range.start + start + Self::cell_caret("  ");
         self.replace_block_text(block_range, &new_text, caret)
@@ -1478,8 +1482,12 @@ impl AppState {
             .min(caret_cells.len().saturating_sub(1));
         let cell = caret_cells.get(target).copied().unwrap_or("");
         let new_text = lines.join("\n");
-        let line_start =
-            block_range.start + lines.iter().take(caret_line).map(|l| l.len() + 1).sum::<usize>();
+        let line_start = block_range.start
+            + lines
+                .iter()
+                .take(caret_line)
+                .map(|l| l.len() + 1)
+                .sum::<usize>();
         let caret = line_start - block_range.start + start + Self::cell_caret(cell);
         self.replace_block_text(block_range, &new_text, caret)
     }
@@ -2714,14 +2722,23 @@ mod tests {
 
     #[test]
     fn select_all_then_forward_delete_clears_the_whole_document() {
-        assert_eq!(after_select_all("# 标题\n\n正文\n", Message::DeleteForward), "");
+        assert_eq!(
+            after_select_all("# 标题\n\n正文\n", Message::DeleteForward),
+            ""
+        );
         assert_eq!(after_select_all("- 甲\n- 乙\n", Message::DeleteForward), "");
     }
 
     #[test]
     fn select_all_then_enter_replaces_the_whole_document() {
-        assert_eq!(after_select_all("# 标题\n\n正文\n", Message::Newline), "\n\n");
-        assert_eq!(after_select_all("# 标题\n\n正文\n", Message::HardBreak), "\\\n");
+        assert_eq!(
+            after_select_all("# 标题\n\n正文\n", Message::Newline),
+            "\n\n"
+        );
+        assert_eq!(
+            after_select_all("# 标题\n\n正文\n", Message::HardBreak),
+            "\\\n"
+        );
     }
 
     /// 表格单元格里的 `\|` 是转义竖线，属于同一格。按裸 `|` 切分源码会把它当列边界，
