@@ -41,6 +41,9 @@ import { shouldClearSelection } from './selection.js';
 import * as mdviewTheme from './theme.js';
 // 外观皮肤（macOS / HyperOS）。与 theme.js 正交：一个管明暗，一个管风格。
 import * as mdviewSkin from '../skin';
+// 排版偏好（字体 / 字号 / 行宽 / 缩进 / 启动视图）。生效方式是 CSS 变量，
+// 这里只负责启动时应用一次、并把缩进宽度推给内核。
+import * as mdviewPrefs from '../prefs';
 
 // 这几个节点在 index.html 里是写死的骨架，缺任何一个后续都会立刻炸。
 // 断言只影响类型，不改运行时行为（真拿不到时，仍是首次调用处的 TypeError）。
@@ -1396,6 +1399,20 @@ function runAction(action: string) {
 }
 window.__mdviewRunAction = runAction;
 
+/**
+ * 偏好改动后重测几何。
+ *
+ * 字号与行宽会改变折行：自绘光标是按像素量出来的，大纲锚点也是，
+ * 两者都不能沿用旧值。与窗口 resize 走同一套动作（清掉上下移动的期望列，
+ * 强制把光标重新露出来）。
+ */
+window.__mdviewRelayout = () => {
+  lines.reset();
+  if (caret) applyCaret(caret, true, true);
+  refreshOutlineAnchors();
+  window.__mdviewRefreshScrollbar?.();
+};
+
 // ---- IPC -------------------------------------------------------------
 
 // 所有消息串行发出：内核虽然有锁，但 DOM 的 patch 必须按顺序应用
@@ -1554,7 +1571,17 @@ function actionOf(payload: unknown): string | null {
 async function boot() {
   // 主题必须在渲染前定下来，避免浅色闪一下再切深色
   mdviewTheme.init();
+  // 排版偏好同理：字号与行宽决定首帧的折行，晚一步设置会看到文字跳一下。
+  const prefs = mdviewPrefs.init();
   applySnapshot(await invoke<Snapshot>('snapshot'));
+  // 缩进宽度是内核的排版参数，不在文档里——启动时推一次。
+  send({ kind: 'setIndentWidth', width: prefs.indent });
+  // 启动视图：内核默认是所见即所得，偏好不同就同步过去（切视图要连内核一起切，
+  // 否则源码视图会拿到富文本投影的真值）。
+  if (prefs.startupView !== 'wysiwyg') {
+    applyViewMode(prefs.startupView);
+    send({ kind: 'setMode', mode: prefs.startupView });
+  }
   // 焦点必须落在透明输入框上：输入法只认真正的可编辑元素
   focusActiveEditor();
   // 给内核一个「页面已接管」的信号，日志里能对上游标是否真的画出来了
@@ -1696,6 +1723,13 @@ window.addEventListener('keydown', (event) => {
       event.preventDefault();
       closeLinkEditor();
     }
+    return;
+  }
+  // 偏好设置：三个视图都能开，输入框里也该能用——它开的是外壳弹窗。
+  // 走桥而不是 runAction：设置面板是纯外壳组件，编辑内核不认识它。
+  if (accel && event.key === ',') {
+    event.preventDefault();
+    window.__mdviewBridge?.dispatch('settings');
     return;
   }
   // 重新加载：三个视图都能用，但输入框（查找栏 / 链接面板）里不抢键。
@@ -2960,6 +2994,49 @@ window.__mdviewSelfTest = async function () {
       check('行内格式一步撤销', restored.source === '甲乙丙', JSON.stringify(restored.source));
     } catch (err) {
       check('行内格式链路可用', false, String(err));
+    }
+
+    // ---- 偏好设置 ----
+    try {
+      // 自检会改偏好，先记下原值，跑完原样放回去
+      const originalPrefs = { ...mdviewPrefs.prefs };
+      window.__mdviewBridge?.dispatch('settings');
+      await nextTick();
+      const panel = document.querySelector<HTMLElement>('.settings-dialog');
+      check('偏好设置面板可打开', !!panel);
+
+      mdviewPrefs.set({ fontSize: 17, width: 900 });
+      window.__mdviewRelayout?.();
+      const rootStyle = getComputedStyle(document.documentElement);
+      const docStyle = getComputedStyle(docEl);
+      check(
+        '字号与行宽写入 CSS 变量',
+        rootStyle.getPropertyValue('--doc-font-size').trim() === '17px' &&
+          docStyle.fontSize === '17px' && docStyle.maxWidth === '900px',
+        rootStyle.getPropertyValue('--doc-font-size') + ' / ' + docStyle.fontSize +
+          ' / ' + docStyle.maxWidth,
+      );
+
+      mdviewPrefs.set({ indent: 4 });
+      send({ kind: 'replaceSource', text: '' });
+      await queue;
+      send({ kind: 'insertText', text: '甲' });
+      await queue;
+      send({ kind: 'setIndentWidth', width: mdviewPrefs.prefs.indent });
+      await queue;
+      send({ kind: 'indent', outdent: false });
+      await queue;
+      const indented = await invoke<Snapshot>('snapshot');
+      check('缩进宽度可配置', indented.source === '甲    ', JSON.stringify(indented.source));
+
+      // 还原：自检结束后样张与用户偏好都不该被改过
+      mdviewPrefs.set(originalPrefs);
+      window.__mdviewRelayout?.();
+      panel?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await nextTick();
+      check('Esc 关闭偏好设置', !document.querySelector('.settings-dialog'));
+    } catch (err) {
+      check('偏好设置链路可用', false, String(err));
     }
   } catch (err) {
     check('自检未抛异常', false, String(err));

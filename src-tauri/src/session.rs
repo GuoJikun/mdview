@@ -76,6 +76,10 @@ pub enum Wire {
     Indent {
         outdent: bool,
     },
+    /// 偏好设置：普通块按 Tab 的空格数（列表仍按标记宽度）。
+    SetIndentWidth {
+        width: usize,
+    },
     /// 改链接 / 图片：只带要改的字段，缺省表示保持原值。
     EditLink {
         stop: usize,
@@ -206,6 +210,7 @@ impl Wire {
             }),
             Wire::TableMoveCell { delta } => Message::TableMoveCell { delta },
             Wire::Indent { outdent } => Message::Indent { outdent },
+            Wire::SetIndentWidth { width } => Message::SetIndentWidth { width },
             Wire::EditLink {
                 stop,
                 url,
@@ -348,9 +353,19 @@ impl Session {
     /// 走和启动同一条构造路径：解析、指纹、光标归零、脏标记清零都一致。
     /// 调用方负责在 `dirty` 时先问过用户——这里不做确认，内核不认识对话框。
     pub fn new_file(&self) -> Snapshot {
-        let fresh = AppState::open("", None, &self.files);
-        *self.state.lock().expect("状态锁中毒") = fresh;
+        self.replace_document("", None);
         self.snapshot()
+    }
+
+    /// 整篇换掉文档状态，同时把「不随文档走」的偏好带过去。
+    ///
+    /// 缩进宽度来自偏好设置而不是文件内容：新建 / 打开 / 重新加载之后
+    /// 若跟着 `AppState::open` 回到默认值，用户改过的 Tab 宽度会莫名其妙失效。
+    fn replace_document(&self, content: &str, path: Option<PathBuf>) {
+        let indent_width = self.state.lock().expect("状态锁中毒").indent_width;
+        let mut fresh = AppState::open(content, path, &self.files);
+        fresh.indent_width = indent_width;
+        *self.state.lock().expect("状态锁中毒") = fresh;
     }
 
     /// 是否有未保存的改动。关窗与换文档前的守卫据此决定要不要问一句。
@@ -367,8 +382,7 @@ impl Session {
             .files
             .load(&path)
             .map_err(|err| format!("{}: {err}", path.display()))?;
-        let fresh = AppState::open(&content, Some(path), &self.files);
-        *self.state.lock().expect("状态锁中毒") = fresh;
+        self.replace_document(&content, Some(path));
         Ok(self.snapshot())
     }
 
@@ -653,6 +667,9 @@ mod tests {
         // Tab / Shift+Tab：布尔字段决定方向
         let wire: Wire = serde_json::from_str(r#"{"kind":"indent","outdent":true}"#).unwrap();
         assert!(matches!(wire, Wire::Indent { outdent: true }));
+        // 偏好设置里的缩进宽度
+        let wire: Wire = serde_json::from_str(r#"{"kind":"setIndentWidth","width":4}"#).unwrap();
+        assert!(matches!(wire, Wire::SetIndentWidth { width: 4 }));
         // 链接编辑：url/text 可缺省（表示保持原值），remove 缺省为 false
         let wire: Wire =
             serde_json::from_str(r#"{"kind":"editLink","stop":3,"url":"https://b"}"#).unwrap();
@@ -931,6 +948,18 @@ mod tests {
         let reply = session.dispatch(Wire::Save);
         assert!(reply.needs_path);
         assert!(!reply.saved);
+    }
+
+    /// 缩进宽度是「偏好」而不是「文档内容」：新建 / 打开别的文件之后必须还在，
+    /// 否则用户改过的 Tab 宽度会莫名其妙回到两格。
+    #[test]
+    fn indent_width_survives_switching_documents() {
+        let session = session("甲");
+        session.dispatch(Wire::SetIndentWidth { width: 4 });
+        session.new_file();
+        session.dispatch(Wire::InsertText { text: "乙".into() });
+        session.dispatch(Wire::Indent { outdent: false });
+        assert_eq!(session.text(), "乙    ", "新建文档后仍按 4 空格缩进");
     }
 
     /// 过关线：插图 → 保存 → 重开，图片还在原处。

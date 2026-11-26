@@ -84,6 +84,12 @@
   --tb-scroll-thumb-hover: rgba(0, 0, 0, .5);
   --font-ui: -apple-system, "SF Pro Text", "PingFang SC", "Segoe UI Variable Text",
     "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  /* 正文字体、字号与行宽。默认值等于改造前的硬编码值，没动过偏好的用户
+     观感零变化；偏好面板（src/prefs.ts）往这些变量里写值。
+     改字号会改变折行与字符坐标，编辑器那边必须同步重测光标与大纲锚点。 */
+  --doc-font: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --doc-font-size: 14px;
+  --doc-width: 780px;
   /* 布局尺寸。抽成变量是为了皮肤层能整体换挡（HyperOS 是 34px 标题栏、
      浮动侧栏、胶囊状态栏），而不是在各个规则里逐条覆盖。
      默认值全部等于改造前的数值，macOS 皮肤因此零变化。 */
@@ -383,12 +389,16 @@ html.custom-titlebar #outline::-webkit-scrollbar { width: 0; height: 0; display:
    .b/.a…），若放任全局作用域，就会和标题栏、菜单、大纲的同名类串味——
    菜单分隔符曾因也叫 .sep 被表格间隙规则压成 8px 的短线。 */
 #doc {
-  max-width: 780px; margin: 0 auto; padding: 56px 32px 45vh;
-  /* 116px 是侧栏宽度的一半：正文在「侧栏之外的剩余宽度」里居中 */
+  max-width: var(--doc-width); margin: 0 auto; padding: 56px 32px 45vh;
+  /* 侧栏宽度的一半：正文在「侧栏之外的剩余宽度」里居中。
+     390px 是默认行宽 780px 的一半，改用变量后换行宽仍然居中。 */
   margin-left: max(
-    calc(50% - 390px + (var(--outline-w) * .5)),
+    calc(50% - (var(--doc-width) * .5) + (var(--outline-w) * .5)),
     calc(var(--outline-w) + var(--canvas-gap) + 32px)
   );
+  font-family: var(--doc-font);
+  font-size: var(--doc-font-size);
+  line-height: 1.85;
   outline: none; cursor: text;
 }
 
@@ -443,8 +453,9 @@ html[data-view="source"] #bar,
 html[data-view="reading"] #bar { display: none !important; }
 html[data-view="reading"] #doc {
   cursor: default; user-select: text;
-  max-width: 720px; padding-top: 72px;
-  font-size: 15px; line-height: 1.95;
+  /* 阅读视图比编辑态略窄略大：少 60px 行宽、加 1px 字号 */
+  max-width: calc(var(--doc-width) - 60px); padding-top: 72px;
+  font-size: calc(var(--doc-font-size) + 1px); line-height: 1.95;
 }
 #doc .blk { position: relative; margin: 0 0 1.1em; white-space: pre-wrap; }
 #doc .p { margin: 0; }

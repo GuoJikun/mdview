@@ -38,6 +38,8 @@ export type Wire =
   | { kind: 'tableMoveCell'; delta: number }
   /** Tab / Shift+Tab：列表按层级缩进，其余块插入 / 删除两个空格。 */
   | { kind: 'indent'; outdent: boolean }
+  /** 偏好设置：普通块按 Tab 的空格数（列表仍按标记宽度）。 */
+  | { kind: 'setIndentWidth'; width: number }
   /** 改链接 / 图片：字段缺省表示保持原值。 */
   | { kind: 'editLink'; stop: number; url?: string; text?: string; remove?: boolean }
   /** 切换行内格式。字段是 `format` 而不是 `kind`，避免与消息名撞车。 */

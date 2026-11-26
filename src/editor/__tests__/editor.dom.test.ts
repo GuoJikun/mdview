@@ -101,10 +101,14 @@ it('editor.ts 能在浏览器模式里启动并投影出 DOM', async () => {
   });
   expect(parseFloat(caret.style.top)).toBeGreaterThanOrEqual(0);
 
-  // 内核启动只调 snapshot、ready（前端就绪信号）与 recent_files（最近打开菜单），
-  // 不该有别的 IPC 意外发生。
-  expect(h.calls.filter((c) => !['snapshot', 'ready', 'recent_files'].includes(c))).toEqual([]);
+  // 内核启动只调 snapshot、ready（前端就绪信号）、recent_files（最近打开菜单）
+  // 与 dispatch（把偏好的缩进宽度推给内核），不该有别的 IPC 意外发生。
+  expect(
+    h.calls.filter((c) => !['snapshot', 'ready', 'recent_files', 'dispatch'].includes(c)),
+  ).toEqual([]);
   expect(h.calls).toContain('ready');
+  // 缩进宽度必须在启动时同步一次：内核默认 2，与用户偏好可能不同
+  expect(h.calls.filter((c) => c === 'dispatch')).toHaveLength(1);
 
   // 三种视图真正切换 DOM：不再是"点了只换圆点、正文永远所见即所得"
   const run = window.__mdviewRunAction!;

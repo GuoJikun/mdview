@@ -720,6 +720,7 @@ fn menu_action(id: &str) -> Option<&'static str> {
         "save-as" => "save-as",
         "new-file" => "new-file",
         "new-window" => "new-window",
+        "settings" => "settings",
         "undo" => "undo",
         "redo" => "redo",
         "bold" => "bold",
@@ -819,6 +820,8 @@ fn build_native_menu(
         .separator()
         .item(&item("save", "保存")?)
         .item(&item("save-as", "另存为…")?)
+        .separator()
+        .item(&item("settings", "偏好设置…")?)
         .separator()
         .close_window_with_text("关闭窗口")
         .build()?;

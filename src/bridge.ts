@@ -6,6 +6,7 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { nextTick, reactive, readonly } from 'vue';
 import { openAbout } from './about';
+import { openSettings } from './settings';
 import { openUpdateDialog, toggleAutoUpdate } from './update';
 import type { SkinName } from './skin';
 
@@ -69,6 +70,11 @@ declare global {
     __mdviewSetTitle?: (path: string | null, dirty: boolean) => void;
     __mdviewNextTick?: () => Promise<void>;
     __mdviewMode?: ViewMode;
+    /**
+     * 偏好改动后重测几何：字号 / 行宽会改变折行，自绘光标与大纲锚点
+     * 都是按像素量的，不重测就会停在旧位置。
+     */
+    __mdviewRelayout?: () => void;
     mdviewTheme?: { mode?: () => string };
   }
 }
@@ -125,6 +131,10 @@ export function dispatch(action: string): void {
   // 纯外壳动作：编辑内核不关心更新与关于，也不该为了弹窗去 import UI 模块。
   if (action === 'about') {
     openAbout();
+    return;
+  }
+  if (action === 'settings') {
+    openSettings();
     return;
   }
   if (action === 'update') {

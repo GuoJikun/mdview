@@ -366,10 +366,14 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
   - 前端：链接面板加「插入」分支（`linkInserting`，隐藏打开 / 删除，提交走 `insertLink`），`Ctrl+Shift+I` 必须排在 `Ctrl+I`（斜体）之前——两者 `event.key` 都是 `'i'`。插入类动作与行内格式共用同一套模式门（源码 / 阅读视图不响应）。
   - 测试：Rust 单测 8 项（链接三态 / 图片 / 表格解析 / 块间空行 / 代码块落点 / CRLF / 图片存盘重开）+ 宿主复制重名 1 项 + 线缆契约 3 项 + 自检 4 项。**过关线「新建 → 插图 → 保存 → 重开图片仍在」由 `inserted_image_survives_save_and_reopen` 覆盖**（对话框本身无法无人值守驱动，注入点 `pick_image(path)` 留给手动验证）。
 
-- ⬜ **M6-3 偏好设置面板**
-  现状：只有主题与皮肤走 localStorage（`mdview-theme` / `mdview-skin`），字体、字号、行宽、缩进宽度、默认视图全部硬编码在 CSS 与 `editor.ts`。
-  做法：抽 `src/prefs.ts` 统一读写，带 schema 校验与默认值（localStorage 被改坏时回落而不是界面崩掉）；面板项：字体族、字号、正文最大宽度、Tab 缩进宽度、启动视图、是否记住窗口尺寸。字号与正文宽度必须走 CSS 变量（`--doc-font-size` / `--doc-width`），并且**改完要复用现有 resize 路径重置 `desiredX`**（第 8 节第 12 条：`desiredX` 是视口坐标，换字号会让上下移动跳位）。
-  过关线：改字号 / 宽度后光标与选区不漂移、大纲锚点重测；重启后保留。
+- ✅ **M6-3 偏好设置面板**（2026-11-26）：新增「文件 → 偏好设置…」（`Ctrl+,`），五项——正文字体（系统无衬线 / 衬线 / 等宽）、字号（12–20）、正文宽度（560–1200）、Tab 缩进宽度（2–8）、启动视图。改动即时生效，不需要「保存」按钮。
+  - `src/prefs.ts` 是唯一读写口：`sanitize` 对 localStorage 里的东西一律不信——枚举值不在白名单就回落、数值夹紧、未知字段丢弃。测试锁的就是这条（坏 JSON、越界字号、`font: 'comic-sans'`）。
+  - 生效方式是往 `<html>` 写 `--doc-font` / `--doc-font-size` / `--doc-width`，app.css 里 `#doc` 全读变量，默认值等于改造前的硬编码值，没动过偏好的用户观感零变化。**`#doc` 的 `margin-left` 里那个 390px 也要换成 `var(--doc-width) * .5`**，否则换行宽后正文不居中。
+  - **改字号 / 行宽必须重测**：`window.__mdviewRelayout()` 复用 resize 那条路径（`lines.reset()` + `applyCaret(caret, true, true)` + 大纲锚点重测 + 滚动条刷新）。自绘光标是按像素量的，不重测会停在旧位置。
+  - 缩进宽度落在内核（`Message::SetIndentWidth`，夹在 1–8），**只作用于普通段落**：列表仍按 `marker_width` 缩进——`- ` 两格、`1. ` 三格，改成 4 会让子项落进标记中间。它是「偏好」不是「文档内容」，所以 `Session::replace_document` 会把它带过新建 / 打开 / 重新加载，否则改过的 Tab 宽度会莫名其妙失效（有单测）。
+  - 皮肤层让位：HyperOS 原先给 `#doc` 设 `font-family: var(--font-ui)`，会盖掉用户的字体选择，现在只保留 `body` 的皮肤字体（外壳控件用），正文听偏好。
+  - **「是否记住窗口尺寸」这一项本次没做**：window-state 的 flags 在插件构建时就固定了，要做成开关得让 Rust 启动时先读一份配置决定 flags，与前端 localStorage 是两套存储。单独做更干净，留在 P2。
+  - 测试：前端 unit 8 项（校验 / 夹紧 / 脏 JSON / 记忆）、Rust 单测 2 项（宽度生效与列表不受影响、越界夹紧）、会话测试 1 项（换文档后仍保留）、契约 1 项、自检 4 项。
 
 - ⬜ **M6-4 自动保存与崩溃恢复**
   现状：只有手动 `Ctrl+S` 与关窗前拦截，强杀 / 断电 / 崩溃 = 全丢。这是编辑器最不可接受的一类数据事故。
@@ -445,11 +449,11 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
 
 ## 7. 当前进度快照
 
-- 日期：2026-11-26（M6-1 行内格式快捷操作 + M6-2 插入菜单；上一轮为多窗口、最近打开、字数统计、拖放打开、粘贴 HTML / 复制富文本、查找替换、Tab 缩进、链接/图片行内编辑）
-- 测试：**Rust 384 项全过**（app 144 / markdown 172 / desktop bin 54 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **175 项**（17 文件，unit + dom 两个 project：`ime` / `caretline` / `selection` / `dragscroll` / `outline` / `theme` / `update-format` / `find` / `clipboard` / `html-to-md` / `skin` / CRLF 视图 / 环境能力 / 滚动条 / 图片大纲 / 内核启动），由 `pnpm test` 一次跑完
+- 日期：2026-11-26（M6-1 行内格式、M6-2 插入菜单、M6-3 偏好设置；上一轮为多窗口、最近打开、字数统计、拖放打开、粘贴 HTML / 复制富文本、查找替换、Tab 缩进、链接/图片行内编辑）
+- 测试：**Rust 387 项全过**（app 146 / markdown 172 / desktop bin 55 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **183 项**（18 文件，unit + dom 两个 project：`ime` / `caretline` / `selection` / `dragscroll` / `outline` / `theme` / `update-format` / `find` / `clipboard` / `html-to-md` / `skin` / CRLF 视图 / 环境能力 / 滚动条 / 图片大纲 / 内核启动），由 `pnpm test` 一次跑完
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 107/107」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 9 项**、**字数 2 项**、**查找替换 8 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**、**行内格式 5 项**、**插入 4 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 111/111」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 9 项**、**字数 2 项**、**查找替换 8 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**、**行内格式 5 项**、**插入 4 项**、**偏好设置 4 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
   - **必须走 `pnpm tauri dev`**：debug 构建会按 `devUrl` 加载 `http://localhost:1450`，没有 Vite 时窗口标题只有配置里的 `mdview`、页面白屏、日志停在「启动」一行——不是回归。想直接用 `target/debug/mdview-desktop.exe` 跑自检，手工起的 Vite **必须绑 IPv4**（`pnpm dev --host 127.0.0.1`，别再夹一层 `--`：pnpm 会把 `--` 原样传给 vite，host 不生效）：Vite 默认在这台机器上只监听 `[::1]`，WebView2 打不开 `localhost` 时同样白屏，且 CDP 里页面的 `title` 会停在 `about:blank`
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
@@ -534,8 +538,9 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
 
 1. ~~**M6-1 行内格式快捷操作**~~ **已完成（2026-11-26）**：`Ctrl+B/I/Shift+X/E` + 编辑菜单四档 + 自检 5 项，见第 6 节
 2. ~~**M6-2 插入菜单 + `Ctrl+K` 插入链接**~~ **已完成（2026-11-26）**：插入菜单七项、图片复制到 `assets/`、自检 4 项，见第 6 节
-3. **M6-3 偏好设置 + M6-4 自动保存** —— 下一步；共用偏好层，一起做
-4. **M6-5 导出 HTML** —— 有出口才算「写完」
+3. ~~**M6-3 偏好设置面板**~~ **已完成（2026-11-26）**：`Ctrl+,` + 五项排版偏好 + 缩进宽度进内核，见第 6 节
+4. **M6-4 自动保存与崩溃恢复** —— 下一步
+5. **M6-5 导出 HTML** —— 有出口才算「写完」
 5. **M6-6 文件侧栏**
 6. **M6-7 多标签页**（先出设计，别边写边改）
 7. **M6-8 编码 / M6-9 性能 / M6-10 表格**

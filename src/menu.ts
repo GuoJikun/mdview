@@ -50,6 +50,8 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
     { action: 'save', label: '保存', acc: 'Ctrl+S' },
     { action: 'save-as', label: '另存为…', acc: 'Ctrl+Shift+S' },
     { sep: true },
+    { action: 'settings', label: '偏好设置…', acc: 'Ctrl+,' },
+    { sep: true },
     { action: 'close-window', label: '关闭窗口', acc: 'Alt+F4', danger: true },
   ],
   edit: [

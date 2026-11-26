@@ -317,9 +317,10 @@ html[data-skin="hyperos"] .dialog-backdrop {
   -webkit-backdrop-filter: blur(4px);
 }
 
-/* ---- 正文：字体跟随皮肤，代码块与引用按 HyperOS 的软圆角处理 ---- */
-html[data-skin="hyperos"] body,
-html[data-skin="hyperos"] #doc { font-family: var(--font-ui); }
+/* ---- 正文：代码块与引用按 HyperOS 的软圆角处理 ----
+   body 的字体仍跟随皮肤（外壳控件用它），但正文字体不在这里定：
+   `#doc` 显式读 --doc-font，用户在偏好面板里选过就该听用户的。 */
+html[data-skin="hyperos"] body { font-family: var(--font-ui); }
 html[data-skin="hyperos"] #doc .code {
   border-radius: 12px;
   border-color: transparent;

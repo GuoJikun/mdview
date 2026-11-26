@@ -6,6 +6,7 @@
   <Toast />
   <UpdateDialog v-if="updateOpen" />
   <AboutDialog v-if="aboutOpen" />
+  <SettingsDialog v-if="settingsOpen" />
 </template>
 
 <script setup lang="ts">
@@ -16,9 +17,12 @@ import StatusBar from './components/StatusBar.vue';
 import Toast from './components/Toast.vue';
 import UpdateDialog from './components/UpdateDialog.vue';
 import AboutDialog from './components/AboutDialog.vue';
+import SettingsDialog from './components/SettingsDialog.vue';
 import { about } from './about';
+import { settings } from './settings';
 import { update } from './update';
 
 const updateOpen = computed(() => update.open);
 const aboutOpen = computed(() => about.open);
+const settingsOpen = computed(() => settings.open);
 </script>

@@ -175,6 +175,11 @@ pub enum Message {
     Indent {
         outdent: bool,
     },
+    /// 普通块 `Tab` 的缩进宽度（偏好设置）。列表仍按标记宽度缩进——
+    /// `- ` 两格、`1. ` 三格，改成 4 会让子项落进标记中间。
+    SetIndentWidth {
+        width: usize,
+    },
     /// 改链接或图片的地址 / 文字（图片是 alt）。`stop` 落在目标内部即可，
     /// 内核自己找对应的 Link / Image 片段并整段重写，一次事务、一步撤销。
     EditLink {
@@ -288,6 +293,9 @@ pub struct AppState {
     pub selection: Selection,
     /// 输入法组合期间为真：所有编辑消息被吞掉，只等 `CompositionCommit` 一次性提交。
     pub composing: bool,
+    /// 普通块按 `Tab` 时插入的空格数，来自偏好设置。列表仍按标记宽度缩进——
+    /// `- ` 两格、`1. ` 三格，换成 4 会让子项落进标记中间。
+    pub indent_width: usize,
     /// 上一次渲染的分块帧，供增量重绘求差集。
     frames: Vec<BlockFrame>,
     saved_fingerprint: Option<Fingerprint>,
@@ -360,6 +368,7 @@ impl AppState {
             path,
             selection: Selection::caret(0),
             composing: false,
+            indent_width: INDENT_WIDTH,
             frames: Vec::new(),
             saved_fingerprint,
             parser: MarkdownParser::gfm(),
@@ -596,6 +605,10 @@ impl AppState {
             Message::Cut => self.cut(),
             Message::TableMoveCell { delta } => self.table_move_cell(delta),
             Message::Indent { outdent } => self.indent(outdent),
+            Message::SetIndentWidth { width } => {
+                self.indent_width = width.clamp(1, 8);
+                Vec::new()
+            }
             Message::EditLink {
                 stop,
                 url,
@@ -875,7 +888,7 @@ impl AppState {
         // 正文里 Tab 就是在光标处插缩进（与 VSCode 一致）；列表项与反缩进走「行」的规则
         if !outdent && self.line_list_position(line_start, line_end).is_none() {
             let at = self.caret_char_offset();
-            return self.apply(at..at, &" ".repeat(INDENT_WIDTH));
+            return self.apply(at..at, &" ".repeat(self.indent_width));
         }
         let src = self.document.text();
         let Some(edit) = self.line_indent_edit(&src, line_start, line_end, outdent, None) else {
@@ -999,7 +1012,7 @@ impl AppState {
             return None;
         }
         let lead = body.len() - body.trim_start_matches([' ', '\t']).len();
-        let unit = Self::marker_width(body).unwrap_or(INDENT_WIDTH);
+        let unit = Self::marker_width(body).unwrap_or(self.indent_width);
         if outdent {
             let list = self.line_list_position(line_start, line_end);
             if lead == 0 || matches!(list, Some((0, _))) {
@@ -4281,6 +4294,40 @@ mod tests {
             "- 甲",
             "顶层第一项没有父级，不该插空格"
         );
+    }
+
+    /// 缩进宽度来自偏好设置，但只作用于普通块：列表项仍按标记宽度缩进
+    /// （`- ` 两格、`1. ` 三格），改成 4 会让子项落进标记中间。
+    #[test]
+    fn indent_width_applies_to_paragraphs_but_not_lists() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲");
+        click(&mut app, &files, 3);
+        app.update(Message::SetIndentWidth { width: 4 }, &files);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(app.document.text(), "甲    ", "普通块按偏好的 4 空格缩进");
+
+        // 换成列表：同样的偏好下仍按 `- ` 的两格缩进
+        let mut app = open(&mut files, "- 甲\n- 乙");
+        click(&mut app, &files, 8);
+        app.update(Message::SetIndentWidth { width: 4 }, &files);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(app.document.text(), "- 甲\n  - 乙", "列表缩进不看偏好宽度");
+    }
+
+    /// 越界的宽度不能写进内核：0 会让 Tab 变成不动的键，40 会把正文推出屏幕。
+    #[test]
+    fn indent_width_is_clamped() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲");
+        click(&mut app, &files, 3);
+        app.update(Message::SetIndentWidth { width: 0 }, &files);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(app.document.text(), "甲 ", "最小一空格，Tab 不能变成空操作");
+
+        app.update(Message::SetIndentWidth { width: 999 }, &files);
+        app.update(Message::Indent { outdent: false }, &files);
+        assert_eq!(app.document.text(), "甲         ", "最多八空格");
     }
 
     #[test]
