@@ -66,7 +66,11 @@ impl Backdrop {
     }
 
     fn mode(&self) -> Mode {
-        self.mode.lock().ok().map(|guard| *guard).unwrap_or_default()
+        self.mode
+            .lock()
+            .ok()
+            .map(|guard| *guard)
+            .unwrap_or_default()
     }
 
     fn set_mode(&self, mode: Mode) {
