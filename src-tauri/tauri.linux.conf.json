@@ -21,6 +21,7 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.png"
-    ]
+    ],
+    "targets": ["appimage", "deb", "rpm"]
   }
 }
