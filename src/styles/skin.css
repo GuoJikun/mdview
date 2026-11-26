@@ -1,0 +1,332 @@
+/* ==========================================================================
+   皮肤层 · 两套外观
+   --------------------------------------------------------------------------
+   <html data-skin="macos|hyperos"> 管风格，<html data-theme="light|dark"> 管明暗，
+   两个属性正交，组合出四种外观。
+
+   • 没写 data-skin 时 = app.css 的默认值 = macOS 观感，与改造前逐像素一致。
+   • 这里的规则都带 html[data-skin="hyperos"] 前缀，特异性高于 app.css 里
+     对应的类选择器；带 id 的那几条用同等前缀加 id，也压得住 app.css 的
+     `html.custom-titlebar #x`（同为「1 个 id + 1 个类」但写在后面）。
+   • 尺寸差异走 app.css 里的 --chrome-h / --outline-w / --bar-* 变量，
+     这里只覆盖变量值，正文与滚动条的定位会自动跟着变。
+   ========================================================================== */
+
+/* ---------- 1. HyperOS 4.0 · 浅色 ---------- */
+:root[data-skin="hyperos"] {
+  /* 画布与正文 */
+  --bg: #eef1f7;
+  --fg: #14161c;
+  --muted: #5b6272;
+  --faint: #8d94a5;
+  --border: rgba(20, 22, 28, .09);
+  --code-bg: rgba(20, 22, 28, .045);
+  --inline-code-bg: rgba(20, 22, 28, .055);
+  --rule: rgba(20, 22, 28, .12);
+  --quote-border: #c9d3e6;
+  --link: #2b6fe0;
+  --caret: #3482ff;
+  --sel: rgba(52, 130, 255, .2);
+  --preedit-bg: #fff;
+  --toast-bg: rgba(24, 26, 32, .92);
+  --toast-fg: #fff;
+
+  /* 外壳 */
+  --chrome: rgba(255, 255, 255, .9);
+  --hairline: transparent;
+  --control: #fff;
+  --text: #14161c;
+  --text2: #5b6272;
+  --text3: #8d94a5;
+  --icon: #3c4354;
+  --accent: #3482ff;
+  --accent-soft: rgba(52, 130, 255, .13);
+  --hover: rgba(20, 22, 28, .055);
+  --press: rgba(20, 22, 28, .1);
+  --danger: #ff453a;
+  --tile-border: rgba(20, 22, 28, .06);
+  --shadow-menu:
+    0 16px 48px -12px rgba(26, 40, 92, .28),
+    0 0 0 .5px rgba(20, 22, 28, .06);
+  --tb-scroll-thumb: rgba(20, 22, 28, .24);
+  --tb-scroll-thumb-hover: rgba(20, 22, 28, .46);
+
+  /* 侧栏与状态栏 */
+  --outline-bg: rgba(255, 255, 255, .66);
+  --outline-hover: rgba(20, 22, 28, .05);
+  --outline-active-bg: linear-gradient(90deg, rgba(52, 130, 255, .16), rgba(0, 198, 255, .1));
+  --outline-active-fg: #2b6fe0;
+  --outline-border: transparent;
+  --bar-bg: rgba(255, 255, 255, .92);
+
+  --font-ui: "MiSans", "HarmonyOS Sans SC", "PingFang SC", "Segoe UI Variable Text",
+    "Microsoft YaHei UI", sans-serif;
+
+  /* 布局换挡：34px 标题栏 + 212px 浮动侧栏 + 胶囊状态栏 */
+  --chrome-h: 34px;
+  --outline-w: 212px;
+  --canvas-gap: 10px;
+  --bar-h: 28px;
+  --bar-gap: 10px;
+
+  /* 皮肤内部用到的几何，集中在这里便于两头对齐 */
+  --sk-radius-card: 18px;
+  --sk-radius-pop: 16px;
+  --sk-radius-control: 10px;
+  --sk-shadow-card:
+    0 1px 2px rgba(20, 22, 28, .035),
+    0 10px 30px -14px rgba(26, 40, 92, .16);
+  --sk-card-edge: rgba(255, 255, 255, .6);
+  /* 菜单分隔线。不能复用 --hairline：HyperOS 的标题栏是无边框的，
+     那个变量在这里必须是 transparent，分隔线得有自己的颜色。 */
+  --sk-line: rgba(20, 22, 28, .075);
+}
+
+/* ---------- 2. HyperOS 4.0 · 深色 ----------
+   必须逐项重写上面那一块的全部键：本块特异性更高，但没写的键会沿用浅色值。 */
+:root[data-skin="hyperos"][data-theme="dark"] {
+  --bg: #14161c;
+  --fg: #e8eaf0;
+  --muted: #a2a9ba;
+  --faint: #767d8e;
+  --border: rgba(255, 255, 255, .09);
+  --code-bg: rgba(255, 255, 255, .055);
+  --inline-code-bg: rgba(255, 255, 255, .08);
+  --rule: rgba(255, 255, 255, .14);
+  --quote-border: #3a4252;
+  --link: #7fb0ff;
+  --caret: #4c8dff;
+  --sel: rgba(76, 141, 255, .26);
+  --preedit-bg: #1c2029;
+  --toast-bg: rgba(62, 66, 78, .96);
+  --toast-fg: #f2f3f7;
+
+  --chrome: rgba(24, 26, 32, .9);
+  --hairline: transparent;
+  --control: #22252d;
+  --text: #f2f3f7;
+  --text2: #a2a9ba;
+  --text3: #767d8e;
+  --icon: #c8cfdd;
+  --accent: #4c8dff;
+  --accent-soft: rgba(76, 141, 255, .2);
+  --hover: rgba(255, 255, 255, .07);
+  --press: rgba(255, 255, 255, .12);
+  --danger: #ff6a60;
+  --tile-border: rgba(255, 255, 255, .09);
+  --shadow-menu:
+    0 18px 50px -12px rgba(0, 0, 0, .7),
+    0 0 0 .5px rgba(255, 255, 255, .1);
+  --tb-scroll-thumb: rgba(255, 255, 255, .24);
+  --tb-scroll-thumb-hover: rgba(255, 255, 255, .5);
+
+  --outline-bg: rgba(255, 255, 255, .062);
+  --outline-hover: rgba(255, 255, 255, .06);
+  --outline-active-bg: linear-gradient(90deg, rgba(76, 141, 255, .24), rgba(58, 210, 255, .12));
+  --outline-active-fg: #7fb0ff;
+  --outline-border: transparent;
+  --bar-bg: rgba(38, 41, 50, .92);
+
+  --chrome-h: 34px;
+  --outline-w: 212px;
+  --canvas-gap: 10px;
+  --bar-h: 28px;
+  --bar-gap: 10px;
+
+  --sk-radius-card: 18px;
+  --sk-radius-pop: 16px;
+  --sk-radius-control: 10px;
+  --sk-shadow-card:
+    0 1px 2px rgba(0, 0, 0, .3),
+    0 12px 32px -14px rgba(0, 0, 0, .5);
+  --sk-card-edge: rgba(255, 255, 255, .1);
+  --sk-line: rgba(255, 255, 255, .085);
+}
+
+/* ---------- 3. macOS · Mica ----------
+   只把强调色对齐设计稿（#007aff）；其余保持 app.css 默认，也就是改造前的观感。 */
+:root[data-skin="macos"] {
+  --accent: #007aff;
+  --accent-soft: rgba(0, 122, 255, .12);
+}
+:root[data-skin="macos"][data-theme="dark"] {
+  --accent: #0a84ff;
+  --accent-soft: rgba(10, 132, 255, .18);
+}
+
+/* ==========================================================================
+   4. HyperOS 的结构差异
+   ========================================================================== */
+
+/* ---- 标题栏：34px，无分隔线，菜单项是胶囊 ---- */
+html[data-skin="hyperos"].custom-titlebar #titlebar {
+  height: var(--chrome-h);
+  border-bottom-color: transparent;
+  background: var(--chrome);
+}
+html[data-skin="hyperos"] .tb-menu {
+  height: calc(var(--chrome-h) - 12px);
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+html[data-skin="hyperos"] .tb-menu.open {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+html[data-skin="hyperos"] .tb-title { font-size: 13.5px; }
+html[data-skin="hyperos"] .tb-logo { width: 20px; height: 20px; margin: 0 6px 0 10px; }
+html[data-skin="hyperos"] .tb-logo img { width: 18px; height: 18px; border-radius: 6px; }
+html[data-skin="hyperos"] .tb-ctl { width: 44px; }
+
+/* ---- 下拉菜单：16px 圆角、30px 行高、9px 行圆角 ---- */
+html[data-skin="hyperos"] #tb-menu-popup {
+  padding: 6px;
+  border-radius: var(--sk-radius-pop);
+  border-color: var(--tile-border);
+  font-size: 13px;
+}
+html[data-skin="hyperos"] #tb-menu-popup button {
+  height: 30px;
+  border-radius: 9px;
+  font-size: 13px;
+}
+html[data-skin="hyperos"] #tb-menu-popup .tb-submenu {
+  padding: 6px;
+  border-radius: 14px;
+}
+html[data-skin="hyperos"] #tb-menu-popup .gutter { width: 26px; }
+html[data-skin="hyperos"] #tb-menu-popup .tb-sep {
+  margin: 5px 6px 5px 26px;
+  background: var(--sk-line);
+}
+/* 选中指示器：设计稿里一律是强调色勾（单选组也不用圆点）。
+   勾的颜色要跟着悬停态转白，否则蓝勾压在强调色底上会看不见。 */
+html[data-skin="hyperos"] #tb-menu-popup .gutter .mark-check { color: var(--accent); }
+html[data-skin="hyperos"] #tb-menu-popup .gutter[data-mark] .mark-check { display: block; }
+html[data-skin="hyperos"] #tb-menu-popup .gutter .mark-dot { display: none; }
+html[data-skin="hyperos"] #tb-menu-popup button:hover .mark-check,
+html[data-skin="hyperos"] #tb-menu-popup button.focused .mark-check,
+html[data-skin="hyperos"] #tb-menu-popup .submenu-trigger.open .mark-check { color: #fff; }
+
+/* ---- 大纲侧栏：浮起的玻璃卡片，与正文之间留出 10px 缝 ---- */
+html[data-skin="hyperos"] #outline {
+  top: calc(var(--chrome-h) + var(--canvas-gap));
+  bottom: calc(var(--bar-h) + var(--bar-gap) + 8px);
+  padding: 16px 10px 14px;
+  border: 1px solid var(--sk-card-edge);
+  border-right: 1px solid var(--sk-card-edge);
+  border-radius: var(--sk-radius-card);
+  background: var(--outline-bg);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: var(--sk-shadow-card);
+  font-family: var(--font-ui);
+}
+/* 阅读/源码视图不显示状态栏（app.css 里 #bar 直接 display:none），但上面的
+   bottom 是按状态栏高度算的固定值，不会跟着变——卡片底部会空出一条 46px 的
+   空白，看起来像大纲没长到底。这两种视图下卡片直接落到窗口底边，只留
+   --canvas-gap 的缝，与上、左两侧对齐。源码视图本来就不显示大纲，一起写上
+   以免以后改规则时漏掉。 */
+html[data-skin="hyperos"][data-view="reading"] #outline,
+html[data-skin="hyperos"][data-view="source"] #outline {
+  bottom: var(--canvas-gap);
+}
+html[data-skin="hyperos"] #outline .oc-title {
+  padding: 0 10px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+html[data-skin="hyperos"] #outline a {
+  padding: 5px 10px;
+  border-radius: 9px;
+  font-size: 12.5px;
+}
+html[data-skin="hyperos"] #outline a.active {
+  box-shadow: inset 0 0 0 1px rgba(52, 130, 255, .14);
+}
+html[data-skin="hyperos"][data-theme="dark"] #outline a.active {
+  box-shadow: inset 0 0 0 1px rgba(76, 141, 255, .2);
+}
+
+/* ---- 状态栏：悬浮胶囊 ---- */
+html[data-skin="hyperos"] #bar {
+  left: var(--canvas-gap);
+  right: var(--canvas-gap);
+  bottom: var(--bar-gap);
+  padding: 7px 14px;
+  gap: 14px;
+  border: 1px solid var(--sk-card-edge);
+  border-top: 1px solid var(--sk-card-edge);
+  border-radius: 999px;
+  background: var(--bar-bg);
+  font: 11.5px/1 var(--font-ui);
+  box-shadow: var(--sk-shadow-card);
+}
+html[data-skin="hyperos"] #bar .hint { font-size: 11px; }
+html[data-skin="hyperos"] #bar .table-tools button { border-radius: 999px; }
+
+/* ---- 查找栏 / 链接面板：同族的 16px 浮层，输入框改为无边框填充 ---- */
+html[data-skin="hyperos"] #findbar,
+html[data-skin="hyperos"] #linkedit {
+  padding: 8px;
+  border-radius: var(--sk-radius-pop);
+  border-color: var(--tile-border);
+  font-family: var(--font-ui);
+}
+html[data-skin="hyperos"] #findbar .find-field {
+  height: 30px;
+  border-color: transparent;
+  border-radius: var(--sk-radius-control);
+  background: var(--hover);
+}
+html[data-skin="hyperos"] #findbar .find-field:focus-within {
+  border-color: var(--accent);
+}
+html[data-skin="hyperos"] #findbar button { height: 26px; border-radius: 8px; }
+html[data-skin="hyperos"] #findbar .find-menu {
+  border-radius: 14px;
+  padding: 6px;
+}
+html[data-skin="hyperos"] #linkedit input {
+  height: 30px;
+  border-color: transparent;
+  border-radius: var(--sk-radius-control);
+  background: var(--hover);
+}
+html[data-skin="hyperos"] #linkedit button {
+  height: 30px;
+  border-color: transparent;
+  border-radius: 999px;
+  background: var(--hover);
+}
+/* 主按钮：上一条会把底色调成 --hover，这里要按同一个前缀补回来 */
+html[data-skin="hyperos"] #linkedit button.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+/* ---- 对话框：更大的圆角，遮罩加重一档 ---- */
+html[data-skin="hyperos"] .dialog { border-radius: 20px; }
+html[data-skin="hyperos"] .dialog-backdrop {
+  background: rgba(20, 22, 28, .36);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* ---- 正文：字体跟随皮肤，代码块与引用按 HyperOS 的软圆角处理 ---- */
+html[data-skin="hyperos"] body,
+html[data-skin="hyperos"] #doc { font-family: var(--font-ui); }
+html[data-skin="hyperos"] #doc .code {
+  border-radius: 12px;
+  border-color: transparent;
+}
+html[data-skin="hyperos"] #doc blockquote {
+  padding: .55em 1em;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  background: var(--accent-soft);
+}

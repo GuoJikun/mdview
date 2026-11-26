@@ -11,8 +11,18 @@
         "minHeight": 360,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
+        "transparent": true,
         "visible": false
       }
     ]
+  },
+  "bundle": {
+    "icon": [
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.icns"
+    ],
+    "targets": ["dmg", "app"]
   }
 }

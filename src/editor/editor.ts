@@ -39,6 +39,8 @@ import {
 } from './outline.js';
 import { shouldClearSelection } from './selection.js';
 import * as mdviewTheme from './theme.js';
+// 外观皮肤（macOS / HyperOS）。与 theme.js 正交：一个管明暗，一个管风格。
+import * as mdviewSkin from '../skin';
 
 // 这几个节点在 index.html 里是写死的骨架，缺任何一个后续都会立刻炸。
 // 断言只影响类型，不改运行时行为（真拿不到时，仍是首次调用处的 TypeError）。
@@ -489,11 +491,20 @@ function runFind() {
   findMatcher = { re: built.re };
   const text = findHaystack();
   const offsets = utf8Offsets(text);
-  const scope = findInSelection ? selectionByteRange() : null;
+  // 源码视图的命中只需要 UTF-16 下标：高亮与替换都交给 textarea 自己。
+  // 不能再算 byte 去换停靠点——`textarea.value` 已被规范把 CRLF 归一成 LF，
+  // 与内核原文差一个字节，首行之后全部换算落空，表现为「切到源码视图就搜不到」。
+  // 「仅在选区内」的范围来自停靠点，同样只对编辑态成立。
+  const sourceMode = window.__mdviewMode === 'source';
+  const scope = !sourceMode && findInSelection ? selectionByteRange() : null;
   for (const hit of scanMatches(text, findMatcher)) {
     const startByte = offsets[hit.start];
     const endByte = offsets[hit.end];
     if (scope && (startByte < scope.start || endByte > scope.end)) continue;
+    if (sourceMode) {
+      findMatches.push({ start: hit.start, end: hit.end, startByte, endByte, startStop: 0, endStop: 0 });
+      continue;
+    }
     const range = stopRangeFor(startByte, endByte);
     if (!range) continue;
     findMatches.push({ start: hit.start, end: hit.end, startByte, endByte, ...range });
@@ -1085,6 +1096,7 @@ function pushShellState() {
     mode: window.__mdviewMode ?? 'wysiwyg',
     themeMode: mdviewTheme.mode() as ThemeMode,
     theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
+    skin: mdviewSkin.mode(),
     outline,
     activeOutlineIdx,
   });
@@ -1250,6 +1262,17 @@ function runAction(action: string) {
     case 'theme-dark':
       mdviewTheme.set(action.slice(6));
       break;
+    case 'skin-hyperos':
+    case 'skin-macos': {
+      mdviewSkin.set(action.slice(5) as mdviewSkin.SkinName);
+      // 两套皮肤的标题栏高度、侧栏宽度、状态栏高度都不同：光标矩形与自绘
+      // 滚动条的轨道都是按实测几何算的，下一帧统一重量一次，否则会错位。
+      requestAnimationFrame(() => {
+        applyCaret(caret, false, true);
+        window.__mdviewRefreshScrollbar?.();
+      });
+      break;
+    }
     case 'mode-wysiwyg':
       flushSource(); applyViewMode('wysiwyg'); send({ kind: 'setMode', mode: 'wysiwyg' }); break;
     case 'mode-reading':
@@ -2429,16 +2452,22 @@ window.__mdviewSelfTest = async function () {
     } catch (_) {}
     mdviewTheme.init(); // 按恢复后的偏好重新应用
 
-    // 视图 → 主题 是三档子菜单，当前档带圆点；三个动作都要真正落地
+    // 视图 → 主题 是三档子菜单，当前档带圆点；三个动作都要真正落地。
+    // 视图菜单里现在有两个子菜单（外观 / 主题），所以按标签取，不能取第一个。
     const viewBtn = document.querySelector<HTMLElement>('#tb-menus [data-menu="view"]');
     if (viewBtn) {
       viewBtn.click();
       await nextTick();
       const popup = document.getElementById('tb-menu-popup');
-      const trigger = popup ? popup.querySelector('.submenu-trigger') : null;
-      check('视图菜单有主题子菜单', !!trigger &&
-        trigger.querySelector('.label')?.textContent === '主题',
-        trigger ? trigger.textContent : '无子菜单触发器');
+      const triggers = popup
+        ? Array.from(popup.querySelectorAll<HTMLElement>('.submenu-trigger'))
+        : [];
+      const labelOf = (el: HTMLElement | undefined) =>
+        el?.querySelector('.label')?.textContent ?? '';
+      const trigger = triggers.find((t) => labelOf(t) === '主题') ?? null;
+      check('视图菜单有主题子菜单', !!trigger, triggers.map(labelOf).join('/') || '无子菜单');
+      check('视图菜单有外观子菜单',
+        triggers.some((t) => labelOf(t) === '外观'), triggers.map(labelOf).join('/'));
       if (trigger && popup) {
         trigger.dispatchEvent(new Event('pointerenter'));
         await nextTick();
@@ -2449,9 +2478,32 @@ window.__mdviewSelfTest = async function () {
         check('主题子菜单是三档',
           actions === 'theme-system,theme-light,theme-dark', actions);
         const active = 'theme-' + mdviewTheme.mode();
-        check('当前档位带圆点',
-          subBtns.some((b) => b.dataset.action === active &&
-            !!b.querySelector('.gutter .dot')), active);
+        // 菜单是皮肤差异最容易翻车的地方，两项都按皮肤各验一遍：
+        // ① 选中标记的形状由皮肤决定（macOS 圆点、HyperOS 强调色勾），只要求
+        //    「当前档位有一个真正可见的标记」，不绑定具体类名；
+        // ② 分隔线不能复用 --hairline —— HyperOS 为了无边框标题栏把它设成了
+        //    transparent，复用就会连分隔线一起消失。
+        const alphaOf = (color: string): number => {
+          const m = color.match(/rgba?\(([^)]+)\)/);
+          if (!m) return 0;
+          const parts = m[1].split(',').map((v) => parseFloat(v));
+          return parts.length > 3 ? parts[3] : 1;
+        };
+        const skinNow = mdviewSkin.mode();
+        for (const skin of ['hyperos', 'macos'] as const) {
+          mdviewSkin.set(skin);
+          await new Promise((r) => requestAnimationFrame(r));
+          const cur = Array.from(
+            popup.querySelectorAll<HTMLElement>('.tb-submenu button[data-action]')
+          ).find((b) => b.dataset.action === active);
+          check(`当前档位带标记(${skin})`,
+            !!cur && Array.from(cur.querySelector('.gutter[data-mark]')?.children ?? [])
+              .some((el) => (el as HTMLElement).getClientRects().length > 0), active);
+          const sepEl = popup.querySelector<HTMLElement>('.tb-sep');
+          const sepBg = sepEl ? getComputedStyle(sepEl).backgroundColor : '';
+          check(`菜单分隔线可见(${skin})`, alphaOf(sepBg) > .02, sepBg || '无分隔线');
+        }
+        mdviewSkin.set(skinNow);
         // 回归：鼠标移到子菜单项上不能让面板消失。普通菜单项的 pointerenter
         // 会收起子菜单，但子菜单内部的项必须豁免，否则永远点不到这些项。
         if (subBtns.length) {
@@ -2478,6 +2530,27 @@ window.__mdviewSelfTest = async function () {
           mdviewTheme.resolve(null, mdviewTheme.systemTheme()), mdviewTheme.mode());
     mdviewTheme.set(themePref); // 恢复原始偏好
 
+    // 外观（皮肤）与主题正交：切换要真的写到 <html data-skin>，不只是菜单圆点
+    const skinPref = mdviewSkin.mode();
+    window.__mdviewRunAction?.('skin-hyperos');
+    check('外观切到 HyperOS 生效',
+      mdviewSkin.mode() === 'hyperos' &&
+        document.documentElement.getAttribute('data-skin') === 'hyperos', mdviewSkin.mode());
+    window.__mdviewRunAction?.('skin-macos');
+    check('外观切到 macOS 生效',
+      mdviewSkin.mode() === 'macos' &&
+        document.documentElement.getAttribute('data-skin') === 'macos', mdviewSkin.mode());
+    mdviewSkin.set(skinPref); // 恢复原始皮肤，别把评审者的选择改掉
+
+    // 标题栏标识走 asset import，路径写错时 <img> 只会静默空着，肉眼很难发现。
+    // 这里按解码后的实际尺寸判断，而不是看 src 有没有值。
+    {
+      const logo = document.querySelector<HTMLImageElement>('#titlebar .tb-logo img');
+      check('标题栏标识已加载',
+        !!logo && logo.complete && logo.naturalWidth > 0,
+        logo ? `${logo.naturalWidth}×${logo.naturalHeight}` : '无 img');
+    }
+
     // 三种视图必须真正切换 DOM，而不是只换菜单圆点、正文永远是所见即所得
     runAction('mode-source');
     check('切到源码视图 data-view=source',
@@ -2494,6 +2567,21 @@ window.__mdviewSelfTest = async function () {
     check('切到阅读视图 data-view=reading',
       document.documentElement.dataset.view === 'reading',
       String(document.documentElement.dataset.view));
+    // 阅读视图隐藏了状态栏，HyperOS 的大纲是个浮起卡片、bottom 按状态栏高度
+    // 算的固定值，不跟着变就会在底部空出一条 46px 的缝（看起来像大纲没长到底）。
+    // 两套皮肤都要量：HyperOS 期望留 --canvas-gap，macOS 贴边为 0。
+    for (const skin of ['hyperos', 'macos'] as const) {
+      window.__mdviewRunAction?.(`skin-${skin}`);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const navBox = document.getElementById('outline')?.getBoundingClientRect();
+      const gapPx = parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--canvas-gap'),
+      ) || 0;
+      check(`阅读视图大纲贴到底边(${skin})`,
+        !!navBox && Math.abs(window.innerHeight - navBox.bottom - gapPx) <= 1.5,
+        navBox ? `底部缝 ${+(window.innerHeight - navBox.bottom).toFixed(1)}px / 期望 ${gapPx}px` : '无大纲');
+    }
+    mdviewSkin.set(skinPref); // 恢复原始皮肤
     runAction('mode-wysiwyg');
     check('切回所见即所得 data-view=wysiwyg',
       document.documentElement.dataset.view === 'wysiwyg',

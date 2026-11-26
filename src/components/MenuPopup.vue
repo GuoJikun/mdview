@@ -19,6 +19,7 @@
           :class="{ open: openSubIndex === i }"
           role="menuitem"
           aria-haspopup="true"
+          :data-sub-index="i"
           @pointerenter="openSubIndex = i"
           @click.stop="toggleSub(i)"
         >
@@ -42,9 +43,12 @@
               @pointerenter.stop
               @click="run(item.action)"
             >
-              <span class="gutter">
-                <Check v-if="isChecked(item) && item.mark !== 'dot'" :size="14" :stroke-width="2.4" />
-                <span v-else-if="isChecked(item)" class="dot"></span>
+              <span
+                class="gutter"
+                :data-mark="isChecked(item) ? (item.mark ?? 'check') : null"
+              >
+                <Check class="mark-check" :size="14" :stroke-width="2.4" />
+                <span class="mark-dot"></span>
               </span>
               <span class="label">{{ item.label }}</span>
               <span v-if="item.acc" class="acc">{{ item.acc }}</span>
@@ -64,9 +68,12 @@
         @pointerenter="openSubIndex = null"
         @click="run(entry.action)"
       >
-        <span class="gutter">
-          <Check v-if="isChecked(entry) && entry.mark !== 'dot'" :size="14" :stroke-width="2.4" />
-          <span v-else-if="isChecked(entry)" class="dot"></span>
+        <span
+          class="gutter"
+          :data-mark="isChecked(entry) ? (entry.mark ?? 'check') : null"
+        >
+          <Check class="mark-check" :size="14" :stroke-width="2.4" />
+          <span class="mark-dot"></span>
         </span>
         <span class="label">{{ entry.label }}</span>
         <span v-if="entry.acc" class="acc">{{ entry.acc }}</span>
@@ -117,9 +124,10 @@ function recentEntries(): MenuEntry[] {
 
 function isChecked(entry: MenuEntry): boolean {
   if (!entry.checked) return false;
-  // 勾选态来自两处：编辑内核推上来的主题/模式，以及纯外壳的自动检查开关。
+  // 勾选态来自两处：编辑内核推上来的主题/皮肤/模式，以及纯外壳的自动检查开关。
   return !!entry.checked({
     themeMode: state.themeMode,
+    skin: state.skin,
     mode: state.mode,
     autoUpdate: update.autoUpdate,
   });
@@ -135,15 +143,40 @@ function run(action?: string): void {
   dispatch(action);
 }
 
+/**
+ * 可导航的菜单项。
+ *
+ * 不能只取 `button[data-action]`：子菜单触发器（最近打开 / 外观 / 主题）没有
+ * action，按方向键永远跳不过去。折叠的子菜单是 `v-if`，不在 DOM 里；展开之后
+ * 它的条目紧跟触发器，正好接在导航序列里。
+ */
 function popupButtons(): HTMLButtonElement[] {
-  return Array.from(popupEl.value?.querySelectorAll<HTMLButtonElement>('button[data-action]') ?? []);
+  return Array.from(popupEl.value?.querySelectorAll<HTMLButtonElement>('button') ?? []);
 }
 
-function highlight(index: number): void {
+/** 方向键移动高亮。还没有高亮时：下键从头、上键从尾。 */
+function stepHighlight(delta: number): void {
   const buttons = popupButtons();
   if (!buttons.length) return;
-  menuState.activeIndex = (index + buttons.length) % buttons.length;
-  buttons.forEach((btn, i) => btn.classList.toggle('focused', i === menuState.activeIndex));
+  const count = buttons.length;
+  const from = menuState.activeIndex;
+  const next = from < 0
+    ? (delta > 0 ? 0 : count - 1)
+    : (from + delta + count) % count;
+  menuState.activeIndex = next;
+  buttons.forEach((btn, i) => btn.classList.toggle('focused', i === next));
+}
+
+/** Enter：普通项直接执行，子菜单触发器展开 / 收起。 */
+function activate(index: number): void {
+  const btn = popupButtons()[index];
+  if (!btn) return;
+  if (btn.dataset.action) {
+    run(btn.dataset.action);
+    return;
+  }
+  const sub = btn.dataset.subIndex;
+  if (sub !== undefined) toggleSub(Number(sub));
 }
 
 function onDocMousedown(event: MouseEvent): void {
@@ -163,14 +196,11 @@ function onKeydown(event: KeyboardEvent): void {
   event.preventDefault();
   event.stopPropagation();
   if (event.key === 'Escape') closeMenu();
-  else if (event.key === 'ArrowDown') highlight(menuState.activeIndex + 1);
-  else if (event.key === 'ArrowUp') highlight(menuState.activeIndex - 1);
+  else if (event.key === 'ArrowDown') stepHighlight(1);
+  else if (event.key === 'ArrowUp') stepHighlight(-1);
   else if (event.key === 'ArrowLeft') switchMenu(-1);
   else if (event.key === 'ArrowRight') switchMenu(1);
-  else if (menuState.activeIndex >= 0) {
-    const btn = popupButtons()[menuState.activeIndex];
-    if (btn?.dataset.action) run(btn.dataset.action);
-  }
+  else activate(menuState.activeIndex);
 }
 
 // 打开后量一次宽度再定位；右侧放不下时整体左移（与原实现一致）。

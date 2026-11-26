@@ -1,3 +1,19 @@
+/* ==========================================================================
+   基础层 · 令牌与全部组件样式
+   --------------------------------------------------------------------------
+   这一层就是改造前那份 app.css，只是挪进了 styles/ 目录。样式按加载顺序分四层，
+   后一层只覆盖前一层，不推翻重写：
+
+     1. app.css         :root 令牌 + 全部组件规则。默认值即 macOS 观感。
+     2. skin.css        两套皮肤的令牌覆盖与结构补丁，靠 html[data-skin] 前缀提特异性。
+     3. dialog.css      模态弹窗外壳骨架（关于 / 检查更新共用）。
+     4. vue-overlay.css Vue 覆盖层的穿透与外壳 pointer-events 开关。
+
+   前两层由 index.html 的 <link> 在 head 里加载——皮肤要在首帧前定下来，
+   走 JS import 会先闪一下默认配色；后两层在 main.ts 里 import 即可，
+   它们只作用在打开之后才出现的界面（弹窗、覆盖层里的组件）。
+   ========================================================================== */
+
 * { box-sizing: border-box; }
 
 /* 主题变量。默认浅色（GitHub 风格），深色由 [data-theme="dark"] 覆盖。
@@ -68,6 +84,14 @@
   --tb-scroll-thumb-hover: rgba(0, 0, 0, .5);
   --font-ui: -apple-system, "SF Pro Text", "PingFang SC", "Segoe UI Variable Text",
     "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  /* 布局尺寸。抽成变量是为了皮肤层能整体换挡（HyperOS 是 34px 标题栏、
+     浮动侧栏、胶囊状态栏），而不是在各个规则里逐条覆盖。
+     默认值全部等于改造前的数值，macOS 皮肤因此零变化。 */
+  --chrome-h: 30px;      /* 自绘标题栏高度 */
+  --outline-w: 232px;    /* 大纲侧栏宽度 */
+  --canvas-gap: 0px;     /* 侧栏/正文与窗口边缘的留白（浮动卡片用） */
+  --bar-h: 29px;         /* 状态栏高度，自绘滚动条与源码视图按它让位 */
+  --bar-gap: 0px;        /* 状态栏与窗口底边的距离（胶囊用） */
 }
 :root[data-theme="dark"] {
   --bg: #0d1117;
@@ -148,7 +172,7 @@ body {
 #titlebar, #tb-menu-popup { display: none; }
 html.custom-titlebar #titlebar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 30;
-  display: flex; align-items: center; height: 30px;
+  display: flex; align-items: center; height: var(--chrome-h);
   background: var(--chrome); color: var(--text);
   border-bottom: 1px solid var(--hairline);
   -webkit-user-select: none; user-select: none;
@@ -250,7 +274,14 @@ html.custom-titlebar #tb-menu-popup {
   color: var(--text3);
 }
 #tb-menu-popup .chev svg { display: block; }
-#tb-menu-popup .gutter .dot {
+/* 勾选指示器：两种形状都渲染在 DOM 里，由 data-mark 决定显示哪一个 ——
+   「启动时检查更新」这类开关画勾，主题/视图这类单选组默认画点。
+   形状是皮肤可覆盖的：HyperOS 皮肤里单选组也画勾（见 skin.css）。 */
+#tb-menu-popup .gutter .mark-check,
+#tb-menu-popup .gutter .mark-dot { display: none; }
+#tb-menu-popup .gutter[data-mark="check"] .mark-check,
+#tb-menu-popup .gutter[data-mark="dot"] .mark-dot { display: block; }
+#tb-menu-popup .gutter .mark-dot {
   width: 5px; height: 5px; border-radius: 50%; background: currentColor;
 }
 #tb-menu-popup button:hover .chev,
@@ -275,8 +306,8 @@ html.custom-titlebar #tb-menu-popup {
 }
 
 /* 有自绘标题栏时，正文与侧栏都从它下面开始 */
-html.custom-titlebar #outline { top: 30px; }
-html.custom-titlebar #doc { padding-top: 86px; }
+html.custom-titlebar #outline { top: calc(var(--chrome-h) + var(--canvas-gap)); }
+html.custom-titlebar #doc { padding-top: calc(var(--chrome-h) + var(--canvas-gap) + 56px); }
 
 /* 自绘滚动条：原生滚动条属于窗口视口，会纵跨标题栏和状态栏。
    正文（#vscroll）与大纲（#outline-scroll）各一套纵向，源码视图另有一套
@@ -289,14 +320,16 @@ html.custom-titlebar body::-webkit-scrollbar { width: 0; height: 0; display: non
 .tb-vscroll, .tb-hscroll { display: none; }
 html.custom-titlebar .tb-vscroll {
   display: block; position: fixed; z-index: 25; width: 12px;
-  top: 30px; bottom: 29px;
+  top: calc(var(--chrome-h) + var(--canvas-gap));
+  bottom: calc(var(--bar-h) + var(--bar-gap));
 }
 html.custom-titlebar .tb-hscroll {
   display: block; position: fixed; z-index: 25; height: 12px;
-  left: 0; right: 12px; bottom: 29px;  /* 右侧给纵向条让出 12px */
+  left: 0; right: 12px;
+  bottom: calc(var(--bar-h) + var(--bar-gap));  /* 右侧给纵向条让出 12px */
 }
 #vscroll { right: 0; }
-#outline-scroll { left: 220px; }
+#outline-scroll { left: calc(var(--outline-w) + var(--canvas-gap) - 12px); }
 .tb-vscroll-thumb {
   position: absolute; right: 3px; width: 6px; min-height: 28px;
   border-radius: 3px; background: var(--tb-scroll-thumb);
@@ -316,8 +349,8 @@ html:not([data-view="source"]) .tb-hscroll { display: none !important; }
 
 /* 大纲侧栏：固定在左侧，正文靠右边距让出位置 */
 #outline {
-  position: fixed; left: 0; top: 0; bottom: 0; z-index: 8;
-  width: 232px; overflow-y: auto; padding: 20px 12px 80px;
+  position: fixed; left: var(--canvas-gap); top: var(--canvas-gap); bottom: 0; z-index: 8;
+  width: var(--outline-w); overflow-y: auto; padding: 20px 12px 80px;
   background: var(--outline-bg); border-right: 1px solid var(--outline-border);
   font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
   scrollbar-width: thin;
@@ -351,7 +384,11 @@ html.custom-titlebar #outline::-webkit-scrollbar { width: 0; height: 0; display:
    菜单分隔符曾因也叫 .sep 被表格间隙规则压成 8px 的短线。 */
 #doc {
   max-width: 780px; margin: 0 auto; padding: 56px 32px 45vh;
-  margin-left: max(calc(50% - 390px + 116px), 232px + 32px);
+  /* 116px 是侧栏宽度的一半：正文在「侧栏之外的剩余宽度」里居中 */
+  margin-left: max(
+    calc(50% - 390px + (var(--outline-w) * .5)),
+    calc(var(--outline-w) + var(--canvas-gap) + 32px)
+  );
   outline: none; cursor: text;
 }
 
@@ -366,7 +403,7 @@ html.custom-titlebar #outline::-webkit-scrollbar { width: 0; height: 0; display:
    方向键也走不到文末。横纵滚动条都用 #vscroll / #hscroll 自绘。 */
 #source {
   display: none;
-  position: fixed; top: 0; bottom: 29px;
+  position: fixed; top: 0; bottom: calc(var(--bar-h) + var(--bar-gap));
   left: 0; right: 0;
   box-sizing: border-box;
   padding: 56px 32px 45vh;
@@ -376,7 +413,10 @@ html.custom-titlebar #outline::-webkit-scrollbar { width: 0; height: 0; display:
   tab-size: 2; white-space: pre; overflow: auto;
   caret-color: var(--caret);
 }
-html.custom-titlebar #source { top: 30px; padding-top: 56px; }
+html.custom-titlebar #source {
+  top: calc(var(--chrome-h) + var(--canvas-gap));
+  padding-top: 56px;
+}
 /* 原生横纵条全部让位给自绘条：原生横条只会从 textarea 左边缘（屏幕中间）
    开始、粗 9px、光标还是 I-beam，和纵向那套 6px 自绘条完全不搭。 */
 html.custom-titlebar #source::-webkit-scrollbar { width: 0; height: 0; }

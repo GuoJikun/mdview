@@ -1,0 +1,17 @@
+/* Windows 系统底材的条件透明层。
+   只有 Rust 真正应用了 DWM 材质才放开 WebView 表层；否则保持纯色，
+   避免透明窗口在没有材质时露出未着色的桌面。Mica 与 Acrylic 都需要透明表层。 */
+html[data-backdrop="mica"] body,
+html[data-backdrop="mica"] #vue-app,
+html[data-backdrop="acrylic"] body,
+html[data-backdrop="acrylic"] #vue-app {
+  background: transparent;
+}
+
+/* 自绘标题栏要让出像素给底材。本文件在 skin.css 之后加载，
+   与皮肤规则同特异性但后来者胜；两套皮肤共用同一套材质。 */
+html[data-backdrop="mica"].custom-titlebar #titlebar,
+html[data-backdrop="acrylic"].custom-titlebar #titlebar {
+  background: transparent;
+  border-bottom-color: transparent;
+}

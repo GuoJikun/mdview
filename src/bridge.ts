@@ -7,6 +7,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { nextTick, reactive, readonly } from 'vue';
 import { openAbout } from './about';
 import { openUpdateDialog, toggleAutoUpdate } from './update';
+import type { SkinName } from './skin';
 
 export interface OutlineItem {
   level: number;
@@ -42,6 +43,8 @@ export interface BridgeState {
   themeMode: ThemeMode;
   /** 当前生效主题。 */
   theme: ThemeName;
+  /** 外观皮肤：macOS · Mica / HyperOS 4.0。与明暗正交。 */
+  skin: SkinName;
   /** 当前视图模式。 */
   mode: ViewMode;
   /** 大纲（标题项），供侧栏渲染与滚动定位 */
@@ -85,6 +88,8 @@ const store = reactive<BridgeState>({
   inTable: false,
   themeMode: 'system',
   theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
+  // skin-boot.js 已在首帧前写好属性；没写就是默认皮肤
+  skin: document.documentElement.getAttribute('data-skin') === 'hyperos' ? 'hyperos' : 'macos',
   mode: window.__mdviewMode || 'wysiwyg',
   outline: [],
   recent: [],
@@ -165,13 +170,13 @@ window.__mdviewNextTick = nextTick;
 const api: BridgeApi = { set, notify, dispatch };
 window.__mdviewBridge = api;
 
-// 主题由 theme.js 直接写 <html data-theme>（那七个纯逻辑模块一行不改），
-// 所以这里用观察器跟随，而不是往 theme.js 里塞桥接代码。
+// 主题与皮肤都由各自的纯逻辑模块直接写 <html>（那七个纯逻辑模块一行不改），
+// 所以这里用观察器跟随，而不是往 theme.js / skin.ts 里塞桥接代码。
 new MutationObserver(() => {
   window.__mdviewPushShellState?.();
 }).observe(document.documentElement, {
   attributes: true,
-  attributeFilter: ['data-theme'],
+  attributeFilter: ['data-theme', 'data-skin'],
 });
 
 // 桥建好时主动拉一次全量快照，避免首帧依赖下一次 renderStatus 才对齐。

@@ -11,6 +11,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod backdrop;
 mod link;
 mod recent;
 mod release_notes;
@@ -441,7 +442,8 @@ fn window_title(path: Option<&std::path::Path>) -> String {
 /// 反过来的话那个 IPC 会找不到窗口对应的文档。
 ///
 /// 窗口形态要与 `tauri.*.conf.json` 里的主窗口一致（Windows/Linux 自绘标题栏、
-/// macOS 用 Overlay + 隐藏标题），否则新窗口会突然长出系统标题栏。
+/// macOS 用 Overlay + 隐藏标题、Windows/macOS 带透明表层），否则新窗口会突然
+/// 长出系统标题栏，或者因为 WebView2 的不透明白底把系统底材盖掉。
 /// 几何交给 window-state 插件按标签恢复；没有记录时用主窗口同款 960×760。
 fn create_window(
     app: &tauri::AppHandle,
@@ -462,9 +464,17 @@ fn create_window(
     {
         builder = builder
             .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .hidden_title(true);
+            .hidden_title(true)
+            // 透明表层：NSVisualEffectView 垫在 contentView 后面，窗口不透明就看不见。
+            .transparent(true);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        // 透明表层给 Mica 让位：WebView2 默认是不透明白底，材质会被它盖住；
+        // 而前端已经按 backdrop_kind 把 CSS 底层清空，窗口不透明就成了一块白板。
+        builder = builder.decorations(false).transparent(true);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         builder = builder.decorations(false);
     }
@@ -477,6 +487,12 @@ fn create_window(
             return Err(format!("创建窗口失败：{err}"));
         }
     };
+    // 与启动窗口走同一条材质路径；主题偏好由 backdrop 状态记住，避免闪亮色。
+    {
+        let backdrop = app.state::<backdrop::Backdrop>();
+        let dark = backdrop.desired_dark();
+        backdrop.apply(&window, dark);
+    }
     if let Err(err) = window.show() {
         log::warn!("新窗口显示失败：{err}");
     }
@@ -905,6 +921,7 @@ fn main() {
         // 会话按窗口标签存；关窗守卫同理。启动窗口的会话在 setup 里登记。
         .manage(Sessions::default())
         .manage(CloseGuards::default())
+        .manage(backdrop::Backdrop::default())
         .manage(RunMode { self_test })
         .manage(update::UpdateState::new())
         // 关窗守卫：有未保存改动就拦住，让前端问一句再放行。
@@ -979,6 +996,9 @@ fn main() {
             force_close,
             pick_save_path,
             use_custom_titlebar,
+            backdrop::backdrop_kind,
+            backdrop::sync_backdrop,
+            backdrop::set_backdrop_mode,
             update::check_update,
             update::download_update,
             update::cancel_update_download,
@@ -993,6 +1013,11 @@ fn main() {
             // 注意：这一步早于页面加载，所以可能有极短的白底；若将来要消掉，
             // 改成前端首帧后再 invoke 一个 show 命令即可。
             if let Some(window) = app.get_webview_window("main") {
+                {
+                    let backdrop = app.state::<backdrop::Backdrop>();
+                    let dark = backdrop.desired_dark();
+                    backdrop.apply(&window, dark);
+                }
                 window.show()?;
                 let _ = window.set_focus();
             }

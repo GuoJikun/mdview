@@ -6,6 +6,8 @@ export type MenuKey = 'file' | 'edit' | 'selection' | 'view' | 'go' | 'help';
 /** 勾选态只依赖这几个字段，避免把整个只读快照类型带进菜单数据。 */
 export interface MenuCheckState {
   themeMode: string;
+  /** 当前皮肤：macos / hyperos。与明暗正交，各自一条子菜单。 */
+  skin: string;
   mode: string;
   autoUpdate: boolean;
 }
@@ -69,6 +71,21 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
     { action: 'line-end', label: '行尾', acc: 'End' },
   ],
   view: [
+    {
+      sub: {
+        label: '外观',
+        items: [
+          {
+            action: 'skin-hyperos', label: 'HyperOS 4.0', mark: 'dot',
+            checked: (s) => s.skin === 'hyperos',
+          },
+          {
+            action: 'skin-macos', label: 'macOS · Mica', mark: 'dot',
+            checked: (s) => s.skin === 'macos',
+          },
+        ],
+      },
+    },
     {
       sub: {
         label: '主题',

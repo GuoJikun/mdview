@@ -4,7 +4,7 @@
        available → downloading → [ready | error | available(取消)]
        ready → install（安装后应用退出） -->
   <!-- 关闭只走底部按钮：遮罩与 Esc 都不关闭，避免误触丢掉正在进行的下载。
-       骨架样式在 src/dialog.css，与「关于」弹窗共用。 -->
+       骨架样式在 src/styles/dialog.css，与「关于」弹窗共用。 -->
   <div class="dialog-backdrop">
     <section
       class="dialog"
@@ -157,7 +157,7 @@ useModalDialog(closeButton);
 </script>
 
 <style scoped>
-/* 骨架（遮罩 / 卡片 / 标题 / 正文 / 按钮排）在 src/dialog.css，这里只留更新专用样式。 */
+/* 骨架（遮罩 / 卡片 / 标题 / 正文 / 按钮排）在 src/styles/dialog.css，这里只留更新专用样式。 */
 .update-version {
   display: flex;
   gap: 8px;

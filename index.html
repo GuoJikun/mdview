@@ -4,7 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mdview</title>
-<link rel="stylesheet" href="/src/app.css">
+<!-- 首帧前定下皮肤，避免记住 HyperOS 的人每次启动先闪一下 macOS 配色 -->
+<script src="/skin-boot.js"></script>
+<!-- 样式表放在 head 里用 <link> 直接引，而不是在 main.ts 里 import：
+     JS 模块执行完才注入的样式会让首帧白闪一下。 -->
+<link rel="stylesheet" href="/src/styles/app.css">
+<!-- 皮肤层必须在 app.css 之后：它用同特异性的选择器覆盖外壳颜色与圆角 -->
+<link rel="stylesheet" href="/src/styles/skin.css">
+<!-- 底材层最后：只有 Rust 确认 DWM 材质生效时才覆盖外壳背景为透明 -->
+<link rel="stylesheet" href="/src/styles/backdrop.css">
 </head>
 <body>
 <!-- Lucide 图标 sprite（ISC）。查找栏是静态 DOM、不在 Vue 树里，用 <use> 复用

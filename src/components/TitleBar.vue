@@ -44,9 +44,9 @@ import { onMounted, ref } from 'vue';
 import { state } from '../bridge';
 import { MENU_LABELS, MENU_ORDER, menuState, showMenu, toggleMenu, type MenuKey } from '../menu';
 
-// 与 index.html 里的图标同一张图，避免视觉不一致。
-const LOGO =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAASUlEQVR42mNgGAVQIK+s8Z+eeNQBow4YdQDRDui8+I0iPPQdMJoGRh1w4uwlsvDwccBoGhh1ALUS3dB1wGgaGHXAqAPo5oARCwCme+39B8DaVAAAAABJRU5ErkJggg==';
+// 标题栏标识：由 src-tauri/icons/icon.png（512²）降采样到 64² 得到，
+// 16px 显示在 4x 屏上也不会糊。换应用图标后重新导出这一张即可。
+import LOGO from '../assets/logo.png';
 
 // Tauri 之外（浏览器直接打开 dev server）按原来的可选行为降级。
 const appWindow = (() => {

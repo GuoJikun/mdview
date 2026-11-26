@@ -103,6 +103,9 @@ function execAt(text, re, index) {
  *
  * 照规范的边界处理：`$0` 不指向任何分组（原样保留），`$nn` 没有两位分组时
  * 退一位（`$12` 在只有 1 个分组时展开成「分组 1 + '2'」）。
+ *
+ * **没参与匹配**的可选分组（`(x)?b` 里的 `$1`）展开成空串——这是 ECMAScript
+ * 的语义。写成字面量 `$1` 会把替换模板静默写进正文。
  */
 function expandReplacement(template, text, hit) {
   const matched = hit[0];
@@ -114,15 +117,16 @@ function expandReplacement(template, text, hit) {
     if (token === "'") return text.slice(hit.index + matched.length);
     if (token[0] === '<') {
       const name = token.slice(1, -1);
-      return name in groups ? groups[name] : whole;
+      return name in groups ? (groups[name] ?? '') : whole;
     }
     const n = Number(token);
     if (!n) return whole;
-    const group = hit[n];
-    if (group !== undefined) return group;
+    // `hit.length` 是「分组数 + 1」：n 落在里面就说明这个分组存在，
+    // 值为 undefined 只表示它没参与匹配 → 空串。
+    if (n < hit.length) return hit[n] ?? '';
     if (token.length === 2) {
-      const first = hit[Number(token[0])];
-      if (first !== undefined) return first + token[1];
+      const first = Number(token[0]);
+      if (first > 0 && first < hit.length) return (hit[first] ?? '') + token[1];
     }
     return whole;
   });

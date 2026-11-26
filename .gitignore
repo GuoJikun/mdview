@@ -10,3 +10,5 @@ node_modules
 /.tauri
 # vitest 浏览器模式失败时自动截的图
 .vitest
+# 设计稿的实机预览图：可由规范页重新生成，不入库
+/design/preview

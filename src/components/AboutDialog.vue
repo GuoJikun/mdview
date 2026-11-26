@@ -1,5 +1,5 @@
 <template>
-  <!-- 关于弹窗：与「检查更新」共用 src/dialog.css 的骨架，只有内容不同。
+  <!-- 关于弹窗：与「检查更新」共用 src/styles/dialog.css 的骨架，只有内容不同。
        关闭同样只走底部按钮，遮罩与 Esc 都不关。 -->
   <div class="dialog-backdrop">
     <section

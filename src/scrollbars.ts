@@ -7,6 +7,18 @@
 // 「怎么读写滚动量」——都由 spec 传进来。
 const rootEl = document.documentElement;
 
+/** 轨道要在某条边处让位：返回窗口底边到那条边的距离，元素没渲染时按 0 处理。
+ *
+ *  为什么不用 height：胶囊状态栏离窗口底还有 10px 外缝，只减 height 会让轨道
+ *  落进那道缝里、滑块贴着胶囊右侧划过去。要让位的是「上面那条边」，所以状态栏
+ *  取 rect.top；而浮动侧栏卡片要让位的是它自己的下沿，取 rect.bottom。 */
+function insetTo(el: Element | null, edge: 'top' | 'bottom'): number {
+  if (!el) return 0;
+  const rect = el.getBoundingClientRect();
+  if (!rect.height) return 0;
+  return window.innerHeight - (edge === 'top' ? rect.top : rect.bottom);
+}
+
 interface ScrollEdges {
   top?: number;
   bottom?: number;
@@ -120,12 +132,13 @@ function docScrollSpec(): ScrollSpec {
     },
     // 正文轨道要避开标题栏和状态栏，高度随两者实测值变化。
     // 标题栏现在由 Vue 渲染，必须惰性取，模块求值时它还不存在。
+    // 用 rect.bottom 而不是 height：胶囊状态栏离窗口底边有 10px 缝，
+    // 取 height 会让轨道伸进那道缝、滑块压到胶囊上。
     edges: () => {
       const titlebar = document.getElementById('titlebar');
-      const statusbar = document.getElementById('bar');
       return {
-        top: titlebar ? titlebar.getBoundingClientRect().height : 0,
-        bottom: statusbar ? statusbar.getBoundingClientRect().height : 0,
+        top: titlebar ? titlebar.getBoundingClientRect().bottom : 0,
+        bottom: insetTo(document.getElementById('bar'), 'top'),
       };
     },
   };
@@ -144,12 +157,14 @@ function outlineScrollSpec(): ScrollSpec {
     setPos: (v) => { nav.scrollTop = v; },
     // 大纲轨道也跟着标题栏/状态栏实测高度走：阅读与源码视图隐藏状态栏后，
     // 轨道要延伸到底，滑块才能滚到最后一项（原来写死 CSS 的 29px 会悬空）。
+    // 另外皮肤可以把侧栏做成浮动卡片：此时卡片底边比状态栏高，轨道要停在
+    // 卡片底边，取两者中更靠上的那个。
     edges: () => {
       const titlebar = document.getElementById('titlebar');
-      const statusbar = document.getElementById('bar');
+      const navTop = nav.getBoundingClientRect().top;
       return {
-        top: titlebar ? titlebar.getBoundingClientRect().height : 0,
-        bottom: statusbar ? statusbar.getBoundingClientRect().height : 0,
+        top: Math.max(titlebar ? titlebar.getBoundingClientRect().bottom : 0, navTop),
+        bottom: Math.max(insetTo(document.getElementById('bar'), 'top'), insetTo(nav, 'bottom')),
       };
     },
   };
@@ -167,12 +182,9 @@ function sourceHScrollSpec(): ScrollSpec {
     pos: () => sourceEl.scrollLeft,
     setPos: (v) => { sourceEl.scrollLeft = v; },
     // 横向轨道贴状态栏上沿；左右就是窗口两侧（CSS 已 fixed 到 0）
-    edges: () => {
-      const statusbar = document.getElementById('bar');
-      return {
-        bottom: statusbar ? statusbar.getBoundingClientRect().height : 0,
-      };
-    },
+    edges: () => ({
+      bottom: insetTo(document.getElementById('bar'), 'top'),
+    }),
   };
 }
 

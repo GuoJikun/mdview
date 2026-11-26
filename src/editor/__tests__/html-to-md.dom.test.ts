@@ -77,6 +77,27 @@ describe('行内格式', () => {
   it('下划线成对出现时按字面量转义', () => {
     expect(md('<p>_斜体_</p>')).toBe('\\_斜体\\_');
   });
+
+  it('删除线与独占一行的分隔符不会被重新解释', () => {
+    expect(md('<p>~~删除~~</p>')).toBe('\\~\\~删除\\~\\~');
+    expect(md('<div>---</div>')).toBe('\\---');
+    expect(md('<div>===</div>')).toBe('\\===');
+    // 不足三个、或不在行首的不动
+    expect(md('<p>a -- b</p>')).toBe('a -- b');
+  });
+});
+
+describe('行内代码', () => {
+  it('代码里的连续空格与制表符原样保留', () => {
+    expect(md('<p><code>a  b</code></p>')).toBe('`a  b`');
+    expect(md('<p>前<code>x\t\ty</code>后</p>')).toBe('前`x\t\ty`后');
+  });
+
+  it('代码外面的空白照旧折叠', () => {
+    expect(md('<p><span>a </span><span> b</span> <code>c  d</code></p>')).toBe(
+      'a b `c  d`',
+    );
+  });
 });
 
 describe('列表', () => {
@@ -94,6 +115,23 @@ describe('列表', () => {
   it('列表项里的段落与嵌套列表分层', () => {
     const html = '<ul><li><p>甲段一</p><p>甲段二</p><ul><li>乙</li></ul></li></ul>';
     expect(md(html)).toBe('- 甲段一\n\n  甲段二\n  - 乙');
+  });
+
+  it('有序列表的子项按内容列（3 格）缩进', () => {
+    // `1. ` 的正文从第 3 列开始，缩进 2 格会落进 `. ` 中间，解析出来还是同一层
+    const html = '<ol><li>甲<ul><li>乙</li></ul></li></ol>';
+    expect(md(html)).toBe('1. 甲\n   - 乙');
+  });
+
+  it('两位数序号同样按内容列缩进', () => {
+    const html = '<ol start="9"><li>甲<ul><li>乙</li></ul></li></ol>';
+    expect(md(html)).toBe('9. 甲\n   - 乙');
+    const html10 = '<ol start="10"><li>甲<ul><li>乙</li></ul></li></ol>';
+    expect(md(html10)).toBe('10. 甲\n    - 乙');
+  });
+
+  it('有序列表的 start="0" 不被吞成 1', () => {
+    expect(md('<ol start="0"><li>零</li><li>一</li></ol>')).toBe('0. 零\n1. 一');
   });
 });
 
@@ -126,6 +164,11 @@ describe('表格', () => {
   it('单元格里的竖线会被转义', () => {
     const html = '<table><tr><th>a|b</th></tr><tr><td>c|d</td></tr></table>';
     expect(md(html)).toBe('| a\\|b |\n| --- |\n| c\\|d |');
+  });
+
+  it('单元格里的 <br> 变成空格，不留反斜杠', () => {
+    const html = '<table><tr><th>h</th></tr><tr><td>第一行<br>第二行</td></tr></table>';
+    expect(md(html)).toBe('| h |\n| --- |\n| 第一行 第二行 |');
   });
 });
 

@@ -523,6 +523,12 @@ impl AppState {
                 self.reparse();
                 self.clamp_selection();
                 self.dirty = false;
+                // 内容来自磁盘：不刷新指纹的话，下一次保存会把自己刚读的版本
+                // 当成「外部改动」，弹出假的冲突提示。
+                self.saved_fingerprint = self
+                    .path
+                    .as_ref()
+                    .and_then(|path| files.fingerprint(path).ok());
                 vec![Effect::Render, self.cursor_effect()]
             }
         }
@@ -600,22 +606,10 @@ impl AppState {
         Some((id.0, byte, row, col))
     }
 
-    /// 把一段 byte 区间整体替换，光标落在指定 byte（都换成 char index 再进内核）。
-    fn replace_bytes(
-        &mut self,
-        range: Range<usize>,
-        insert: &str,
-        caret: Option<usize>,
-    ) -> Vec<Effect> {
-        let span = self.document.byte_to_char(range.start)..self.document.byte_to_char(range.end);
-        let caret = caret.map(|b| self.document.byte_to_char(b));
-        self.apply_with_caret(span, insert, caret)
-    }
-
     /// 整块替换，光标用**新文本内**的 byte 偏移表示。
     ///
-    /// [`Self::replace_bytes`] 把光标当旧文档的 byte 去换算；列操作会改变块内长度，
-    /// 旧映射到不了新位置（插列后光标会飘回表头）。
+    /// 不能先把光标当旧文档的 byte 换算：列/行操作会改变块内长度，
+    /// 旧映射到不了新位置（插列后光标会飘回表头，插行后会停在旧行）。
     fn replace_block_text(
         &mut self,
         block: Range<usize>,
@@ -657,19 +651,50 @@ impl AppState {
     }
 
     /// 表格源码按行切开。块区间已去掉尾部换行，所以最后一行不带 `\n`。
+    ///
+    /// 行尾的 `\r` 一并去掉：CRLF 文件里它会被 `delimiter_cells` 当成一列，
+    /// 插/删列时把 `| --- |` 写成 `| --- | --- |\r|`，整张表退化成段落。
+    /// 拼回去时由 [`Self::line_break`] 还原原来的行尾符。
     fn table_lines(src: &str, range: &Range<usize>) -> Vec<String> {
         let mut out = Vec::new();
         let mut start = range.start;
         for index in range.start..range.end {
             if src.as_bytes().get(index) == Some(&b'\n') {
-                out.push(src[start..index].to_owned());
+                out.push(src[start..index].trim_end_matches('\r').to_owned());
                 start = index + 1;
             }
         }
         if start < range.end {
-            out.push(src[start..range.end].to_owned());
+            out.push(src[start..range.end].trim_end_matches('\r').to_owned());
         }
         out
+    }
+
+    /// 这个块用的是什么行尾符。整块替换时沿用原文，别把 CRLF 文件悄悄改成 LF。
+    fn line_break(src: &str, range: &Range<usize>) -> &'static str {
+        if src
+            .get(range.clone())
+            .is_some_and(|text| text.contains("\r\n"))
+        {
+            "\r\n"
+        } else {
+            "\n"
+        }
+    }
+
+    /// 按原文行尾符把行拼回去，同时给出每行在结果里的起始偏移。
+    fn join_lines(eol: &str, lines: &[String]) -> (String, Vec<usize>) {
+        let capacity = lines.iter().map(|line| line.len() + eol.len()).sum();
+        let mut text = String::with_capacity(capacity);
+        let mut starts = Vec::with_capacity(lines.len());
+        for (index, line) in lines.iter().enumerate() {
+            if index > 0 {
+                text.push_str(eol);
+            }
+            starts.push(text.len());
+            text.push_str(line);
+        }
+        (text, starts)
     }
 
     /// 逻辑行号 → 源码行号。表格第 0 行是表头，第 1 行是 `---` 分隔行。
@@ -678,21 +703,22 @@ impl AppState {
     }
 
     /// 整块替换表格源码，并把光标放到新表格第 `line` 行的第 `col` 格。
+    ///
+    /// 光标偏移是**新文本内**的，所以必须走 [`Self::replace_block_text`]：
+    /// 按旧文档换算的话，行数一变（插行/删行）光标就落到别的行。
     fn replace_table(
         &mut self,
         block: usize,
-        range: Range<usize>,
         lines: &[String],
         line: usize,
         col: usize,
     ) -> Vec<Effect> {
         let src = self.document.text();
         let block_range = self.parsed.blocks[block].byte.clone();
-        let new_text = lines.join("\n");
-        // 目标行在**新**文本里的起点；光标落在第 col 个 `|` 之后、跳过填充空格
-        let line_start =
-            block_range.start + lines.iter().take(line).map(|l| l.len() + 1).sum::<usize>();
+        let (new_text, starts) = Self::join_lines(Self::line_break(&src, &block_range), lines);
+        let line_start = starts.get(line).copied().unwrap_or(0);
         let line_text = lines.get(line).map(String::as_str).unwrap_or("");
+        // 光标落在第 col 个 `|` 之后、跳过填充空格
         let mut cell_byte = line_start;
         let mut relative = 0usize;
         let mut pipes = 0usize;
@@ -710,8 +736,7 @@ impl AppState {
             cell_byte += 1;
             relative += 1;
         }
-        let _ = (range, src);
-        self.replace_bytes(block_range, &new_text, Some(cell_byte))
+        self.replace_block_text(block_range, &new_text, cell_byte)
     }
 
     /// Tab / Shift+Tab：**行级缩进命令**，不是「输入两个空格」。
@@ -965,6 +990,15 @@ impl AppState {
         let body = body.trim_start_matches([' ', '\t']);
         let digits = body.chars().take_while(char::is_ascii_digit).count();
         if digits == 0 || &body[..digits] == "1" {
+            return None;
+        }
+        // 数字后面必须紧跟 `.` 或 `)`，再跟一个空白，才是列表标记。
+        // 只数前导数字会把 `2026 年` 这种续行也当成有序项，缩进时把年份改成 `1`。
+        let marker = &body[digits..];
+        let rest = marker
+            .strip_prefix('.')
+            .or_else(|| marker.strip_prefix(')'))?;
+        if !(rest.is_empty() || rest.starts_with([' ', '\t'])) {
             return None;
         }
         Some(digits)
@@ -1243,7 +1277,7 @@ impl AppState {
             at
         };
         lines.insert(at, Self::blank_row(cols));
-        self.replace_table(id, block_range, &lines, target_line, 0)
+        self.replace_table(id, &lines, target_line, 0)
     }
 
     /// 表格里的回车：在当前行**下面**加一行，光标落到新行第一格。
@@ -1277,7 +1311,7 @@ impl AppState {
             return Vec::new();
         }
         lines.insert(at, Self::blank_row(cols));
-        self.replace_table(id, block_range, &lines, at, 0)
+        self.replace_table(id, &lines, at, 0)
     }
 
     fn table_delete_row(&mut self) -> Vec<Effect> {
@@ -1297,7 +1331,7 @@ impl AppState {
         }
         lines.remove(line);
         let target = (line - 1).min(lines.len() - 1);
-        self.replace_table(id, block.byte.clone(), &lines, target, 0)
+        self.replace_table(id, &lines, target, 0)
     }
 
     /// 用 `TableGrid` 记下的单元格区间取出每行原文。
@@ -1403,15 +1437,10 @@ impl AppState {
         let Some(&start) = caret_starts.get(at).or_else(|| caret_starts.last()) else {
             return Vec::new();
         };
-        let new_text = lines.join("\n");
-        let line_start = block_range.start
-            + lines
-                .iter()
-                .take(caret_line)
-                .map(|l| l.len() + 1)
-                .sum::<usize>();
+        let (new_text, starts) = Self::join_lines(Self::line_break(&src, &block_range), &lines);
+        let line_start = starts.get(caret_line).copied().unwrap_or(0);
         // 新插入的格是两格空格，光标落在格内（空单元格的通行落点）
-        let caret = line_start - block_range.start + start + Self::cell_caret("  ");
+        let caret = line_start + start + Self::cell_caret("  ");
         self.replace_block_text(block_range, &new_text, caret)
     }
 
@@ -1481,14 +1510,9 @@ impl AppState {
             .saturating_sub(1)
             .min(caret_cells.len().saturating_sub(1));
         let cell = caret_cells.get(target).copied().unwrap_or("");
-        let new_text = lines.join("\n");
-        let line_start = block_range.start
-            + lines
-                .iter()
-                .take(caret_line)
-                .map(|l| l.len() + 1)
-                .sum::<usize>();
-        let caret = line_start - block_range.start + start + Self::cell_caret(cell);
+        let (new_text, starts) = Self::join_lines(Self::line_break(&src, &block_range), &lines);
+        let line_start = starts.get(caret_line).copied().unwrap_or(0);
+        let caret = line_start + start + Self::cell_caret(cell);
         self.replace_block_text(block_range, &new_text, caret)
     }
 
@@ -1553,11 +1577,50 @@ impl AppState {
             .is_some_and(|cell| range.end <= cell.byte.end)
     }
 
+    /// char 区间换算成 byte 区间（给 `table_delete_allowed` 这类按 byte 判定的函数用）。
+    fn span_bytes(&self, span: &Range<usize>) -> Range<usize> {
+        self.document.char_to_byte(span.start)..self.document.char_to_byte(span.end)
+    }
+
+    /// 这个选区是否被表格结构锁住（跨格选中时禁止删除 / 分段）。
+    ///
+    /// 整篇选区不算：用户明确要清空文档，此时连表格一起删是预期结果；
+    /// 拦住他会变成「按了没反应」，比拆表更难受。
+    fn table_locked_selection(&self, sel: &Range<usize>) -> bool {
+        if sel.start == 0 && sel.end == self.document.len_chars() {
+            return false;
+        }
+        !self.table_delete_allowed(&self.span_bytes(sel))
+    }
+
+    /// 退格的起点。光标前一个字符是 `\n`、再前一个是 `\r` 时返回 `at - 2`：
+    /// CRLF 是一个换行，只删 `\n` 会留下裸 `\r`——两段合不起来，脏字节还会写回文件。
+    fn crlf_start(&self, at: usize) -> usize {
+        if at < 2 {
+            return at - 1;
+        }
+        let cr = self.document.char_to_byte(at - 2);
+        let nl = self.document.char_to_byte(at - 1);
+        let end = self.document.char_to_byte(at);
+        if nl == cr + 1
+            && self.document.slice_bytes(cr..nl) == "\r"
+            && self.document.slice_bytes(nl..end) == "\n"
+        {
+            return at - 2;
+        }
+        at - 1
+    }
+
     fn delete_backward(&mut self) -> Vec<Effect> {
         if self.composing {
             return Vec::new();
         }
         if let Some(sel) = self.selection_chars() {
+            // 选区跨格（跨过 `|`、行尾、分隔行）时按表格结构处理：宁可没反应，
+            // 也不能一次退格把整张表退化成段落。
+            if self.table_locked_selection(&sel) {
+                return Vec::new();
+            }
             return self.apply(self.expand_deletion(sel), "");
         }
         let Some(byte) = self.caret_byte() else {
@@ -1575,9 +1638,9 @@ impl AppState {
             }
             return self.delete_marker(edit);
         }
-        let span = self.expand_deletion(at - 1..at);
+        let span = self.expand_deletion(self.crlf_start(at)..at);
         // 表格里贴到竖线/分隔行就算到头了，不能顺着折叠区间把结构吃掉
-        if !self.table_delete_allowed(&span) {
+        if !self.table_delete_allowed(&self.span_bytes(&span)) {
             return Vec::new();
         }
         self.apply(span, "")
@@ -1588,6 +1651,9 @@ impl AppState {
             return Vec::new();
         }
         if let Some(sel) = self.selection_chars() {
+            if self.table_locked_selection(&sel) {
+                return Vec::new();
+            }
             return self.apply(self.expand_deletion(sel), "");
         }
         let Some(byte) = self.caret_byte() else {
@@ -1610,7 +1676,7 @@ impl AppState {
             return self.delete_marker(edit);
         }
         let span = self.expand_deletion(at..at + 1);
-        if !self.table_delete_allowed(&span) {
+        if !self.table_delete_allowed(&self.span_bytes(&span)) {
             return Vec::new();
         }
         self.apply(span, "")
@@ -1817,14 +1883,22 @@ impl AppState {
         if self.composing {
             return Vec::new();
         }
-        if let Some(sel) = self.selection_chars() {
-            // 有选区时回车等价于「删掉选区 + 分段」，一次事务完成，只需撤销一次
-            return self.apply(sel, "\n\n");
-        }
         let Some((id, _)) = self.layout.locate(self.selection.head) else {
             return Vec::new();
         };
         let kind = self.parsed.blocks[id.0].kind.clone();
+        if let Some(sel) = self.selection_chars() {
+            // 表格里没有「分段」这回事：跨格选区上插换行会把整张表拆掉，
+            // 只能退化成「删掉选中内容」——与单格内退格同一个结果。
+            if matches!(kind, BlockKind::Table) {
+                if self.table_locked_selection(&sel) {
+                    return Vec::new();
+                }
+                return self.apply(sel, "");
+            }
+            // 有选区时回车等价于「删掉选区 + 分段」，一次事务完成，只需撤销一次
+            return self.apply(sel, "\n\n");
+        }
         match kind {
             BlockKind::CodeBlock { .. } | BlockKind::Html => {
                 let at = self.caret_char_offset();
@@ -1880,16 +1954,19 @@ impl AppState {
     /// 段落内回车：切出一个新段落，光标落到下一段。
     ///
     /// 正常段落要插两个换行——Markdown 的段落边界就是空行。但光标本来就在
-    /// **文档中间的空段落**里时，它下面已经有一行分隔了，再插两个换行会一次
-    /// 多出两行空行（连按回车像在「跳行」）。这种块是零长的，位置也必须
-    /// 小于文档长度：末尾那个零长块是虚拟的，它后面并没有分隔空行。
+    /// **空段落**里时，它下面已经有一行分隔了，再插两个换行会一次多出两行
+    /// 空行（连按回车像在「跳行」）。
+    ///
+    /// 末尾那个零长块（`start == len`）也算：它是「文档以空行收尾」时给光标
+    /// 留的落点，光标已经在空行上了，回车只该多一个换行。漏掉它的话
+    /// `abc` 连按两次回车会得到 `abc\n\n\n\n`——空了一整行。
     fn split_paragraph(&mut self) -> Vec<Effect> {
         let at = self.caret_char_offset();
         let in_empty_paragraph = self
             .layout
             .locate(self.selection.head)
             .and_then(|(id, _)| self.parsed.blocks.get(id.0))
-            .is_some_and(|b| b.byte.is_empty() && b.byte.start < self.document.len_bytes());
+            .is_some_and(|b| b.byte.is_empty());
         self.apply(at..at, if in_empty_paragraph { "\n" } else { "\n\n" })
     }
 
@@ -4014,6 +4091,149 @@ mod tests {
         assert!(
             analyze_line("2026 年").is_none(),
             "数字后没跟 . 或 ) 不算列表"
+        );
+    }
+
+    // ---- 回归：表格选区 / CRLF / 光标 ------------------------------------
+
+    #[test]
+    fn table_selection_backspace_keeps_structure() {
+        let src = "| 甲 | 乙 |\n| --- | --- |\n| 丙 | 丁 |\n";
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        // 从「甲」选到「乙」之后：跨过一根竖线
+        app.update(
+            Message::Select {
+                anchor: src.find('甲').unwrap(),
+                head: src.find('乙').unwrap() + '乙'.len_utf8(),
+            },
+            &files,
+        );
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), src, "跨格选区的退格不能把表格拆成段落");
+        assert!(
+            app.parsed
+                .blocks
+                .iter()
+                .any(|b| matches!(b.kind, BlockKind::Table)),
+            "表格结构应完好"
+        );
+    }
+
+    #[test]
+    fn table_selection_newline_keeps_structure() {
+        let src = "| 甲 | 乙 |\n| --- | --- |\n| 丙 | 丁 |\n";
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        app.update(
+            Message::Select {
+                anchor: src.find('甲').unwrap(),
+                head: src.find('乙').unwrap() + '乙'.len_utf8(),
+            },
+            &files,
+        );
+        app.update(Message::Newline, &files);
+        assert!(
+            app.parsed
+                .blocks
+                .iter()
+                .any(|b| matches!(b.kind, BlockKind::Table)),
+            "回车不能把表格拆开：{:?}",
+            app.document.text()
+        );
+    }
+
+    #[test]
+    fn crlf_table_insert_column_keeps_delimiter_row() {
+        let src = "| a | b |\r\n| --- | --- |\r\n| c | d |\r\n";
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        click(&mut app, &files, 2); // 第一格 a
+        app.update(Message::TableInsertColumn { after: true }, &files);
+        let now = app.document.text();
+        assert!(!now.contains("|\r|"), "分隔行里不该出现裸 \\r：{now:?}");
+        assert!(
+            app.parsed
+                .blocks
+                .iter()
+                .any(|b| matches!(b.kind, BlockKind::Table)),
+            "插列后仍应是表格：{now:?}"
+        );
+        assert_eq!(
+            now.matches("\r\n").count(),
+            src.matches("\r\n").count(),
+            "行尾符应保持 CRLF：{now:?}"
+        );
+    }
+
+    #[test]
+    fn table_newline_caret_lands_in_new_row() {
+        let src = "| a | b |\n| --- | --- |\n| c | d |";
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        click(&mut app, &files, src.find('d').unwrap());
+        app.update(Message::Newline, &files);
+        let now = app.document.text();
+        let new_row = now.rfind("|  |  |").expect("应插入一行空行");
+        let caret = caret_byte(&app);
+        assert!(
+            caret >= new_row,
+            "回车后光标应落在新行里（{caret} < {new_row}）：{now:?}"
+        );
+    }
+
+    #[test]
+    fn crlf_backspace_removes_whole_line_break() {
+        let src = "甲\r\n\r\n乙";
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        click(&mut app, &files, src.find('乙').unwrap());
+        app.update(Message::Backspace, &files);
+        assert_eq!(
+            app.document.text(),
+            "甲\r\n乙",
+            "CRLF 的换行是一个整体，不能留下裸 \\r"
+        );
+    }
+
+    #[test]
+    fn enter_on_trailing_empty_paragraph_adds_one_newline() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "abc");
+        click(&mut app, &files, 3); // 文末
+        app.update(Message::Newline, &files);
+        assert_eq!(app.document.text(), "abc\n\n");
+        app.update(Message::Newline, &files);
+        assert_eq!(
+            app.document.text(),
+            "abc\n\n\n",
+            "光标已经在空行上，回车只该多一个换行"
+        );
+    }
+
+    #[test]
+    fn select_all_backspace_still_clears_a_table_document() {
+        // 结构保护只拦「跨格误选」；整篇选中按退格是明确要清空，不能变成没反应
+        let src = "| 甲 | 乙 |\n| --- | --- |\n| 丙 | 丁 |\n";
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        app.update(Message::SelectAll, &files);
+        app.update(Message::Backspace, &files);
+        assert_eq!(app.document.text(), "");
+    }
+
+    #[test]
+    fn tab_on_digit_continuation_keeps_the_text() {
+        // 续行落在列表第二项里（第一项不会进缩进分支），`2026` 是正文不是序号
+        let src = "1. 甲\n2. 乙\n   2026 年\n";
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        click(&mut app, &files, src.find("2026").unwrap());
+        app.update(Message::Indent { outdent: false }, &files);
+        assert!(
+            app.document.text().contains("2026"),
+            "续行的年份不该被当成有序项序号改写：{:?}",
+            app.document.text()
         );
     }
 }

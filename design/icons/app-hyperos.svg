@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="mdview 应用图标 · HyperOS 4.0">
+  <title>mdview · HyperOS 4.0</title>
+  <defs>
+    <!-- 底座：左上冷蓝 → 右下紫，HyperOS 的流动渐变取向 -->
+    <linearGradient id="hxBase" x1="0.08" y1="0" x2="0.92" y2="1">
+      <stop offset="0" stop-color="#5C7DFF"/>
+      <stop offset="0.46" stop-color="#4A62F2"/>
+      <stop offset="1" stop-color="#7B45FF"/>
+    </linearGradient>
+    <!-- 顶部光泽：一层极浅的径向高光，制造"受光玻璃"的立体感 -->
+    <radialGradient id="hxGloss" cx="0.28" cy="0.04" r="0.86">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.34"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <!-- 底部暗角：让底座下沿沉下去 -->
+    <linearGradient id="hxVignette" x1="0" y1="0.55" x2="0" y2="1">
+      <stop offset="0" stop-color="#1B1B6E" stop-opacity="0"/>
+      <stop offset="1" stop-color="#1B1B6E" stop-opacity="0.28"/>
+    </linearGradient>
+    <!-- 纸张：纯白略带底部冷调，避免纯白在大画布上发飘 -->
+    <linearGradient id="hxPaper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F4F6FF"/>
+    </linearGradient>
+    <!-- 折面：纸张背面，比正面压低一档明度 -->
+    <linearGradient id="hxFold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#D6DEF8"/>
+      <stop offset="1" stop-color="#C3CDF0"/>
+    </linearGradient>
+    <linearGradient id="hxTextLine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#C9D3F0"/>
+      <stop offset="1" stop-color="#DCE3F7"/>
+    </linearGradient>
+
+    <filter id="hxPaperShadow" x="-28%" y="-18%" width="156%" height="152%">
+      <feDropShadow dx="0" dy="20" stdDeviation="26" flood-color="#141E5A" flood-opacity="0.30"/>
+    </filter>
+    <filter id="hxBadgeShadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#101B52" flood-opacity="0.34"/>
+    </filter>
+    <!-- 底座内描边：1px 白，只在上半圈可见 -->
+    <linearGradient id="hxRim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="0.42" stop-color="#FFFFFF" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.22"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ① 底座：圆角方形，圆角半径 232 / 1024 ≈ 22.6% -->
+  <rect x="0" y="0" width="1024" height="1024" rx="232" fill="url(#hxBase)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="232" fill="url(#hxGloss)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="232" fill="url(#hxVignette)"/>
+  <rect x="1.5" y="1.5" width="1021" height="1021" rx="230.5" fill="none"
+        stroke="url(#hxRim)" stroke-width="3"/>
+
+  <!-- ② 纸张：右上切角，与折面共用一条折痕 -->
+  <g filter="url(#hxPaperShadow)">
+    <path d="M296 200 H636 L776 340 V780 Q776 824 732 824 H296 Q252 824 252 780 V244 Q252 200 296 200 Z"
+          fill="url(#hxPaper)"/>
+  </g>
+  <!-- ③ 折面：被折下去的那一片，靠折痕与正面分离 -->
+  <path d="M636 200 L776 340 H684 Q636 340 636 292 Z" fill="url(#hxFold)"/>
+  <path d="M636 200 L776 340" fill="none" stroke="#AEB9E0" stroke-width="3" stroke-opacity="0.55"/>
+
+  <!-- ④ 文本行：三条不等长，模拟正文节奏 -->
+  <rect x="330" y="420" width="336" height="30" rx="15" fill="url(#hxTextLine)"/>
+  <rect x="330" y="490" width="246" height="30" rx="15" fill="url(#hxTextLine)" opacity="0.92"/>
+  <rect x="330" y="560" width="300" height="30" rx="15" fill="url(#hxTextLine)" opacity="0.84"/>
+  <!-- 光标：正在编辑的那一行，用品牌蓝点出"可写" -->
+  <rect x="330" y="630" width="20" height="34" rx="10" fill="#3B5BFF"/>
+
+  <!-- ⑤ 角标：白圆 + 向下箭头，点名 Markdown 的 ↓ -->
+  <g filter="url(#hxBadgeShadow)">
+    <circle cx="752" cy="756" r="108" fill="#FFFFFF"/>
+  </g>
+  <path d="M752 714 V798" fill="none" stroke="#3B5BFF" stroke-width="28" stroke-linecap="round"/>
+  <path d="M712 758 L752 798 L792 758" fill="none" stroke="#3B5BFF" stroke-width="28"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

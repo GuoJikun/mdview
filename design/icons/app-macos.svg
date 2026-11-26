@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="mdview 应用图标 · macOS">
+  <title>mdview · macOS</title>
+  <defs>
+    <!-- 底座：竖向为主、略带斜向的蓝紫渐变，macOS 图标惯用的"背光玻璃" -->
+    <linearGradient id="mcBase" x1="0.12" y1="0" x2="0.88" y2="1">
+      <stop offset="0" stop-color="#4A86FF"/>
+      <stop offset="0.38" stop-color="#3B6FF5"/>
+      <stop offset="0.72" stop-color="#5A5BF0"/>
+      <stop offset="1" stop-color="#7B4EF0"/>
+    </linearGradient>
+    <!-- 顶部玻璃光泽：上沿 0 → 45% 渐隐 -->
+    <linearGradient id="mcGlass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.30"/>
+      <stop offset="0.30" stop-color="#FFFFFF" stop-opacity="0.09"/>
+      <stop offset="0.62" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <!-- 底部反射：最下沿回一点冷光，模拟环境光反射 -->
+    <linearGradient id="mcReflect" x1="0" y1="0.82" x2="0" y2="1">
+      <stop offset="0" stop-color="#BBD0FF" stop-opacity="0"/>
+      <stop offset="1" stop-color="#BBD0FF" stop-opacity="0.16"/>
+    </linearGradient>
+    <linearGradient id="mcPaper" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F2F5FC"/>
+    </linearGradient>
+    <linearGradient id="mcFold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E6ECFA"/>
+      <stop offset="1" stop-color="#CFD9F0"/>
+    </linearGradient>
+    <linearGradient id="mcRim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.62"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.28"/>
+    </linearGradient>
+
+    <filter id="mcIconShadow" x="-25%" y="-20%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="16" stdDeviation="26" flood-color="#0A1430" flood-opacity="0.30"/>
+    </filter>
+    <filter id="mcPaperShadow" x="-30%" y="-20%" width="160%" height="155%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#152A5C" flood-opacity="0.26"/>
+    </filter>
+    <!-- macOS 图标内缘的一圈细内阴影，让底座有厚度 -->
+    <filter id="mcInner" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="9" result="b"/>
+      <feOffset dx="0" dy="4" result="o"/>
+      <feComposite in="SourceAlpha" in2="o" operator="out" result="ring"/>
+      <feFlood flood-color="#0B1638" flood-opacity="0.35"/>
+      <feComposite in2="ring" operator="in"/>
+    </filter>
+  </defs>
+
+  <!-- ① 底座：超椭圆（G2 连续角），接近 macOS 实际的图标轮廓 -->
+  <g filter="url(#mcIconShadow)">
+    <path d="M512 0 L784 0 C908 0 1024 116 1024 240 L1024 784 C1024 908 908 1024 784 1024 L240 1024 C116 1024 0 908 0 784 L0 240 C0 116 116 0 240 0 Z" fill="url(#mcBase)"/>
+  </g>
+  <path d="M512 0 L784 0 C908 0 1024 116 1024 240 L1024 784 C1024 908 908 1024 784 1024 L240 1024 C116 1024 0 908 0 784 L0 240 C0 116 116 0 240 0 Z" fill="url(#mcGlass)"/>
+  <path d="M512 0 L784 0 C908 0 1024 116 1024 240 L1024 784 C1024 908 908 1024 784 1024 L240 1024 C116 1024 0 908 0 784 L0 240 C0 116 116 0 240 0 Z" fill="url(#mcReflect)"/>
+  <path d="M512 0 L784 0 C908 0 1024 116 1024 240 L1024 784 C1024 908 908 1024 784 1024 L240 1024 C116 1024 0 908 0 784 L0 240 C0 116 116 0 240 0 Z"
+        fill="none" stroke="url(#mcRim)" stroke-width="3"/>
+
+  <!-- ② 纸张：右上折角，留白比 HyperOS 版更大，符合 macOS 图标的呼吸感 -->
+  <g filter="url(#mcPaperShadow)">
+    <path d="M304 180 H620 L784 344 V784 Q784 836 732 836 H304 Q252 836 252 784 V232 Q252 180 304 180 Z"
+          fill="url(#mcPaper)"/>
+  </g>
+  <path d="M620 180 L784 344 H672 Q620 344 620 292 Z" fill="url(#mcFold)"/>
+  <path d="M620 180 L784 344" fill="none" stroke="#B4C1DE" stroke-width="2.5" stroke-opacity="0.7"/>
+
+  <!-- ③ 文本行：第二行做成选区高亮，暗示"正在编辑" -->
+  <rect x="334" y="404" width="330" height="26" rx="13" fill="#CBD5E8"/>
+  <rect x="318" y="464" width="392" height="52" rx="10" fill="#E6EFFF"/>
+  <rect x="334" y="477" width="200" height="26" rx="13" fill="#A9C2EE"/>
+  <rect x="334" y="546" width="246" height="26" rx="13" fill="#CBD5E8"/>
+  <rect x="334" y="612" width="286" height="26" rx="13" fill="#CBD5E8" opacity="0.9"/>
+  <!-- ④ 插入光标：macOS 蓝，压在最后一行末尾 -->
+  <rect x="336" y="602" width="16" height="46" rx="8" fill="#0A84FF"/>
+
+  <!-- ⑤ 右下角极轻的品牌细节：一枚下箭头刻印，不抢主体 -->
+</svg>
