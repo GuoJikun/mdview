@@ -511,6 +511,27 @@ impl Session {
         self.state.lock().expect("状态锁中毒").path.clone()
     }
 
+    /// 崩溃副本要的三样：正文真值、文档路径、是否脏。
+    ///
+    /// 正文必须从内核取，不能由前端把 `sourceText` 传下来——源码视图里那是
+    /// textarea 的值、富文本视图里那是回包副本，两边都可能落后一帧。
+    pub fn backup_payload(&self) -> (String, Option<PathBuf>, bool) {
+        let app = self.state.lock().expect("状态锁中毒");
+        (app.document.text(), app.path.clone(), app.dirty)
+    }
+
+    /// 用崩溃副本替换当前文档。
+    ///
+    /// 副本不是磁盘内容，所以恢复后**必须是脏的**：用户不保存就关窗时，
+    /// 守卫还得再问一次，不能让人以为已经落盘。
+    pub fn restore(&self, content: &str, path: Option<PathBuf>) -> Snapshot {
+        self.replace_document(content, path);
+        if let Ok(mut app) = self.state.lock() {
+            app.dirty = true;
+        }
+        self.snapshot()
+    }
+
     #[cfg(test)]
     fn text(&self) -> String {
         self.state.lock().expect("状态锁中毒").document.text()
@@ -960,6 +981,16 @@ mod tests {
         session.dispatch(Wire::InsertText { text: "乙".into() });
         session.dispatch(Wire::Indent { outdent: false });
         assert_eq!(session.text(), "乙    ", "新建文档后仍按 4 空格缩进");
+    }
+
+    /// 恢复副本必须把文档标脏：副本不是磁盘内容，关窗前还得再拦一次。
+    #[test]
+    fn restoring_a_backup_marks_the_document_dirty() {
+        let session = session("");
+        let snap = session.restore("崩溃前写了一半的内容", None);
+        assert!(snap.dirty, "恢复后必须是脏的，否则关窗不会拦");
+        assert_eq!(session.text(), "崩溃前写了一半的内容");
+        assert!(snap.path.is_none(), "未命名文档恢复后仍然没有路径");
     }
 
     /// 过关线：插图 → 保存 → 重开，图片还在原处。

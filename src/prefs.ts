@@ -20,6 +20,11 @@ export interface Prefs {
   /** Tab / Shift+Tab 的缩进宽度，空格数。 */
   indent: number;
   startupView: StartupView;
+  /**
+   * 自动保存原文件。默认关：编辑器替用户决定「什么时候写盘」是件危险的事，
+   * 得明确打开才做。崩溃副本与此无关，它一直都在。
+   */
+  autoSave: boolean;
 }
 
 /** 各档字体的完整栈。写全比只写一个族名可靠：系统缺字体时还有退路。 */
@@ -47,6 +52,7 @@ export const DEFAULTS: Prefs = {
   width: 780,
   indent: 2,
   startupView: 'wysiwyg',
+  autoSave: false,
 };
 
 /** 数值的可调范围。面板上的滑杆与校验共用同一份边界，不会各写一套。 */
@@ -79,6 +85,7 @@ export function sanitize(raw: unknown): Prefs {
       obj.startupView === 'reading' || obj.startupView === 'source'
         ? obj.startupView
         : DEFAULTS.startupView,
+    autoSave: obj.autoSave === true,
   };
 }
 

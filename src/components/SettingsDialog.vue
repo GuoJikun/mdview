@@ -75,9 +75,24 @@
           </select>
         </div>
 
+        <div class="row check">
+          <label for="pref-autosave">自动保存</label>
+          <input
+            id="pref-autosave"
+            type="checkbox"
+            :checked="prefs.autoSave"
+            @change="update({ autoSave: ($event.target as HTMLInputElement).checked })"
+          >
+          <span class="value wide">有改动时静默写回原文件</span>
+        </div>
+
         <p class="hint">
           偏好存在本机，重启后保留。列表的缩进仍按标记宽度（<code>- </code> 两格、<code>1. </code> 三格）——
           改这里不会把子项推进标记中间。
+        </p>
+        <p class="hint">
+          无论是否开启自动保存，未保存的改动都会每 5 秒备份到配置目录：
+          崩溃或强制结束后重启，会问你要不要恢复。
         </p>
       </div>
 
@@ -180,6 +195,21 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+/* 复选框一行：勾选框紧贴标签，说明文字占右侧剩余宽度 */
+.row.check {
+  grid-template-columns: 76px auto 1fr;
+}
+
+.row.check input[type='checkbox'] {
+  justify-self: start;
+  accent-color: var(--accent);
+}
+
+.row.check .value.wide {
+  grid-column: 3;
+  text-align: left;
 }
 
 .hint {

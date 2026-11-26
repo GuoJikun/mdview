@@ -12,6 +12,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backdrop;
+mod backup;
 mod link;
 mod recent;
 mod release_notes;
@@ -26,6 +27,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use mdview_app::Watcher;
@@ -474,6 +476,92 @@ fn copy_to_assets(source: &std::path::Path, document: &std::path::Path) -> Resul
     std::fs::copy(source, assets.join(&name)).map_err(|err| format!("复制图片失败：{err}"))?;
     // 相对地址一律用正斜杠：Markdown 链接里的反斜杠在别的平台上会失效
     Ok(format!("assets/{name}"))
+}
+
+/// 崩溃副本：把当前脏文档落一份到配置目录。
+///
+/// 由前端每几秒问一次（内核里没有定时器的概念）。不脏就顺手**删掉**旧副本——
+/// 「副本存在」等于「上次退出时还有没保存的内容」，保存之后必须自清理。
+///
+/// 自检模式下直接返回 false：自检会反复换文档，写出来的副本会污染下一次启动。
+#[tauri::command]
+async fn write_backup(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    sessions: tauri::State<'_, Sessions>,
+) -> Result<bool, String> {
+    if app.state::<RunMode>().self_test {
+        return Ok(false);
+    }
+    let session = session_of(window.label(), &sessions)?;
+    let (text, path, dirty) = session.backup_payload();
+    if !dirty || text.is_empty() {
+        backup::discard(&app, window.label(), path.as_deref());
+        return Ok(false);
+    }
+    backup::save(&app, window.label(), path.as_deref(), &text)?;
+    Ok(true)
+}
+
+/// 启动时问一句：上次是不是崩了、有没有没保存的内容要恢复。
+///
+/// 只有「副本存在且不比磁盘旧」才会问（判据见 `backup::pending`）。
+/// 用户选恢复就返回新快照，选丢弃就删掉副本返回 `Ok(None)`。
+#[tauri::command]
+async fn backup_recovery(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    sessions: tauri::State<'_, Sessions>,
+) -> Result<Option<Snapshot>, String> {
+    if app.state::<RunMode>().self_test {
+        return Ok(None);
+    }
+    let session = session_of(window.label(), &sessions)?;
+    let (_, path, _) = session.backup_payload();
+    let Some((meta, text)) = backup::pending(&app, window.label(), path.as_deref()) else {
+        return Ok(None);
+    };
+    let what = meta
+        .path
+        .clone()
+        .unwrap_or_else(|| "未命名文档".to_string());
+    let when = ago(meta.saved_at);
+    log::info!("发现崩溃副本：{what}（{when}）");
+    let restore = app
+        .dialog()
+        .message(format!(
+            "{what}\n\n上次退出时还有未保存的内容（{when}的副本）。\n要恢复吗？"
+        ))
+        .title("恢复未保存的内容")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "恢复".to_string(),
+            "丢弃".to_string(),
+        ))
+        .blocking_show();
+    if !restore {
+        backup::discard(&app, window.label(), path.as_deref());
+        log::info!("用户丢弃了崩溃副本：{what}");
+        return Ok(None);
+    }
+    let snap = session.restore(&text, path.clone());
+    backup::discard(&app, window.label(), path.as_deref());
+    log::info!("已恢复崩溃副本：{what}");
+    Ok(Some(snap))
+}
+
+/// 把「多久以前」说成人话。不引时间库：只需要粗粒度，误差不影响判断。
+fn ago(saved_at: u64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(saved_at);
+    let secs = now.saturating_sub(saved_at);
+    match secs {
+        0..=59 => "刚才".to_string(),
+        60..=3599 => format!("{} 分钟前", secs / 60),
+        3600..=86_399 => format!("{} 小时前", secs / 3600),
+        _ => format!("{} 天前", secs / 86_400),
+    }
 }
 
 /// 文件 → 重新加载：把磁盘上的最新内容读回来，丢掉内存里的改动。
@@ -1099,6 +1187,8 @@ fn main() {
             open_file,
             reload_file,
             pick_image,
+            write_backup,
+            backup_recovery,
             new_file,
             new_window,
             confirm_discard,

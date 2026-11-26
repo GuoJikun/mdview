@@ -60,6 +60,7 @@ describe('prefs.sanitize', () => {
       width: 900,
       indent: 4,
       startupView: 'reading',
+      autoSave: true,
     });
     expect(got).toEqual({
       font: 'serif',
@@ -67,7 +68,17 @@ describe('prefs.sanitize', () => {
       width: 900,
       indent: 4,
       startupView: 'reading',
+      autoSave: true,
     });
+  });
+
+  it('自动保存只认真正的 true，默认关闭', async () => {
+    const { sanitize, DEFAULTS } = await fresh();
+    expect(sanitize({}).autoSave).toBe(false);
+    // 手改 localStorage 写进字符串 "true" 也算脏数据：宁可不开，也不能凭空开
+    expect(sanitize({ autoSave: 'true' }).autoSave).toBe(false);
+    expect(sanitize({ autoSave: 1 }).autoSave).toBe(false);
+    expect(DEFAULTS.autoSave).toBe(false);
   });
 
   it('缩进宽度夹在边界内（列表缩进另按标记宽度算，不受它影响）', async () => {

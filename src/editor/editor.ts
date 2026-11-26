@@ -81,6 +81,8 @@ let maxStop = -1;                                   // 最大停靠点序号，�
 let caret: CaretDto | null = null;                  // 最近一次内核回报的光标
 let pendingStop: number | null = null;              // 已发出、尚未回包的垂直移动落点
 let meta: Meta = { revision: 0, dirty: false, path: null, stops: 0, words: 0 };
+/** 下一次保存是自动保存：成功时不弹「已保存」（见 applyReply）。 */
+let quietSave = false;
 // 当前视图模式。它不只画菜单圆点，还真正驱动 <html data-view> 切 DOM：
 // wysiwyg 显示富文本投影；reading 只读；source 显示并编辑 Markdown 源文本。
 // 与内核默认值一致；macOS 原生菜单切模式也走 runAction，会同步更新。
@@ -1487,9 +1489,18 @@ function applyReply(reply: Reply) {
   if (reply.conflict) toast('文件已被外部修改，保存被拒');
   else if (reply.error) toast(reply.error);
   if (reply.saved) {
-    toast('已保存');
+    // 自动保存不弹提示：每 5 秒冒一条「已保存」是噪音，标题栏的脏标记
+    // 消失已经是足够的反馈。手动保存仍然提示。
+    if (quietSave) quietSave = false;
+    else toast('已保存');
     // 另存为会把文档改绑到新路径，最近列表要跟着多一条。
     refreshRecent();
+    // 落盘之后副本就没用了：让宿主把它删掉（它只在「没保存」时有意义）。
+    // 定时器那条路径只在 dirty 时才发，所以这里必须单独清一次。
+    invoke('write_backup').catch(() => {});
+  } else if (quietSave) {
+    // 没保存成功（冲突 / 写盘失败）：别让标志留到下一次手动保存去吞掉提示
+    quietSave = false;
   }
   // 内核没有路径：弹框问用户要一个，拿到后补发 saveTo
   if (reply.needs_path) requestSavePath();
@@ -1627,6 +1638,32 @@ async function boot() {
       else delete document.documentElement.dataset.drop;
     }).catch(() => {});
   }
+
+  // 崩溃副本与自动保存：脏文档每 5 秒问一次。
+  // 正文真值由 Rust 侧从内核读（前端那份可能落后一帧），这里只负责「到点问一句」。
+  window.setInterval(() => {
+    if (!meta.dirty) return;
+    // 自动保存（默认关）：写回原文件、不弹提示。未命名文档没有原文件可写，
+    // 继续走崩溃副本——那也是它唯一的兜底。
+    if (mdviewPrefs.prefs.autoSave && meta.path) {
+      quietSave = true;
+      send({ kind: 'save' });
+      return;
+    }
+    invoke('write_backup').catch(() => {});
+  }, 5000);
+
+  // 上次退出时是不是还有没保存的内容。宿主会弹原生确认框，选恢复就整篇换掉；
+  // 必须在首帧渲染之后——它会整体替换内核状态并触发全量重绘。
+  invoke<Snapshot | null>('backup_recovery')
+    .then((snap) => {
+      // 没有副本时宿主返回 null；这里再挡一道「不像快照的东西」，
+      // 别因为一条空对象把刚渲染好的文档整篇换掉。
+      if (!snap || typeof snap.revision !== 'number') return;
+      applySnapshot(snap);
+      toast('已恢复上次未保存的内容');
+    })
+    .catch((err) => console.error(err));
 }
 
 // ---- 输入 ------------------------------------------------------------
@@ -3004,6 +3041,8 @@ window.__mdviewSelfTest = async function () {
       await nextTick();
       const panel = document.querySelector<HTMLElement>('.settings-dialog');
       check('偏好设置面板可打开', !!panel);
+      const autoSave = document.querySelector<HTMLInputElement>('#pref-autosave');
+      check('偏好设置含自动保存开关', !!autoSave && autoSave.type === 'checkbox');
 
       mdviewPrefs.set({ fontSize: 17, width: 900 });
       window.__mdviewRelayout?.();
