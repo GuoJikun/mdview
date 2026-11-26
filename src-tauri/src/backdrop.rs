@@ -1,10 +1,11 @@
-//! Windows 11 系统底材（Mica / Acrylic）。
+//! Windows / macOS 系统底材。
 //!
-//! DWM 材质只能由 Rust 侧设置；前端通过 [`backdrop_kind`] 得知当前材质，
-//! 再决定要不要把 WebView 的表层背景改成透明。非 Windows 平台全部为空操作。
+//! 系统材质只能由 Rust 侧设置；前端通过 [`backdrop_kind`] 得知当前材质，
+//! 再决定要不要把 WebView 的表层背景改成透明。其他平台全部为空操作。
 //!
-//! `set_backdrop_mode` 是给开发时对照用的临时开关，不做持久化：
-//! 关掉应用就回到默认的 Mica。
+//! Windows 用 DWM 的 Mica / Acrylic；macOS 用 NSVisualEffectView 的
+//! Sidebar / HudWindow。`set_backdrop_mode` 是给开发时对照用的临时开关，
+//! 不做持久化：关掉应用就回到默认材质。
 
 use std::sync::{
     Mutex,
@@ -84,7 +85,8 @@ impl Backdrop {
         self.dark.lock().ok().and_then(|guard| *guard)
     }
 
-    /// 给单个窗口应用当前材质。`dark = None` 表示交给系统默认。
+    /// 给单个窗口应用当前材质。`dark = None` 表示交给系统默认；
+    /// macOS 的材质自己跟随系统明暗与窗口激活态，忽略这个参数。
     pub fn apply(&self, window: &WebviewWindow, dark: Option<bool>) -> bool {
         let mode = self.mode();
         #[cfg(target_os = "windows")]
@@ -109,7 +111,33 @@ impl Backdrop {
                 true
             }
         };
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        let applied = {
+            let _ = dark;
+            // crate 每次 apply 都会插入一个新的 effect view；重刷前先清掉旧的，
+            // 否则主题切换几次就会叠出好几层模糊。clear_vibrancy 在主线程调用。
+            let _ = window_vibrancy::clear_vibrancy(window);
+            let apply = |material| {
+                match window_vibrancy::apply_vibrancy(
+                    window,
+                    material,
+                    Some(window_vibrancy::NSVisualEffectState::FollowsWindowActiveState),
+                    Some(12.0), // 与 macOS 窗口的标准圆角一致
+                ) {
+                    Ok(()) => true,
+                    Err(err) => {
+                        log::warn!("macOS 系统材质不可用，回退纯色：{err}");
+                        false
+                    }
+                }
+            };
+            match mode {
+                Mode::Mica => apply(window_vibrancy::NSVisualEffectMaterial::Sidebar),
+                Mode::Acrylic => apply(window_vibrancy::NSVisualEffectMaterial::HudWindow),
+                Mode::None => true,
+            }
+        };
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         let applied = {
             let _ = (window, dark);
             false
@@ -134,7 +162,8 @@ pub fn backdrop_kind(app: AppHandle) -> &'static str {
     app.state::<Backdrop>().kind()
 }
 
-/// 前端把生效主题同步回来，让 DWM 的深色模式跟着走。
+/// 前端把生效主题同步回来：Windows 让 DWM 的深色模式跟着走，
+/// macOS 的系统材质自行跟随明暗，这里只更新新窗口沿用的偏好。
 #[tauri::command]
 pub fn sync_backdrop(app: AppHandle, theme: String) {
     let backdrop = app.state::<Backdrop>();

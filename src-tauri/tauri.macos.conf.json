@@ -11,6 +11,7 @@
         "minHeight": 360,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
+        "transparent": true,
         "visible": false
       }
     ]
