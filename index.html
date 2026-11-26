@@ -45,6 +45,11 @@
 <!-- 横向滚动条：源码视图长行不换行时才有内容可滚，纵向/横向共用同一套视觉 -->
 <div id="hscroll" class="tb-hscroll" aria-hidden="true"><div id="hscroll-thumb" class="tb-hscroll-thumb"></div></div>
 
+<!-- 文件侧栏：工作区里的 Markdown 目录树，点击切换文档。
+     与大纲同列、各占一段——大纲跟当前文档，文件树跟工作区。
+     没有工作区时整块不占位（html.has-workspace 控制）。 -->
+<aside id="files" aria-label="工作区文件"></aside>
+<div id="files-scroll" class="tb-vscroll" aria-hidden="true"><div id="files-scroll-thumb" class="tb-vscroll-thumb"></div></div>
 <!-- 大纲侧栏：标题清单，点击跳正文，滚动时高亮当前节 -->
 <nav id="outline" aria-label="文档大纲"></nav>
 <div id="outline-scroll" class="tb-vscroll" aria-hidden="true"><div id="outline-scroll-thumb" class="tb-vscroll-thumb"></div></div>

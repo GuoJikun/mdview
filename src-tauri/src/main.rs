@@ -19,10 +19,11 @@ mod recent;
 mod release_notes;
 mod session;
 mod update;
+mod workspace;
 
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process,
     sync::{
         Arc, Mutex,
@@ -401,6 +402,44 @@ async fn open_file(
         remember_recent(&app, &path);
     }
     Ok(Some(snap))
+}
+
+/// 文件 → 打开文件夹：选一个目录作为工作区，侧栏列出里面的 Markdown 文件。
+///
+/// 只列一层（见 [`workspace::read_dir`]），子目录由前端展开时再问。工作区是纯
+/// 视图概念——内核与 `Session` 完全不知道它的存在，所以这里不需要 session。
+///
+/// `path` 可选：正常调用走对话框；传入时直接用该目录——给自检与拖放一条不弹窗
+/// 的注入点（与 `open_file` 同款）。
+#[tauri::command]
+async fn open_folder(
+    app: tauri::AppHandle,
+    path: Option<PathBuf>,
+) -> Result<Option<workspace::FolderListing>, String> {
+    let dir = match path {
+        Some(p) => p,
+        None => {
+            let picked = app
+                .dialog()
+                .file()
+                .set_title("打开文件夹（作为工作区）")
+                .blocking_pick_folder();
+            let Some(dir) = picked else {
+                return Ok(None);
+            };
+            dir.into_path()
+                .map_err(|_| "选中的目录路径无效".to_string())?
+        }
+    };
+    let dir = workspace::absolute(&dir);
+    log::info!("打开文件夹：{}", dir.display());
+    workspace::read_dir(&dir).map(Some)
+}
+
+/// 侧栏展开子目录：只列这一层。参数是绝对路径字符串，原样来自上一次列目录。
+#[tauri::command]
+async fn read_folder(path: String) -> Result<workspace::FolderListing, String> {
+    workspace::read_dir(Path::new(&path))
 }
 
 /// 插入图片：选文件 → 复制到文档同级 `assets/` → 返回要写进源码的地址。
@@ -851,6 +890,7 @@ fn is_recent_menu_id(id: &str) -> bool {
 fn menu_action(id: &str) -> Option<&'static str> {
     Some(match id {
         "open-file" => "open-file",
+        "open-folder" => "open-folder",
         "reload-file" => "reload-file",
         "save" => "save",
         "save-as" => "save-as",
@@ -951,6 +991,7 @@ fn build_native_menu(
         .item(&item("new-file", "新建")?)
         .item(&item("new-window", "新建窗口")?)
         .item(&item("open-file", "打开文件…")?)
+        .item(&item("open-folder", "打开文件夹…")?)
         .item(&recent_menu)
         .separator()
         .item(&item("reload-file", "重新加载")?)
@@ -1207,7 +1248,10 @@ fn main() {
                 if window.app_handle().state::<RunMode>().self_test {
                     return;
                 }
-                let _ = window.emit("drop-hover", first_markdown(paths).is_some());
+                let _ = window.emit(
+                    "drop-hover",
+                    first_markdown(paths).is_some() || paths.iter().any(|p| p.is_dir()),
+                );
             }
             WindowEvent::DragDrop(DragDropEvent::Leave) => {
                 let _ = window.emit("drop-hover", false);
@@ -1217,11 +1261,17 @@ fn main() {
                 if window.app_handle().state::<RunMode>().self_test {
                     return;
                 }
-                let Some(path) = first_markdown(paths) else {
+                // 文件优先：同时拖进来一个目录和一篇文章时，用户想要的是打开文章。
+                if let Some(path) = first_markdown(paths) {
+                    log::info!("拖放打开：{}", path.display());
+                    let _ = window.emit("drop-open", path.to_string_lossy().to_string());
                     return;
-                };
-                log::info!("拖放打开：{}", path.display());
-                let _ = window.emit("drop-open", path.to_string_lossy().to_string());
+                }
+                // 没有可打开的文件才看目录：把它当工作区打开，侧栏列出里面的东西。
+                if let Some(dir) = paths.iter().find(|p| p.is_dir()) {
+                    log::info!("拖放打开文件夹：{}", dir.display());
+                    let _ = window.emit("drop-folder", dir.to_string_lossy().to_string());
+                }
             }
             _ => {}
         })
@@ -1235,6 +1285,8 @@ fn main() {
             ready,
             selftest,
             open_file,
+            open_folder,
+            read_folder,
             reload_file,
             pick_image,
             write_backup,

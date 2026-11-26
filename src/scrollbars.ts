@@ -28,8 +28,8 @@ interface ScrollEdges {
 
 interface ScrollSpec {
   axis: 'y' | 'x';
-  track: HTMLElement;
-  thumb: HTMLElement;
+  track: HTMLElement | null;
+  thumb: HTMLElement | null;
   viewport: () => number;
   content: () => number;
   max: () => number;
@@ -39,22 +39,26 @@ interface ScrollSpec {
 }
 
 function attachScrollbar(spec: ScrollSpec): () => void {
-  const track = spec.track;
-  const thumb = spec.thumb;
+  // 骨架 DOM 缺了某一对（比如某个容器在某个视图下不该有滚动条）就不装，
+  // 滚动本身不受影响——自绘条只是装饰，不该让整页崩掉。
+  if (!spec.track || !spec.thumb) return () => {};
+  // 判空之后另起别名：TS 不把「已判空」的结论带进下面这些闭包。
+  const trackEl = spec.track as HTMLElement;
+  const thumbEl = spec.thumb as HTMLElement;
   const horizontal = spec.axis === 'x';
   let drag: { coord: number; pos: number; max: number } | null = null;
 
   // 沿轴取坐标/尺寸，横向纵向共用同一套公式
   const mouseCoord = (event: MouseEvent) => horizontal ? event.clientX : event.clientY;
   const trackStart = () => {
-    const rect = track.getBoundingClientRect();
+    const rect = trackEl.getBoundingClientRect();
     return horizontal ? rect.left : rect.top;
   };
   const trackSize = () => {
-    const rect = track.getBoundingClientRect();
+    const rect = trackEl.getBoundingClientRect();
     return horizontal ? rect.width : rect.height;
   };
-  const thumbSize = () => horizontal ? thumb.offsetWidth : thumb.offsetHeight;
+  const thumbSize = () => horizontal ? thumbEl.offsetWidth : thumbEl.offsetHeight;
 
   function refresh(): void {
     if (!rootEl.classList.contains('custom-titlebar')) return;
@@ -62,34 +66,34 @@ function attachScrollbar(spec: ScrollSpec): () => void {
     // 不能只在纵向分支处理 top/bottom——否则隐藏状态栏后横向条悬在半空。
     if (spec.edges) {
       const e = spec.edges();
-      if (e.top !== undefined) track.style.top = e.top + 'px';
-      if (e.bottom !== undefined) track.style.bottom = e.bottom + 'px';
-      if (e.left !== undefined) track.style.left = e.left + 'px';
-      if (e.right !== undefined) track.style.right = e.right + 'px';
+      if (e.top !== undefined) trackEl.style.top = e.top + 'px';
+      if (e.bottom !== undefined) trackEl.style.bottom = e.bottom + 'px';
+      if (e.left !== undefined) trackEl.style.left = e.left + 'px';
+      if (e.right !== undefined) trackEl.style.right = e.right + 'px';
     }
     const max = spec.max();
-    if (max <= 0) { thumb.style.display = 'none'; return; }
-    thumb.style.display = '';
+    if (max <= 0) { thumbEl.style.display = 'none'; return; }
+    thumbEl.style.display = '';
     const trackPx = Math.max(1, trackSize());
     const size = Math.max(28, Math.min(trackPx,
       trackPx * spec.viewport() / spec.content()));
     const offset = (spec.pos() / max) * (trackPx - size);
     if (horizontal) {
-      thumb.style.width = size + 'px';
-      thumb.style.left = offset + 'px';
+      thumbEl.style.width = size + 'px';
+      thumbEl.style.left = offset + 'px';
     } else {
-      thumb.style.height = size + 'px';
-      thumb.style.top = offset + 'px';
+      thumbEl.style.height = size + 'px';
+      thumbEl.style.top = offset + 'px';
     }
   }
 
-  thumb.addEventListener('mousedown', (event) => {
+  thumbEl.addEventListener('mousedown', (event) => {
     event.preventDefault();
     drag = { coord: mouseCoord(event), pos: spec.pos(), max: spec.max() };
-    track.classList.add('dragging');
+    trackEl.classList.add('dragging');
   });
-  track.addEventListener('mousedown', (event) => {
-    if (event.target === thumb) return;
+  trackEl.addEventListener('mousedown', (event) => {
+    if (event.target === thumbEl) return;
     const max = spec.max();
     if (max <= 0) return;
     const ratio = (mouseCoord(event) - trackStart() - thumbSize() / 2) /
@@ -105,7 +109,7 @@ function attachScrollbar(spec: ScrollSpec): () => void {
   document.addEventListener('mouseup', () => {
     if (!drag) return;
     drag = null;
-    track.classList.remove('dragging');
+    trackEl.classList.remove('dragging');
   });
   return refresh;
 }
@@ -170,6 +174,30 @@ function outlineScrollSpec(): ScrollSpec {
   };
 }
 
+function filesScrollSpec(): ScrollSpec {
+  const panel = document.getElementById('files') as HTMLElement;
+  return {
+    axis: 'y',
+    track: document.getElementById('files-scroll') as HTMLElement,
+    thumb: document.getElementById('files-scroll-thumb') as HTMLElement,
+    viewport: () => panel.clientHeight,
+    content: () => panel.scrollHeight,
+    max: () => Math.max(0, panel.scrollHeight - panel.clientHeight),
+    pos: () => panel.scrollTop,
+    setPos: (v) => { panel.scrollTop = v; },
+    // 轨道与面板等高：上沿避开标题栏，下沿停在面板自己的底边（面板只占侧栏
+    // 上半段，轨道跟着它收，不然滑块会压到大纲上）。
+    edges: () => {
+      const titlebar = document.getElementById('titlebar');
+      const box = panel.getBoundingClientRect();
+      return {
+        top: Math.max(titlebar ? titlebar.getBoundingClientRect().bottom : 0, box.top),
+        bottom: window.innerHeight - box.bottom,
+      };
+    },
+  };
+}
+
 function sourceHScrollSpec(): ScrollSpec {
   const sourceEl = document.getElementById('source') as HTMLTextAreaElement;
   return {
@@ -190,11 +218,13 @@ function sourceHScrollSpec(): ScrollSpec {
 
 const refreshDocScroll = attachScrollbar(docScrollSpec());
 const refreshOutlineScroll = attachScrollbar(outlineScrollSpec());
+const refreshFilesScroll = attachScrollbar(filesScrollSpec());
 const refreshSourceHScroll = attachScrollbar(sourceHScrollSpec());
 
 export function refreshScrollbar(): void {
   refreshDocScroll();
   refreshOutlineScroll();
+  refreshFilesScroll();
   refreshSourceHScroll();
 }
 
@@ -202,6 +232,7 @@ window.__mdviewRefreshScrollbar = refreshScrollbar;
 
 window.addEventListener('scroll', refreshScrollbar, { passive: true });
 document.getElementById('outline')?.addEventListener('scroll', refreshScrollbar, { passive: true });
+document.getElementById('files')?.addEventListener('scroll', refreshScrollbar, { passive: true });
 document.getElementById('source')?.addEventListener('scroll', refreshScrollbar, { passive: true });
 window.addEventListener('resize', refreshScrollbar);
 

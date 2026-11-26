@@ -43,6 +43,7 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
     { action: 'new-file', label: '新建', acc: 'Ctrl+N' },
     { action: 'new-window', label: '新建窗口', acc: 'Ctrl+Shift+N' },
     { action: 'open-file', label: '打开文件…', acc: 'Ctrl+O' },
+    { action: 'open-folder', label: '打开文件夹…', acc: 'Ctrl+Shift+O' },
     { sub: { label: '最近打开', items: [], dynamic: 'recent' } },
     { sep: true },
     { action: 'reload-file', label: '重新加载', acc: 'Ctrl+R' },

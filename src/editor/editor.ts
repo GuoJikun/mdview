@@ -44,6 +44,8 @@ import * as mdviewSkin from '../skin';
 // 排版偏好（字体 / 字号 / 行宽 / 缩进 / 启动视图）。生效方式是 CSS 变量，
 // 这里只负责启动时应用一次、并把缩进宽度推给内核。
 import * as mdviewPrefs from '../prefs';
+// 文件侧栏（工作区）。树里点文件走同一个 openPath，未保存确认与菜单一致。
+import * as mdviewFiles from '../files';
 
 // 这几个节点在 index.html 里是写死的骨架，缺任何一个后续都会立刻炸。
 // 断言只影响类型，不改运行时行为（真拿不到时，仍是首次调用处的 TypeError）。
@@ -1335,6 +1337,10 @@ function runAction(action: string) {
         refreshRecent();
       }).catch((err) => toast('打开文件失败：' + err));
       break;
+    case 'open-folder':
+      // 工作区是纯视图状态，不碰内核：换目录不影响当前文档，也不需要脏检查。
+      void mdviewFiles.openWorkspace();
+      return;
     case 'reload-file':
       // 同一条队列：在途 dispatch 的回包不能盖掉刚读回来的内容。
       // 用户取消确认时返回 null（静默）；未命名文档由 Rust 直接报错。
@@ -1502,7 +1508,10 @@ function applyReply(reply: Reply) {
   meta.dirty = reply.dirty;
   if (typeof reply.words === 'number') meta.words = reply.words;
   // 另存为成功后内核会把文档改绑到新路径，标题栏要跟着换名字
-  if (reply.path) meta.path = reply.path;
+  if (reply.path) {
+    meta.path = reply.path;
+    mdviewFiles.markActive(meta.path);   // 侧栏高亮跟着换（可能已开出工作区）
+  }
   // 内核回传的源文本真值。源码视图里 textarea 是用户正在敲的那一侧，
   // 它的值可能与这条回包同revision，不要回写覆盖，否则光标会跳。
   if (typeof reply.source === 'string') {
@@ -1575,6 +1584,7 @@ function applySnapshot(snap: Snapshot) {
   // 换文档后旧的命中已经不成立，重算（查找栏开着就保持开着）
   refreshFindAfterEdit();
   renderStatus();
+  mdviewFiles.markActive(meta.path);
   if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
 }
 
@@ -1625,6 +1635,10 @@ async function boot() {
   invoke('ready').catch(() => {});
   // 最近打开列表：首帧就拉一次，文件菜单不用等到第一次保存才有内容。
   refreshRecent();
+  // 文件侧栏：树里点文件走 openPath（= open_file），未保存确认与菜单完全一致；
+  // 上次的工作区顺手恢复，目录不在了它会自己忘掉。
+  mdviewFiles.initFileTree({ open: openPath, toast });
+  void mdviewFiles.restoreWorkspace();
   // 外部修改：后端 Watcher 发现磁盘上的文件被别的进程改了会 emit 这个事件。
   // 只提示，不自动重载——自动重载会冲掉用户未保存的编辑。
   if (listen) {
@@ -1657,6 +1671,11 @@ async function boot() {
     listen<unknown>('drop-open', (event) => {
       const path = typeof event.payload === 'string' ? event.payload : null;
       if (path) openPath(path);
+    }).catch(() => {});
+    // 拖进来的是目录：当工作区打开，与「文件 → 打开文件夹」同一条路径。
+    listen<unknown>('drop-folder', (event) => {
+      const path = typeof event.payload === 'string' ? event.payload : null;
+      if (path) void mdviewFiles.openWorkspace(path);
     }).catch(() => {});
     // 悬停反馈：拖进来时给正文加一圈虚线，离开/松手就撤掉。
     listen<unknown>('drop-hover', (event) => {
@@ -1820,7 +1839,11 @@ window.addEventListener('keydown', (event) => {
         runAction(event.shiftKey ? 'new-window' : 'new-file');
         return;
       }
-      if (key === 'o') { event.preventDefault(); runAction('open-file'); return; }
+      if (key === 'o') {
+        event.preventDefault();
+        runAction(event.shiftKey ? 'open-folder' : 'open-file');
+        return;
+      }
     }
     return;
   }
@@ -1839,7 +1862,11 @@ window.addEventListener('keydown', (event) => {
         runAction(event.shiftKey ? 'new-window' : 'new-file');
         return;
       }
-      if (key === 'o') { event.preventDefault(); runAction('open-file'); return; }
+      if (key === 'o') {
+        event.preventDefault();
+        runAction(event.shiftKey ? 'open-folder' : 'open-file');
+        return;
+      }
     }
     // Escape 留给菜单；方向/翻页/滚动放行，其余编辑键吞掉
     const NAV = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown',
@@ -1867,7 +1894,11 @@ window.addEventListener('keydown', (event) => {
       runAction(event.shiftKey ? 'new-window' : 'new-file');
       return;
     }
-    if (key === 'o') { event.preventDefault(); runAction('open-file'); return; }
+    if (key === 'o') {
+      event.preventDefault();
+      runAction(event.shiftKey ? 'open-folder' : 'open-file');
+      return;
+    }
     // Ctrl+S 在未命名文档上会由内核回 needs_path，前端再弹保存对话框；
     // Ctrl+Shift+S 是明确的「另存为」，总是弹框。
     if (key === 's') {
@@ -2324,6 +2355,8 @@ window.__mdviewSelfTest = async function () {
     imeEl.dispatchEvent(new CompositionEvent(type, { data: data || '', bubbles: true }));
   // 外壳组件已 Vue 化，点菜单后 DOM 在下一个微任务才更新。
   const nextTick = window.__mdviewNextTick || (() => Promise.resolve());
+  // 侧栏的展开 / 打开都要等一次 IPC 回包，微任务不够，得让出一段真实时间。
+  const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
   try {
     check('焦点落在透明输入框', document.activeElement === imeEl,
@@ -2840,6 +2873,9 @@ window.__mdviewSelfTest = async function () {
       const openItem = document.querySelector('#tb-menu-popup button[data-action="open-file"]');
       check('文件菜单有打开文件项', !!openItem,
         openItem ? openItem.textContent : '无');
+      const folderItem = document.querySelector('#tb-menu-popup button[data-action="open-folder"]');
+      check('文件菜单有打开文件夹项', !!folderItem,
+        folderItem ? folderItem.textContent : '无');
       const saveAsItem = document.querySelector('#tb-menu-popup button[data-action="save-as"]');
       check('文件菜单有另存为项', !!saveAsItem,
         saveAsItem ? saveAsItem.textContent : '无');
@@ -2875,6 +2911,48 @@ window.__mdviewSelfTest = async function () {
       }
     } catch (err) {
       check('open_file 注入路径可用', false, String(err));
+    }
+
+    // ---- 文件侧栏 / 工作区 ----
+    // 拿 `tests/` 当工作区：它有一个子目录 fixtures 和若干 .rs 文件，正好验证
+    // 「只列 Markdown 与目录」与「懒展开」两条规则。点文件仍然走 open_file，
+    // 自检模式下脏检查直接放行，所以不会弹确认框把自检挂住。
+    try {
+      await window.__mdviewOpenWorkspace?.('tests');
+      await delay(120);
+      check('打开工作区后侧栏出现',
+        document.documentElement.classList.contains('has-workspace') &&
+          !!document.querySelector('#files .ft-row'),
+        document.documentElement.classList.contains('has-workspace') ? 'has-workspace' : '无侧栏');
+      const labelsOf = () => Array.from(document.querySelectorAll('#files .ft-label'))
+        .map((el) => el.textContent || '');
+      const dirRow = Array.from(document.querySelectorAll<HTMLElement>('#files .ft-row'))
+        .find((row) => (row.textContent || '').includes('fixtures'));
+      check('侧栏列出子目录', !!dirRow, labelsOf().join(' / '));
+      check('侧栏不列非 Markdown 文件',
+        !labelsOf().some((name) => /\.(rs|png|toml)$/i.test(name)),
+        labelsOf().join(' / '));
+      check('展开前看不到子目录里的文件', !labelsOf().includes('selftest.md'),
+        labelsOf().join(' / '));
+      dirRow?.click();
+      await delay(150);
+      const mdRow = Array.from(document.querySelectorAll<HTMLElement>('#files .ft-row'))
+        .find((row) => (row.textContent || '').includes('selftest.md'));
+      check('展开子目录懒加载出 Markdown 文件', !!mdRow, labelsOf().join(' / '));
+      const beforePath = meta.path;
+      mdRow?.click();
+      await delay(200);
+      check('侧栏点文件经 open_file 打开',
+        (meta.path || '').replace(/\\/g, '/').endsWith('fixtures/selftest.md'),
+        String(meta.path) + ' ← ' + String(beforePath));
+      check('侧栏高亮当前文档', !!document.querySelector('#files .ft-row.active'),
+        String(document.querySelectorAll('#files .ft-row.active').length));
+      document.querySelector<HTMLElement>('#files [data-ft="close"]')?.click();
+      await delay(60);
+      check('侧栏可收起', !document.documentElement.classList.contains('has-workspace'),
+        String(document.documentElement.classList.contains('has-workspace')));
+    } catch (err) {
+      check('文件侧栏可用', false, String(err));
     }
 
     // 新建 + 未命名保存：验证「没有路径时必须问，而不是假装写过」这条链路。

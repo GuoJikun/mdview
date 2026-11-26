@@ -211,8 +211,21 @@ html[data-skin="hyperos"] #tb-menu-popup button.focused .mark-check,
 html[data-skin="hyperos"] #tb-menu-popup .submenu-trigger.open .mark-check { color: #fff; }
 
 /* ---- 大纲侧栏：浮起的玻璃卡片，与正文之间留出 10px 缝 ---- */
-html[data-skin="hyperos"] #outline {
+html[data-skin="hyperos"].has-workspace { --files-gap: 8px; }
+html[data-skin="hyperos"] #files {
   top: calc(var(--chrome-h) + var(--canvas-gap));
+  padding: 12px 8px 10px;
+  border: 1px solid var(--sk-card-edge);
+  border-right: 1px solid var(--sk-card-edge);
+  border-radius: var(--sk-radius-card);
+  background: var(--outline-bg);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: var(--sk-shadow-card);
+  font-family: var(--font-ui);
+}
+html[data-skin="hyperos"] #outline {
+  top: calc(var(--chrome-h) + var(--canvas-gap) + var(--files-h) + var(--files-gap));
   bottom: calc(var(--bar-h) + var(--bar-gap) + 8px);
   padding: 16px 10px 14px;
   border: 1px solid var(--sk-card-edge);

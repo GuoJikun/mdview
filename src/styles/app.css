@@ -98,6 +98,10 @@
   --canvas-gap: 0px;     /* 侧栏/正文与窗口边缘的留白（浮动卡片用） */
   --bar-h: 29px;         /* 状态栏高度，自绘滚动条与源码视图按它让位 */
   --bar-gap: 0px;        /* 状态栏与窗口底边的距离（胶囊用） */
+  /* 文件侧栏占的高度。没打开工作区时为 0：大纲照旧从顶部铺到底，
+     几何与没有这个侧栏时一模一样。 */
+  --files-h: 0px;
+  --files-gap: 0px;      /* 文件侧栏与大纲之间的缝（浮卡片皮肤单独覆盖） */
 }
 :root[data-theme="dark"] {
   --bg: #0d1117;
@@ -201,7 +205,8 @@ html.native-titlebar .tb-title {
   color: var(--text); opacity: .9;
 }
 /* 网页内容从标题条下方开始，避免被盖住 */
-html.native-titlebar #outline { top: 28px; }
+html.native-titlebar #files { top: 28px; }
+html.native-titlebar #outline { top: calc(28px + var(--files-h) + var(--files-gap)); }
 html.native-titlebar #doc { padding-top: calc(56px + 28px); }
 html.native-titlebar #source { top: 28px; }
 .tb-left, .tb-center, .tb-right { display: flex; align-items: center; height: 100%; }
@@ -312,7 +317,10 @@ html.custom-titlebar #tb-menu-popup {
 }
 
 /* 有自绘标题栏时，正文与侧栏都从它下面开始 */
-html.custom-titlebar #outline { top: calc(var(--chrome-h) + var(--canvas-gap)); }
+html.custom-titlebar #files { top: calc(var(--chrome-h) + var(--canvas-gap)); }
+html.custom-titlebar #outline {
+  top: calc(var(--chrome-h) + var(--canvas-gap) + var(--files-h) + var(--files-gap));
+}
 html.custom-titlebar #doc { padding-top: calc(var(--chrome-h) + var(--canvas-gap) + 56px); }
 
 /* 自绘滚动条：原生滚动条属于窗口视口，会纵跨标题栏和状态栏。
@@ -335,7 +343,11 @@ html.custom-titlebar .tb-hscroll {
   bottom: calc(var(--bar-h) + var(--bar-gap));  /* 右侧给纵向条让出 12px */
 }
 #vscroll { right: 0; }
-#outline-scroll { left: calc(var(--outline-w) + var(--canvas-gap) - 12px); }
+#outline-scroll, #files-scroll { left: calc(var(--outline-w) + var(--canvas-gap) - 12px); }
+/* 文件侧栏的轨道只在有工作区时露面：面板本身是 display:none 的，
+   轨道留着会变成一根贴在左上角的空条。 */
+html.custom-titlebar #files-scroll { display: none; }
+html.custom-titlebar.has-workspace #files-scroll { display: block; }
 .tb-vscroll-thumb {
   position: absolute; right: 3px; width: 6px; min-height: 28px;
   border-radius: 3px; background: var(--tb-scroll-thumb);
@@ -353,9 +365,65 @@ html.custom-titlebar .tb-hscroll.dragging .tb-hscroll-thumb {
 /* 横向条只在源码视图露面：其余视图 textarea 隐藏、正文不横向溢出 */
 html:not([data-view="source"]) .tb-hscroll { display: none !important; }
 
-/* 大纲侧栏：固定在左侧，正文靠右边距让出位置 */
+/* 文件侧栏（工作区）：与大纲同列，占上面一段。
+   没有工作区时 --files-h 为 0，整块不显示，大纲照旧从顶部铺到底——几何与
+   没有这个侧栏时完全一致。--files-gap 是两块之间的缝，默认 0（原生皮肤两块
+   连成一片），浮卡片皮肤各自覆盖。 */
+html.has-workspace { --files-h: min(320px, 38vh); }
+#files {
+  display: none; position: fixed; z-index: 8;
+  left: var(--canvas-gap); top: var(--canvas-gap);
+  width: var(--outline-w); height: var(--files-h);
+  overflow-y: auto; padding: 8px 8px 12px;
+  background: var(--outline-bg); border-right: 1px solid var(--outline-border);
+  font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  scrollbar-width: thin;
+}
+html.has-workspace #files { display: block; }
+html.custom-titlebar #files { scrollbar-width: none; }
+html.custom-titlebar #files::-webkit-scrollbar { width: 0; height: 0; display: none; }
+#files .ft-head {
+  display: flex; align-items: center; gap: 4px; padding: 2px 4px 8px;
+}
+#files .ft-root {
+  flex: 1 1 auto; min-width: 0;
+  font-weight: 600; color: var(--muted); letter-spacing: .02em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#files .ft-close {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px;
+  background: transparent; color: var(--faint); cursor: pointer;
+}
+#files .ft-close:hover { background: var(--outline-hover); color: var(--fg); }
+#files .ft-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 8px; border-radius: 4px; margin: 1px 0;
+  color: var(--muted); cursor: pointer;
+  white-space: nowrap; overflow: hidden;
+}
+#files .ft-row:hover { background: var(--outline-hover); color: var(--fg); }
+#files .ft-row.active {
+  background: var(--outline-active-bg); color: var(--outline-active-fg); font-weight: 600;
+}
+#files .ft-caret {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 12px; height: 12px;
+}
+#files .ft-caret .i,
+#files .ft-close .i {
+  width: 12px; height: 12px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+#files .ft-row.open .ft-caret .i { transform: rotate(90deg); }
+#files .ft-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#files .ft-note { padding: 2px 8px; color: var(--faint); }
+
+/* 大纲侧栏：固定在左侧，正文靠右边距让出位置。工作区打开时上沿让出文件侧栏 */
 #outline {
-  position: fixed; left: var(--canvas-gap); top: var(--canvas-gap); bottom: 0; z-index: 8;
+  position: fixed; left: var(--canvas-gap); bottom: 0; z-index: 8;
+  top: calc(var(--canvas-gap) + var(--files-h) + var(--files-gap));
   width: var(--outline-w); overflow-y: auto; padding: 20px 12px 80px;
   background: var(--outline-bg); border-right: 1px solid var(--outline-border);
   font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
@@ -437,6 +505,8 @@ html[data-view="source"] #doc,
 html[data-view="source"] #caret,
 html[data-view="source"] #ime,
 html[data-view="source"] #preedit,
+html[data-view="source"] #files,
+html[data-view="source"] #files-scroll,
 html[data-view="source"] #outline,
 html[data-view="source"] #outline-scroll { display: none !important; }
 html[data-view="source"] #source { display: block; bottom: 0; }
