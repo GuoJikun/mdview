@@ -400,6 +400,82 @@ async fn open_file(
     Ok(Some(snap))
 }
 
+/// 插入图片：选文件 → 复制到文档同级 `assets/` → 返回要写进源码的地址。
+///
+/// 复制而不是直接引用原路径，是因为用户多半从「下载」「桌面」里选图，绝对路径
+/// 换机器或挪目录就断链。文档还没保存时没有「旁边」可放，只能退回绝对路径，
+/// 由前端提示用户先保存再插图。
+///
+/// 返回 `Ok(None)` 表示用户取消了选择——前端什么都不做。
+///
+/// `path` 可选：正常菜单调用不传，走对话框；传入时直接用该文件——给端到端
+/// 自检一条不弹窗也能走完整复制链路的注入点（与 `open_file` 同款）。
+#[tauri::command]
+async fn pick_image(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    sessions: tauri::State<'_, Sessions>,
+    path: Option<PathBuf>,
+) -> Result<Option<String>, String> {
+    let source = match path {
+        Some(path) => path,
+        None => {
+            let picked = app
+                .dialog()
+                .file()
+                .set_title("插入图片")
+                .add_filter("图片", &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"])
+                .blocking_pick_file();
+            let Some(file) = picked else {
+                return Ok(None);
+            };
+            file.into_path()
+                .map_err(|_| "选中的图片路径无效".to_string())?
+        }
+    };
+    let session = session_of(window.label(), &sessions)?;
+    let Some(document) = session.watch_path() else {
+        log::info!("插入图片：文档未保存，写绝对路径 {}", source.display());
+        return Ok(Some(source.display().to_string()));
+    };
+    let src = copy_to_assets(&source, &document)?;
+    log::info!("插入图片：{} → {}", source.display(), src);
+    Ok(Some(src))
+}
+
+/// 把图片复制到文档同级 `assets/`，返回写进 Markdown 的相对地址。
+///
+/// 重名不覆盖：`图.png` 已存在就试 `图-1.png`、`图-2.png`……覆盖会悄悄毁掉
+/// 之前插入的那张图，而这在编辑器里完全看不出来。
+fn copy_to_assets(source: &std::path::Path, document: &std::path::Path) -> Result<String, String> {
+    let dir = document
+        .parent()
+        .ok_or_else(|| "文档没有所在目录，无法放置图片".to_string())?;
+    let assets = dir.join("assets");
+    std::fs::create_dir_all(&assets).map_err(|err| format!("建不了 assets 目录：{err}"))?;
+
+    let stem = source
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("image");
+    let ext = source
+        .extension()
+        .and_then(|name| name.to_str())
+        .unwrap_or("png");
+    let mut name = format!("{stem}.{ext}");
+    let mut index = 1;
+    while assets.join(&name).exists() {
+        if index > 999 {
+            return Err("assets 里同名图片太多，换个文件名再试".to_string());
+        }
+        name = format!("{stem}-{index}.{ext}");
+        index += 1;
+    }
+    std::fs::copy(source, assets.join(&name)).map_err(|err| format!("复制图片失败：{err}"))?;
+    // 相对地址一律用正斜杠：Markdown 链接里的反斜杠在别的平台上会失效
+    Ok(format!("assets/{name}"))
+}
+
 /// 文件 → 重新加载：把磁盘上的最新内容读回来，丢掉内存里的改动。
 ///
 /// 只对已落盘的文档有意义；未命名文档没有磁盘来源，直接报错让前端提示，
@@ -650,6 +726,13 @@ fn menu_action(id: &str) -> Option<&'static str> {
         "italic" => "italic",
         "strike" => "strike",
         "inline-code" => "inline-code",
+        "insert-image" => "insert-image",
+        "insert-link" => "insert-link",
+        "insert-table" => "insert-table",
+        "insert-hr" => "insert-hr",
+        "insert-code" => "insert-code",
+        "insert-quote" => "insert-quote",
+        "insert-task" => "insert-task",
         "cut" => "cut",
         "copy" => "copy",
         "paste" => "paste",
@@ -758,6 +841,18 @@ fn build_native_menu(
         .item(&item("replace", "替换…")?)
         .build()?;
 
+    let insert_menu = SubmenuBuilder::new(app, "插入")
+        .item(&item("insert-image", "图片…")?)
+        .item(&item("insert-link", "链接…")?)
+        .separator()
+        .item(&item("insert-table", "表格")?)
+        .item(&item("insert-hr", "分隔线")?)
+        .separator()
+        .item(&item("insert-code", "代码块")?)
+        .item(&item("insert-quote", "引用")?)
+        .item(&item("insert-task", "任务列表")?)
+        .build()?;
+
     let theme_menu = SubmenuBuilder::new(app, "主题")
         .item(&item("theme-system", "跟随系统")?)
         .item(&item("theme-light", "亮色")?)
@@ -797,6 +892,7 @@ fn build_native_menu(
         .item(&app_menu)
         .item(&file_menu)
         .item(&edit_menu)
+        .item(&insert_menu)
         .item(&view_menu)
         .item(&go_menu)
         .item(&window_menu)
@@ -999,6 +1095,7 @@ fn main() {
             selftest,
             open_file,
             reload_file,
+            pick_image,
             new_file,
             new_window,
             confirm_discard,
@@ -1184,6 +1281,31 @@ mod tests {
             first_markdown(&[dir.join("不存在.md")]),
             None,
             "不存在的路径不算"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copy_to_assets_never_overwrites_and_returns_relative_path() {
+        let dir = std::env::temp_dir().join(format!("mdview-assets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).expect("建测试目录失败");
+        let source = dir.join("src").join("图.png");
+        std::fs::write(&source, b"first").expect("写测试图片失败");
+        let document = dir.join("doc.md");
+        std::fs::write(&document, "").expect("写测试文档失败");
+
+        let first = copy_to_assets(&source, &document).expect("首次复制应成功");
+        assert_eq!(first, "assets/图.png", "相对地址要用正斜杠");
+
+        std::fs::write(&source, b"second").expect("改写测试图片失败");
+        let second = copy_to_assets(&source, &document).expect("再次复制应成功");
+        assert_eq!(second, "assets/图-1.png", "重名必须改名，不能覆盖");
+        assert_eq!(
+            std::fs::read(dir.join("assets").join("图.png")).unwrap(),
+            b"first",
+            "之前那张图要原样保留——覆盖在编辑器里看不出来"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

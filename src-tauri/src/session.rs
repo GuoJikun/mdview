@@ -10,7 +10,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use mdview_app::{AppState, Effect, FileStore, InlineKind, Message, StdFileStore, ViewMode};
+use mdview_app::{
+    AppState, Effect, FileStore, InlineKind, InsertKind, Message, StdFileStore, ViewMode,
+};
 use mdview_markdown::{BlockFrame, mime_for, resolve_local};
 use serde::{Deserialize, Serialize};
 
@@ -87,6 +89,27 @@ pub enum Wire {
     ToggleInline {
         format: WireInline,
     },
+    /// 插入链接。`text` 缺省时用选中的文字，再缺就用地址本身当 label。
+    InsertLink {
+        url: String,
+        #[serde(default)]
+        text: Option<String>,
+    },
+    /// 插入图片。`src` 是宿主定好的地址（见 `insert_image` 命令），
+    /// 内核只负责写进源码。
+    InsertImage {
+        src: String,
+        #[serde(default)]
+        alt: Option<String>,
+    },
+    /// 插入块级元素。表格的行列数缺省 3×3，其余品类忽略这两个字段。
+    InsertBlock {
+        block: WireBlock,
+        #[serde(default = "default_table_size")]
+        rows: usize,
+        #[serde(default = "default_table_size")]
+        cols: usize,
+    },
     TableInsertRow {
         after: bool,
     },
@@ -117,6 +140,34 @@ impl From<WireInline> for InlineKind {
             WireInline::Emphasis => InlineKind::Emphasis,
             WireInline::Strike => InlineKind::Strike,
             WireInline::Code => InlineKind::Code,
+        }
+    }
+}
+
+/// 块级插入的线缆表示。表格的行列数单独给，其余品类不看这两个字段。
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WireBlock {
+    ThematicBreak,
+    CodeBlock,
+    Quote,
+    TaskList,
+    Table,
+}
+
+/// 表格插入的默认尺寸（3 行 3 列，含表头）。
+fn default_table_size() -> usize {
+    3
+}
+
+impl WireBlock {
+    fn into_kind(self, rows: usize, cols: usize) -> InsertKind {
+        match self {
+            WireBlock::ThematicBreak => InsertKind::ThematicBreak,
+            WireBlock::CodeBlock => InsertKind::CodeBlock,
+            WireBlock::Quote => InsertKind::Quote,
+            WireBlock::TaskList => InsertKind::TaskList,
+            WireBlock::Table => InsertKind::Table { rows, cols },
         }
     }
 }
@@ -168,6 +219,11 @@ impl Wire {
             },
             Wire::ToggleInline { format } => Message::ToggleInline {
                 kind: format.into(),
+            },
+            Wire::InsertLink { url, text } => Message::InsertLink { url, text },
+            Wire::InsertImage { src, alt } => Message::InsertImage { src, alt },
+            Wire::InsertBlock { block, rows, cols } => Message::InsertBlock {
+                kind: block.into_kind(rows, cols),
             },
             Wire::TableInsertRow { after } => Message::TableInsertRow { after },
             Wire::TableDeleteRow => Message::TableDeleteRow,
@@ -609,6 +665,47 @@ mod tests {
                 remove: false
             }
         ));
+
+        // 插入链接：text 可缺省（用选中的文字）
+        let wire: Wire =
+            serde_json::from_str(r#"{"kind":"insertLink","url":"https://b"}"#).unwrap();
+        assert!(matches!(wire, Wire::InsertLink { url: ref u, text: None } if u == "https://b"));
+        // 插入图片：src 是宿主给的地址，alt 可缺省
+        let wire: Wire =
+            serde_json::from_str(r#"{"kind":"insertImage","src":"assets/图.png"}"#).unwrap();
+        assert!(matches!(wire, Wire::InsertImage { ref src, alt: None } if src == "assets/图.png"));
+        // 插入块：表格行列数缺省 3，其余品类不看这两个字段
+        let wire: Wire =
+            serde_json::from_str(r#"{"kind":"insertBlock","block":"thematicBreak"}"#).unwrap();
+        assert!(matches!(
+            wire,
+            Wire::InsertBlock {
+                block: WireBlock::ThematicBreak,
+                ..
+            }
+        ));
+        let wire: Wire =
+            serde_json::from_str(r#"{"kind":"insertBlock","block":"table","rows":4,"cols":2}"#)
+                .unwrap();
+        assert!(matches!(
+            wire,
+            Wire::InsertBlock {
+                block: WireBlock::Table,
+                rows: 4,
+                cols: 2
+            }
+        ));
+        assert!(matches!(
+            Wire::InsertBlock {
+                block: WireBlock::Table,
+                rows: default_table_size(),
+                cols: default_table_size()
+            }
+            .into_message(),
+            Message::InsertBlock {
+                kind: InsertKind::Table { rows: 3, cols: 3 }
+            }
+        ));
     }
 
     #[test]
@@ -834,6 +931,40 @@ mod tests {
         let reply = session.dispatch(Wire::Save);
         assert!(reply.needs_path);
         assert!(!reply.saved);
+    }
+
+    /// 过关线：插图 → 保存 → 重开，图片还在原处。
+    ///
+    /// 复制图片是宿主的事（`pick_image`），内核只写相对地址。这里用临时目录
+    /// 把两件事接起来验证：源码里留的是 `assets/…`，而且文件确实躺在文档旁边。
+    #[test]
+    fn inserted_image_survives_save_and_reopen() {
+        let dir = std::env::temp_dir().join("mdview-insert-image");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join("assets").join("图.png"), b"png").unwrap();
+        let target = dir.join("稿.md");
+        let _ = std::fs::remove_file(&target);
+
+        let session = session("正文");
+        session.dispatch(Wire::InsertImage {
+            src: "assets/图.png".into(),
+            alt: None,
+        });
+        let saved = session.dispatch(Wire::SaveTo {
+            path: target.display().to_string(),
+        });
+        assert!(saved.saved, "插入后应该能存下来");
+
+        let reopened = Session::open(Some(target)).expect("重开文档");
+        let text = reopened.text();
+        assert!(text.contains("![](assets/图.png)"), "{text}");
+        assert!(
+            dir.join("assets").join("图.png").exists(),
+            "图片必须和文档一起还在"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 走完整条链路：IPC 消息 → 内核写盘 → 改绑路径 → 回包带新路径。

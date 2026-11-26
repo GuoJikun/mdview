@@ -42,6 +42,17 @@ export type Wire =
   | { kind: 'editLink'; stop: number; url?: string; text?: string; remove?: boolean }
   /** 切换行内格式。字段是 `format` 而不是 `kind`，避免与消息名撞车。 */
   | { kind: 'toggleInline'; format: 'strong' | 'emphasis' | 'strike' | 'code' }
+  /** 插入链接：有选区时把选中的文字当 label。 */
+  | { kind: 'insertLink'; url: string; text?: string }
+  /** 插入图片：`src` 由宿主复制文件后定好（相对 `assets/` 或绝对路径）。 */
+  | { kind: 'insertImage'; src: string; alt?: string }
+  /** 插入块级元素：表格的行列数缺省 3×3，其余品类不看这两个字段。 */
+  | {
+    kind: 'insertBlock';
+    block: 'thematicBreak' | 'codeBlock' | 'quote' | 'taskList' | 'table';
+    rows?: number;
+    cols?: number;
+  }
   | { kind: 'tableInsertRow'; after: boolean }
   | { kind: 'tableDeleteRow' }
   | { kind: 'tableInsertColumn'; after: boolean }

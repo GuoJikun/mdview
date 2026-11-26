@@ -1,7 +1,7 @@
 // 标题栏菜单树与展开状态。数据从原 titlebar.js 原样搬来，动作名不变。
 import { shallowReactive } from 'vue';
 
-export type MenuKey = 'file' | 'edit' | 'selection' | 'view' | 'go' | 'help';
+export type MenuKey = 'file' | 'edit' | 'insert' | 'selection' | 'view' | 'go' | 'help';
 
 /** 勾选态只依赖这几个字段，避免把整个只读快照类型带进菜单数据。 */
 export interface MenuCheckState {
@@ -26,11 +26,12 @@ export interface MenuEntry {
   checked?: (state: MenuCheckState) => boolean;
 }
 
-export const MENU_ORDER: MenuKey[] = ['file', 'edit', 'selection', 'view', 'go', 'help'];
+export const MENU_ORDER: MenuKey[] = ['file', 'edit', 'insert', 'selection', 'view', 'go', 'help'];
 
 export const MENU_LABELS: Record<MenuKey, string> = {
   file: '文件',
   edit: '编辑',
+  insert: '插入',
   selection: '选择',
   view: '视图',
   go: '转到',
@@ -68,6 +69,17 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
     { sep: true },
     { action: 'find', label: '查找…', acc: 'Ctrl+F' },
     { action: 'replace', label: '替换…', acc: 'Ctrl+H' },
+  ],
+  insert: [
+    { action: 'insert-image', label: '图片…', acc: 'Ctrl+Shift+I' },
+    { action: 'insert-link', label: '链接…', acc: 'Ctrl+K' },
+    { sep: true },
+    { action: 'insert-table', label: '表格' },
+    { action: 'insert-hr', label: '分隔线' },
+    { sep: true },
+    { action: 'insert-code', label: '代码块' },
+    { action: 'insert-quote', label: '引用' },
+    { action: 'insert-task', label: '任务列表' },
   ],
   selection: [
     { action: 'select-all', label: '全选', acc: 'Ctrl+A' },

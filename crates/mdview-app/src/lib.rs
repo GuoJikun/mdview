@@ -11,4 +11,4 @@ pub use ports::{
     CollectingSink, FileStore, Fingerprint, InMemoryFileStore, NotifyWatcher, RenderFrame,
     RenderSink, StdFileStore, Watcher,
 };
-pub use state::{AppState, Effect, InlineKind, Message, ViewMode};
+pub use state::{AppState, Effect, InlineKind, InsertKind, Message, ViewMode};

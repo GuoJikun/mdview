@@ -815,6 +815,16 @@ interface LinkTarget {
 }
 
 let linkTarget: LinkTarget | null = null;
+/** 插入模式：面板没有既有链接可改，提交时走 `insertLink` 而不是 `editLink`。 */
+let linkInserting = false;
+
+/** 面板上「打开 / 删除」是否可用：插入模式两者都没有目标。 */
+function setLinkActions(visible: { open: boolean; remove: boolean }) {
+  const openBtn = linkEditEl.querySelector<HTMLElement>('[data-link="open"]');
+  const removeBtn = linkEditEl.querySelector<HTMLElement>('[data-link="remove"]');
+  if (openBtn) openBtn.hidden = !visible.open;
+  if (removeBtn) removeBtn.hidden = !visible.remove;
+}
 
 /** 同一个链接的字符是平级兄弟：label 要把左右连续同 href 的字符都拼起来。 */
 function linkLabelAround(el: HTMLElement): string {
@@ -856,22 +866,44 @@ function openLinkEditor(el: HTMLElement) {
     url,
     text: image ? el.getAttribute('title') || '' : linkLabelAround(el),
   };
+  linkInserting = false;
   linkUrlInput.value = url;
   linkTextInput.value = linkTarget.text;
+  linkUrlInput.placeholder = '';
   // 图片没有「打开」这个动作
-  const openBtn = linkEditEl.querySelector<HTMLElement>('[data-link="open"]');
-  if (openBtn) openBtn.hidden = image;
+  setLinkActions({ open: !image, remove: true });
   linkEditEl.hidden = false;
   positionLinkEditor(el);
   linkUrlInput.focus({ preventScroll: true });
   linkUrlInput.select();
 }
 
+/**
+ * 在光标处插入链接（`Ctrl+K`）。复用同一个面板，但没有既有片段可改：
+ * 「打开 / 删除」隐藏，提交走 `insertLink`。
+ *
+ * 文字框留空 = 用内核里当前选中的文字；没有选区时用地址本身当 label。
+ */
+function openLinkInsert() {
+  linkTarget = null;
+  linkInserting = true;
+  linkUrlInput.value = '';
+  linkTextInput.value = '';
+  linkUrlInput.placeholder = 'https://';
+  linkTextInput.placeholder = '留空则用选中的文字';
+  setLinkActions({ open: false, remove: false });
+  linkEditEl.hidden = false;
+  // 光标元素只有 1px 宽，够定位；取不到就贴在视口左上角附近
+  positionLinkEditor(caret ? caretEl : docEl);
+  linkUrlInput.focus({ preventScroll: true });
+}
+
 function closeLinkEditor() {
-  if (linkEditEl.hidden) return;
+  const wasOpen = !linkEditEl.hidden;
   linkEditEl.hidden = true;
   linkTarget = null;
-  focusActiveEditor();
+  linkInserting = false;
+  if (wasOpen) focusActiveEditor();
 }
 
 /**
@@ -879,12 +911,21 @@ function closeLinkEditor() {
  * 片段边界、label 里的行内标记都由内核自己处理，一次事务、一步撤销。
  */
 function submitLinkEdit(remove: boolean) {
+  // 插入模式：面板里没有既有片段，删除等于取消
+  if (linkInserting) {
+    const url = linkUrlInput.value.trim();
+    const text = linkTextInput.value;
+    closeLinkEditor();
+    if (url) send(text ? { kind: 'insertLink', url, text } : { kind: 'insertLink', url });
+    return;
+  }
   if (!linkTarget) return;
   const { stop } = linkTarget;
   const url = linkUrlInput.value;
   const text = linkTextInput.value;
   linkEditEl.hidden = true;
   linkTarget = null;
+  linkInserting = false;
   send({ kind: 'editLink', stop, url, text, remove });
   focusActiveEditor();
 }
@@ -1170,6 +1211,28 @@ function requestSavePath() {
     });
 }
 
+/** 插入类动作：只作用于所见即所得，和行内格式同一套守卫。 */
+const INSERT_ACTIONS = new Set([
+  'insert-image', 'insert-link', 'insert-table', 'insert-hr',
+  'insert-code', 'insert-quote', 'insert-task',
+]);
+
+/**
+ * 插入图片：宿主弹框选图、复制到文档旁的 `assets/`，回传要写进源码的地址。
+ *
+ * 复制与地址决定都在宿主侧（`pick_image` 命令）：内核不认识除文档本身以外的
+ * 文件，前端也不该知道文档存在哪个目录。
+ */
+function insertImageFromPicker() {
+  queue = queue.then(async () => {
+    const src = await invoke<string | null>('pick_image');
+    if (!src) return;
+    await dispatchOne({ kind: 'insertImage', src });
+    // 文档未保存时宿主退回绝对路径：能显示，但换机器 / 挪目录就断，必须说一声
+    if (/^([a-zA-Z]:[\\/]|\/)/.test(src)) toast('文档尚未保存，图片以绝对路径引用');
+  }).catch((err) => toast('插入图片失败：' + err));
+}
+
 /** 菜单动作统一入口：Windows/Linux 的自绘菜单、macOS 的原生菜单栏共用。 */
 function runAction(action: string) {
   // 源码视图下 textarea 自己就是编辑器：编辑类菜单动作必须作用于它，
@@ -1195,6 +1258,11 @@ function runAction(action: string) {
     (action === 'bold' || action === 'italic' || action === 'strike' || action === 'inline-code')
     && window.__mdviewMode !== 'wysiwyg'
   ) {
+    toast(window.__mdviewMode === 'source' ? '源码视图里请直接输入 Markdown 标记' : '阅读视图不可编辑');
+    return;
+  }
+  // 插入类动作同理
+  if (INSERT_ACTIONS.has(action) && window.__mdviewMode !== 'wysiwyg') {
     toast(window.__mdviewMode === 'source' ? '源码视图里请直接输入 Markdown 标记' : '阅读视图不可编辑');
     return;
   }
@@ -1254,6 +1322,14 @@ function runAction(action: string) {
     case 'italic': send({ kind: 'toggleInline', format: 'emphasis' }); break;
     case 'strike': send({ kind: 'toggleInline', format: 'strike' }); break;
     case 'inline-code': send({ kind: 'toggleInline', format: 'code' }); break;
+    // 插入：块级元素交给内核生成源码（行尾符、空行、光标落点都在那边定）
+    case 'insert-link': openLinkInsert(); return;
+    case 'insert-image': insertImageFromPicker(); return;
+    case 'insert-table': send({ kind: 'insertBlock', block: 'table', rows: 3, cols: 3 }); break;
+    case 'insert-hr': send({ kind: 'insertBlock', block: 'thematicBreak' }); break;
+    case 'insert-code': send({ kind: 'insertBlock', block: 'codeBlock' }); break;
+    case 'insert-quote': send({ kind: 'insertBlock', block: 'quote' }); break;
+    case 'insert-task': send({ kind: 'insertBlock', block: 'taskList' }); break;
     // 查找栏自己管焦点，不能落到函数末尾的 focusActiveEditor()
     case 'find': openFind(false); return;
     case 'replace': openFind(true); return;
@@ -1705,6 +1781,13 @@ window.addEventListener('keydown', (event) => {
     }
     if (key === 'z') { event.preventDefault(); send({ kind: event.shiftKey ? 'redo' : 'undo' }); return; }
     if (key === 'y') { event.preventDefault(); send({ kind: 'redo' }); return; }
+    // 插入：必须排在 Ctrl+I（斜体）之前——Ctrl+Shift+I 的 key 也是 'i'
+    if (key === 'k') { event.preventDefault(); runAction('insert-link'); return; }
+    if (key === 'i' && event.shiftKey) {
+      event.preventDefault();
+      runAction('insert-image');
+      return;
+    }
     // 行内格式（与 VSCode / Typora 同款键位）。必须排在 Ctrl+X 之前：
     // 删除线是 Ctrl+Shift+X，落到下面那条会被当成剪切。
     if (key === 'b' || key === 'i' || key === 'e' || (key === 'x' && event.shiftKey)) {
@@ -2811,6 +2894,41 @@ window.__mdviewSelfTest = async function () {
       }
     } catch (err) {
       check('链接图片编辑链路可用', false, String(err));
+    }
+
+    // ---- 插入 ----
+    try {
+      send({ kind: 'replaceSource', text: '' });
+      await queue;
+      send({ kind: 'insertLink', url: 'https://example.com', text: '示例' });
+      await queue;
+      const linked = await invoke<Snapshot>('snapshot');
+      check('插入链接写回源码', linked.source === '[示例](https://example.com)',
+        JSON.stringify(linked.source));
+
+      send({ kind: 'replaceSource', text: '' });
+      await queue;
+      send({ kind: 'insertBlock', block: 'table', rows: 3, cols: 3 });
+      await queue;
+      const tabled = await invoke<Snapshot>('snapshot');
+      check('插入表格即时成形', !!docEl.querySelector('table'), JSON.stringify(tabled.source));
+
+      send({ kind: 'replaceSource', text: '' });
+      await queue;
+      send({ kind: 'insertBlock', block: 'thematicBreak' });
+      await queue;
+      // 分隔线在投影里是原子片段（`.atom.rule`），不是 `<hr>`
+      check('插入分隔线即时成形', !!docEl.querySelector('.atom.rule'));
+
+      send({ kind: 'replaceSource', text: '' });
+      await queue;
+      send({ kind: 'insertBlock', block: 'codeBlock' });
+      await queue;
+      const coded = await invoke<Snapshot>('snapshot');
+      check('插入代码块即时成形', !!docEl.querySelector('.code') && coded.source === '```\n\n```',
+        JSON.stringify(coded.source));
+    } catch (err) {
+      check('插入链路可用', false, String(err));
     }
 
     // ---- 行内格式（Ctrl+B / I / Shift+X / E）----

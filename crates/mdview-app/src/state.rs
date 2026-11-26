@@ -31,6 +31,23 @@ pub enum ViewMode {
     Source,
 }
 
+/// 块级插入的品类。
+///
+/// 链接与图片是行内元素、各有自己的消息（链接带两个字段，图片的来源由宿主
+/// 决定），不进这里。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertKind {
+    /// 表格。`rows` 含表头行，最小 2；`cols` 最小 1。
+    Table {
+        rows: usize,
+        cols: usize,
+    },
+    ThematicBreak,
+    CodeBlock,
+    Quote,
+    TaskList,
+}
+
 /// 行内格式。只收「可以纯靠一对标记包起来」的四种：
 /// 链接有目标与文字两个字段、图片是原子控件，都走 `EditLink`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +191,25 @@ pub enum Message {
     /// 会被 pulldown 判成分隔线，落点会当场跳走。
     ToggleInline {
         kind: InlineKind,
+    },
+    /// 在光标处插入链接 `[文字](地址)`。有选区时选中的文字当 label，
+    /// `text` 显式给出时优先用它。
+    InsertLink {
+        url: String,
+        text: Option<String>,
+    },
+    /// 在光标处插入图片 `![alt](src)`。
+    ///
+    /// `src` 是**最终写进源码的地址**（相对 `assets/` 或绝对路径），
+    /// 由宿主决定——把选中的图片复制到文档旁边是文件系统的事，内核不认识
+    /// 除文档本身以外的任何文件。
+    InsertImage {
+        src: String,
+        alt: Option<String>,
+    },
+    /// 插入块级元素。当前块是空段落时直接用它，否则在块后另起一块。
+    InsertBlock {
+        kind: InsertKind,
     },
     /// 在当前行前 / 后插入一行
     TableInsertRow {
@@ -567,6 +603,9 @@ impl AppState {
                 remove,
             } => self.edit_link(stop, url, text, remove),
             Message::ToggleInline { kind } => self.toggle_inline(kind),
+            Message::InsertLink { url, text } => self.insert_link(&url, text),
+            Message::InsertImage { src, alt } => self.insert_image(&src, alt),
+            Message::InsertBlock { kind } => self.insert_block(kind),
             Message::TableInsertRow { after } => self.table_insert_row(after),
             Message::TableDeleteRow => self.table_delete_row(),
             Message::TableInsertColumn { after } => self.table_insert_column(after),
@@ -732,6 +771,17 @@ impl AppState {
             "\r\n"
         } else {
             "\n"
+        }
+    }
+
+    /// 文档整体的行尾符：看第一个换行符前面是不是 `\r`。
+    ///
+    /// 插入**新块**时用这个而不是 [`Self::line_break`]：当前块可能只有一行
+    /// 文字（块范围里根本没有换行），按块判定会把 CRLF 文件的新块写成 LF。
+    fn document_line_break(src: &str) -> &'static str {
+        match src.find('\n') {
+            Some(index) if index > 0 && src.as_bytes()[index - 1] == b'\r' => "\r\n",
+            _ => "\n",
         }
     }
 
@@ -1285,6 +1335,201 @@ impl AppState {
         let start = self.document.byte_to_char(range.start);
         let end = self.document.byte_to_char(range.end);
         self.apply_with_caret(start..end, &replacement, Some(start))
+    }
+
+    // ---- 插入 -----------------------------------------------------------
+
+    /// 插入点的 (char 区间, byte 区间)。有选区时是整段选区，否则是收起的
+    /// 光标。光标落在折叠标记内部时返回 None——`**` 的两个星之间插进一对
+    /// 标记，两对会成为共用定界符，结构当场歪掉（与 `ToggleInline` 同源）。
+    fn insert_span(&self) -> Option<(Range<usize>, Range<usize>)> {
+        if let Some(chars) = self.selection_chars() {
+            let start = self.document.char_to_byte(chars.start);
+            let end = self.document.char_to_byte(chars.end);
+            // 跨块选区：`[甲\n\n乙](url)` 会把两段并进一个链接，语义直接变了。
+            // 表格跨格同理，方括号套住竖线会把表拆开（与 `ToggleInline` 一套判定）。
+            let block = self.block_covering(start, end)?;
+            if matches!(self.parsed.blocks[block].kind, BlockKind::Table)
+                && self.table_locked_selection(&chars)
+            {
+                return None;
+            }
+            return Some((chars, start..end));
+        }
+        let byte = self.caret_byte()?;
+        if self.block_covering(byte, byte).is_some_and(|block| {
+            let block = &self.parsed.blocks[block];
+            block.marker_pair_at(byte).is_some() || block.hidden_range_at(byte).is_some()
+        }) {
+            return None;
+        }
+        let at = self.document.byte_to_char(byte);
+        Some((at..at, byte..byte))
+    }
+
+    /// 插入链接 `[文字](地址)`。有选区时把选中的文字搬进 label，
+    /// 光标落到链接之后（接着打字不会掉进方括号里）。
+    fn insert_link(&mut self, url: &str, text: Option<String>) -> Vec<Effect> {
+        if self.composing || url.trim().is_empty() {
+            return Vec::new();
+        }
+        let Some((span, bytes)) = self.insert_span() else {
+            return Vec::new();
+        };
+        let selected = if bytes.is_empty() {
+            String::new()
+        } else {
+            self.document.slice_bytes(bytes)
+        };
+        let label = text
+            .filter(|value| !value.is_empty())
+            .or_else(|| (!selected.is_empty()).then_some(selected))
+            .unwrap_or_else(|| url.to_owned());
+        let source = format!("[{}]({})", escape_label(&label), escape_url(url));
+        let caret = span.start + source.chars().count();
+        self.apply_with_caret(span, &source, Some(caret))
+    }
+
+    /// 插入图片 `![alt](src)`。`src` 是宿主已经定好的地址（见 `Message::InsertImage`）。
+    fn insert_image(&mut self, src: &str, alt: Option<String>) -> Vec<Effect> {
+        if self.composing || src.trim().is_empty() {
+            return Vec::new();
+        }
+        let Some((span, bytes)) = self.insert_span() else {
+            return Vec::new();
+        };
+        let selected = if bytes.is_empty() {
+            String::new()
+        } else {
+            self.document.slice_bytes(bytes)
+        };
+        let label = alt
+            .filter(|value| !value.is_empty())
+            .or_else(|| (!selected.is_empty()).then_some(selected))
+            .unwrap_or_default();
+        let source = format!("![{}]({})", escape_label(&label), escape_url(src));
+        let caret = span.start + source.chars().count();
+        self.apply_with_caret(span, &source, Some(caret))
+    }
+
+    /// 块级插入。三条规则：
+    ///
+    /// 1. 当前块是空段落 → 直接把它改成新块（用户在空行上按插入，不该再多一行）；
+    /// 2. 否则在当前块**之后**另起一块，中间补一个空行——列表与引用的延迟续行
+    ///    只有空行才断得干净，否则表格会被吸进列表项里；
+    /// 3. 文档还没有任何块 → 直接写进空文档。
+    fn insert_block(&mut self, kind: InsertKind) -> Vec<Effect> {
+        if self.composing {
+            return Vec::new();
+        }
+        let src = self.document.text();
+        let byte = self.caret_byte().unwrap_or(src.len());
+        let block = self.block_covering(byte, byte);
+        // 新块沿用**文档整体**的行尾符：当前块可能只有一行文字，块范围里
+        // 根本没有换行，按块判定会把 CRLF 文件的新块写成 LF。
+        let line_break = Self::document_line_break(&src);
+
+        // 规则 1：空段落直接换掉，不留多余空行
+        if let Some(id) = block {
+            let range = self.parsed.blocks[id].byte.clone();
+            if src
+                .get(range.clone())
+                .is_some_and(|text| text.trim().is_empty())
+            {
+                let (text, anchor, head) = Self::block_source(kind, line_break);
+                let start = self.document.byte_to_char(range.start);
+                let end = self.document.byte_to_char(range.end);
+                return self.apply_with_selection(
+                    start..end,
+                    &text,
+                    start + chars_before(&text, anchor),
+                    start + chars_before(&text, head),
+                );
+            }
+        }
+
+        // 规则 2 / 3：块后另起一块
+        let at = block
+            .map(|id| self.parsed.blocks[id].byte.end)
+            .unwrap_or_default();
+        let (text, anchor, head) = Self::block_source(kind, line_break);
+        // 插入点两侧都要有一个空行：前面紧贴文字时 `---` 会被读成 setext 标题，
+        // 后面若有内容则会被吸进新块里。做法是「吃掉」原文这里已有的换行
+        // （最多两个），再统一写成两个——原文只有一个换行时不至于叠出多余空行。
+        let rest = &src[at..];
+        let mut consumed = 0;
+        let mut breaks = 0;
+        while breaks < 2 {
+            if rest[consumed..].starts_with("\r\n") {
+                consumed += 2;
+            } else if rest[consumed..].starts_with('\n') {
+                consumed += 1;
+            } else {
+                break;
+            }
+            breaks += 1;
+        }
+        let mut insert = String::new();
+        if !src.is_empty() {
+            insert.push_str(line_break);
+            insert.push_str(line_break);
+        }
+        let lead = insert.len();
+        insert.push_str(&text);
+        let start = self.document.byte_to_char(at);
+        let end = self.document.byte_to_char(at + consumed);
+        self.apply_with_selection(
+            start..end,
+            &insert,
+            start + chars_before(&insert, lead + anchor),
+            start + chars_before(&insert, lead + head),
+        )
+    }
+
+    /// 一种块级插入的源码，以及光标落点（byte，相对该源码）。
+    ///
+    /// 落点返回 `anchor..head`：相等表示收起的光标，不等表示插入后整段选中
+    /// 占位文字（`> 引用` / `- [ ] 任务` 这种「裸标记不成形」的块）。
+    fn block_source(kind: InsertKind, line_break: &str) -> (String, usize, usize) {
+        let lb = line_break;
+        match kind {
+            // 分隔线是原子块，光标必须落到它**之后**的一行，否则没有可落的位置
+            InsertKind::ThematicBreak => {
+                let text = format!("---{lb}");
+                let at = text.len();
+                (text, at, at)
+            }
+            // 空围栏是合法代码块，光标停在中间那行，直接打字就是代码内容
+            InsertKind::CodeBlock => {
+                let text = format!("```{lb}{lb}```");
+                let at = format!("```{lb}").len();
+                (text, at, at)
+            }
+            InsertKind::Quote => {
+                let text = "> 引用".to_owned();
+                (text, 2, "> 引用".len())
+            }
+            InsertKind::TaskList => {
+                let text = "- [ ] 任务".to_owned();
+                (text, 6, "- [ ] 任务".len())
+            }
+            InsertKind::Table { rows, cols } => {
+                let cols = cols.max(1);
+                let rows = rows.max(2);
+                let blank = Self::blank_row(cols);
+                let divider = Self::join_row(&vec![" --- "; cols]).0;
+                let mut text = String::with_capacity((blank.len() + lb.len()) * rows);
+                text.push_str(&blank);
+                text.push_str(lb);
+                text.push_str(&divider);
+                for _ in 2..rows {
+                    text.push_str(lb);
+                    text.push_str(&blank);
+                }
+                // 表头第一格内：与 `cell_caret` 的规则一致，空单元格退回格内首个位置
+                (text, 1, 1)
+            }
+        }
     }
 
     // ---- 行内格式 -------------------------------------------------------
@@ -2381,6 +2626,13 @@ impl AppState {
 /// label 里的 `]` 必须转义，否则链接会提前闭合。
 fn escape_label(label: &str) -> String {
     label.replace(']', "\\]")
+}
+
+/// 字符串前 `byte` 个字节折成字符数。用在「新文本里的 byte 落点 → 事务要的
+/// char 落点」这一跳上；非 char 边界时退回全长（不该发生，但别让光标飞出文本）。
+fn chars_before(text: &str, byte: usize) -> usize {
+    text.get(..byte)
+        .map_or_else(|| text.chars().count(), |head| head.chars().count())
 }
 
 /// 目标地址含空白或圆括号时用 `<>` 包起来，这是 CommonMark 的写法。
@@ -4553,5 +4805,150 @@ mod tests {
         assert_eq!(app.document.text(), "`甲`乙");
         app.update(Message::Undo, &files);
         assert_eq!(app.document.text(), "甲乙", "一次撤销就该回到加标记之前");
+    }
+
+    // ---- 插入 -----------------------------------------------------------
+
+    #[test]
+    fn insert_link_at_caret_writes_markdown() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲乙");
+        click(&mut app, &files, 3);
+        app.update(
+            Message::InsertLink {
+                url: "https://example.com".to_owned(),
+                text: Some("示例".to_owned()),
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "甲[示例](https://example.com)乙");
+        // 光标落在链接之后：接着打字是续写而不是掉进方括号里
+        assert_eq!(caret_byte(&app), "甲[示例](https://example.com)".len());
+    }
+
+    #[test]
+    fn insert_link_uses_selection_as_label() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲文字乙");
+        app.update(Message::Select { anchor: 3, head: 9 }, &files);
+        app.update(
+            Message::InsertLink {
+                url: "https://example.com".to_owned(),
+                text: None,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "甲[文字](https://example.com)乙");
+    }
+
+    #[test]
+    fn insert_link_refuses_cross_block_selection() {
+        // 方括号跨段落会把两段并进一个链接，语义直接变了——宁可不响应
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\n\n乙");
+        app.update(Message::Select { anchor: 0, head: 7 }, &files);
+        app.update(
+            Message::InsertLink {
+                url: "https://example.com".to_owned(),
+                text: None,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "甲\n\n乙");
+    }
+
+    #[test]
+    fn insert_image_writes_markdown_and_selects_nothing() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲");
+        click(&mut app, &files, 3);
+        app.update(
+            Message::InsertImage {
+                src: "assets/图.png".to_owned(),
+                alt: None,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "甲![](assets/图.png)");
+    }
+
+    #[test]
+    fn insert_table_produces_a_parsed_table() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "");
+        app.update(
+            Message::InsertBlock {
+                kind: InsertKind::Table { rows: 3, cols: 3 },
+            },
+            &files,
+        );
+        let text = app.document.text();
+        assert_eq!(
+            text, "|  |  |  |\n| --- | --- | --- |\n|  |  |  |",
+            "3 行 3 列（表头 + 分隔 + 一行空行）"
+        );
+        // 必须真的解析成表格：源码像表格但块类型不对，Tab 跨格与工具条都用不了
+        assert!(
+            app.parsed
+                .blocks
+                .iter()
+                .any(|block| matches!(block.kind, BlockKind::Table)),
+            "插入的源码应解析成 Table 块：{:?}",
+            app.parsed
+                .blocks
+                .iter()
+                .map(|block| &block.kind)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn insert_block_after_paragraph_keeps_them_apart() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲");
+        click(&mut app, &files, 3);
+        app.update(
+            Message::InsertBlock {
+                kind: InsertKind::ThematicBreak,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "甲\n\n---\n");
+        let kinds: Vec<_> = app.parsed.blocks.iter().map(|b| &b.kind).collect();
+        assert!(
+            kinds.iter().any(|kind| matches!(kind, BlockKind::Rule)),
+            "分隔线应该单独成块：{kinds:?}"
+        );
+    }
+
+    #[test]
+    fn insert_code_block_puts_the_caret_inside_the_fence() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "");
+        app.update(
+            Message::InsertBlock {
+                kind: InsertKind::CodeBlock,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "```\n\n```");
+        assert_eq!(caret_byte(&app), 4, "光标应落在围栏中间那行");
+        type_text(&mut app, &files, "let x = 1;");
+        assert_eq!(app.document.text(), "```\nlet x = 1;\n```");
+    }
+
+    #[test]
+    fn insert_block_follows_crlf_documents() {
+        // 整块插入必须沿用文档的行尾符，不能把 CRLF 文件悄悄改成 LF
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\r\n");
+        click(&mut app, &files, 3);
+        app.update(
+            Message::InsertBlock {
+                kind: InsertKind::ThematicBreak,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "甲\r\n\r\n---\r\n");
     }
 }
