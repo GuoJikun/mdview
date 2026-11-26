@@ -3,6 +3,7 @@
 // 所有前端脚本都从这一处引入，index.html 只留一个入口。纯逻辑模块已是 ES Module，
 // 由 editor.ts 显式 import，不再依赖挂 window 全局或副作用 import 的顺序。
 import './platform';
+import { initBackdrop } from './backdrop';
 import { invoke } from '@tauri-apps/api/core';
 import { createApp, nextTick } from 'vue';
 import App from './App.vue';
@@ -31,6 +32,9 @@ void initUpdate().then(async () => {
   const info = await checkSilently();
   if (info) notify(`发现新版本 ${info.version}：帮助 → 检查更新`);
 });
+
+// 系统底材：Rust 应用 Mica 后由这里写 data-backdrop，并跟随主题刷新 DWM 明暗。
+initBackdrop();
 
 // 平台判据以 Rust 为准（与窗口 decorations 一致）；platform.ts 的 UA 只负责首帧。
 invoke<boolean>('use_custom_titlebar').then((custom) => {

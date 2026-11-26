@@ -11,6 +11,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod backdrop;
 mod link;
 mod recent;
 mod release_notes;
@@ -477,6 +478,12 @@ fn create_window(
             return Err(format!("创建窗口失败：{err}"));
         }
     };
+    // 与启动窗口走同一条材质路径；主题偏好由 backdrop 状态记住，避免闪亮色。
+    {
+        let backdrop = app.state::<backdrop::Backdrop>();
+        let dark = backdrop.desired_dark();
+        backdrop.apply(&window, dark);
+    }
     if let Err(err) = window.show() {
         log::warn!("新窗口显示失败：{err}");
     }
@@ -905,6 +912,7 @@ fn main() {
         // 会话按窗口标签存；关窗守卫同理。启动窗口的会话在 setup 里登记。
         .manage(Sessions::default())
         .manage(CloseGuards::default())
+        .manage(backdrop::Backdrop::default())
         .manage(RunMode { self_test })
         .manage(update::UpdateState::new())
         // 关窗守卫：有未保存改动就拦住，让前端问一句再放行。
@@ -979,6 +987,9 @@ fn main() {
             force_close,
             pick_save_path,
             use_custom_titlebar,
+            backdrop::backdrop_kind,
+            backdrop::sync_backdrop,
+            backdrop::set_backdrop_mode,
             update::check_update,
             update::download_update,
             update::cancel_update_download,
@@ -993,6 +1004,11 @@ fn main() {
             // 注意：这一步早于页面加载，所以可能有极短的白底；若将来要消掉，
             // 改成前端首帧后再 invoke 一个 show 命令即可。
             if let Some(window) = app.get_webview_window("main") {
+                {
+                    let backdrop = app.state::<backdrop::Backdrop>();
+                    let dark = backdrop.desired_dark();
+                    backdrop.apply(&window, dark);
+                }
                 window.show()?;
                 let _ = window.set_focus();
             }

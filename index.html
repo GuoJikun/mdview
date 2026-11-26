@@ -11,6 +11,8 @@
 <link rel="stylesheet" href="/src/styles/app.css">
 <!-- 皮肤层必须在 app.css 之后：它用同特异性的选择器覆盖外壳颜色与圆角 -->
 <link rel="stylesheet" href="/src/styles/skin.css">
+<!-- 底材层最后：只有 Rust 确认 DWM 材质生效时才覆盖外壳背景为透明 -->
+<link rel="stylesheet" href="/src/styles/backdrop.css">
 </head>
 <body>
 <!-- Lucide 图标 sprite（ISC）。查找栏是静态 DOM、不在 Vue 树里，用 <use> 复用
