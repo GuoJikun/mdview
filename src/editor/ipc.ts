@@ -40,6 +40,8 @@ export type Wire =
   | { kind: 'indent'; outdent: boolean }
   /** 改链接 / 图片：字段缺省表示保持原值。 */
   | { kind: 'editLink'; stop: number; url?: string; text?: string; remove?: boolean }
+  /** 切换行内格式。字段是 `format` 而不是 `kind`，避免与消息名撞车。 */
+  | { kind: 'toggleInline'; format: 'strong' | 'emphasis' | 'strike' | 'code' }
   | { kind: 'tableInsertRow'; after: boolean }
   | { kind: 'tableDeleteRow' }
   | { kind: 'tableInsertColumn'; after: boolean }

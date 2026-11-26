@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use mdview_app::{AppState, Effect, FileStore, Message, StdFileStore, ViewMode};
+use mdview_app::{AppState, Effect, FileStore, InlineKind, Message, StdFileStore, ViewMode};
 use mdview_markdown::{BlockFrame, mime_for, resolve_local};
 use serde::{Deserialize, Serialize};
 
@@ -82,6 +82,11 @@ pub enum Wire {
         #[serde(default)]
         remove: bool,
     },
+    /// 切换行内格式。字段名用 `format` 而不是 `kind`：外层的 `kind` 已经是
+    /// 消息名（serde tag），同名字段读代码时容易看串。
+    ToggleInline {
+        format: WireInline,
+    },
     TableInsertRow {
         after: bool,
     },
@@ -90,6 +95,30 @@ pub enum Wire {
         after: bool,
     },
     TableDeleteColumn,
+}
+
+/// 行内格式的线缆表示。
+///
+/// 用枚举而不是字符串：拼错时 serde 直接报错，invoke 会失败，能在控制台看见；
+/// 若收成字符串，错拼只会让快捷键「按了没反应」，排查时无从下手。
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WireInline {
+    Strong,
+    Emphasis,
+    Strike,
+    Code,
+}
+
+impl From<WireInline> for InlineKind {
+    fn from(value: WireInline) -> Self {
+        match value {
+            WireInline::Strong => InlineKind::Strong,
+            WireInline::Emphasis => InlineKind::Emphasis,
+            WireInline::Strike => InlineKind::Strike,
+            WireInline::Code => InlineKind::Code,
+        }
+    }
 }
 
 impl Wire {
@@ -136,6 +165,9 @@ impl Wire {
                 url,
                 text,
                 remove,
+            },
+            Wire::ToggleInline { format } => Message::ToggleInline {
+                kind: format.into(),
             },
             Wire::TableInsertRow { after } => Message::TableInsertRow { after },
             Wire::TableDeleteRow => Message::TableDeleteRow,

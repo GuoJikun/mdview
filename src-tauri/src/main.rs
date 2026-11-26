@@ -646,6 +646,10 @@ fn menu_action(id: &str) -> Option<&'static str> {
         "new-window" => "new-window",
         "undo" => "undo",
         "redo" => "redo",
+        "bold" => "bold",
+        "italic" => "italic",
+        "strike" => "strike",
+        "inline-code" => "inline-code",
         "cut" => "cut",
         "copy" => "copy",
         "paste" => "paste",
@@ -739,6 +743,11 @@ fn build_native_menu(
     let edit_menu = SubmenuBuilder::new(app, "编辑")
         .item(&item("undo", "撤销")?)
         .item(&item("redo", "重做")?)
+        .separator()
+        .item(&item("bold", "加粗")?)
+        .item(&item("italic", "斜体")?)
+        .item(&item("strike", "删除线")?)
+        .item(&item("inline-code", "行内代码")?)
         .separator()
         .item(&item("cut", "剪切")?)
         .item(&item("copy", "复制")?)

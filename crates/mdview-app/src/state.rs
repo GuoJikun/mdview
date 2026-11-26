@@ -31,6 +31,49 @@ pub enum ViewMode {
     Source,
 }
 
+/// 行内格式。只收「可以纯靠一对标记包起来」的四种：
+/// 链接有目标与文字两个字段、图片是原子控件，都走 `EditLink`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InlineKind {
+    Strong,
+    Emphasis,
+    Strike,
+    Code,
+}
+
+impl InlineKind {
+    /// 源码标记串。`*` 与 `**` 必须分清：`***x***` 里两者共用同一段定界符，
+    /// 按 `*` 去匹配 `**` 会删掉加粗、只剩斜体。
+    pub fn marker(self) -> &'static str {
+        match self {
+            InlineKind::Strong => "**",
+            InlineKind::Emphasis => "*",
+            InlineKind::Strike => "~~",
+            InlineKind::Code => "`",
+        }
+    }
+
+    /// 无选区时插进标记中间的占位文字，插入后整段选中。
+    fn placeholder(self) -> &'static str {
+        match self {
+            InlineKind::Strong => "粗体",
+            InlineKind::Emphasis => "斜体",
+            InlineKind::Strike => "删除线",
+            InlineKind::Code => "代码",
+        }
+    }
+
+    /// 这个片段的样式是否已经带上了该格式（判断「再按一次是取消」）。
+    fn matches_style(self, style: &mdview_markdown::Style) -> bool {
+        match self {
+            InlineKind::Strong => style.strong,
+            InlineKind::Emphasis => style.emphasis,
+            InlineKind::Strike => style.strikethrough,
+            InlineKind::Code => style.code,
+        }
+    }
+}
+
 impl ViewMode {
     fn label(self) -> &'static str {
         match self {
@@ -122,6 +165,15 @@ pub enum Message {
         url: Option<String>,
         text: Option<String>,
         remove: bool,
+    },
+    /// 切换行内格式：加粗 / 斜体 / 删除线 / 行内代码。
+    ///
+    /// 三种走向由内核判定：有选区就两端包一对标记；选区已被同格式的标记包住
+    /// 就去掉那一对；没有选区则插入「标记 + 占位文字 + 标记」并**选中占位**，
+    /// 用户接着打字即替换。占位而不是空容器（`****`）是刻意的——`****` 单独成段
+    /// 会被 pulldown 判成分隔线，落点会当场跳走。
+    ToggleInline {
+        kind: InlineKind,
     },
     /// 在当前行前 / 后插入一行
     TableInsertRow {
@@ -514,6 +566,7 @@ impl AppState {
                 text,
                 remove,
             } => self.edit_link(stop, url, text, remove),
+            Message::ToggleInline { kind } => self.toggle_inline(kind),
             Message::TableInsertRow { after } => self.table_insert_row(after),
             Message::TableDeleteRow => self.table_delete_row(),
             Message::TableInsertColumn { after } => self.table_insert_column(after),
@@ -1234,8 +1287,158 @@ impl AppState {
         self.apply_with_caret(start..end, &replacement, Some(start))
     }
 
-    /// 一行空单元格的源码：`|  |  |`。
+    // ---- 行内格式 -------------------------------------------------------
+
+    /// 切换行内格式（`Ctrl+B` / `Ctrl+I` / `Ctrl+Shift+X` / `Ctrl+E`）。
     ///
+    /// 三条规则，全部走「一次事务、一步撤销」：
+    /// 1. 有选区且已被同格式的标记包住 → 去掉那一对，内容原样留下；
+    /// 2. 有选区但没被包住 → 两端各插一个标记，选区跟着内容平移；
+    /// 3. 没有选区 → 插「标记 + 占位文字 + 标记」并选中占位，用户接着打字即替换。
+    ///
+    /// 第 3 条不插空容器（`****`）是硬要求：`****` 单独成段会被 pulldown 判成
+    /// 分隔线，插入的一瞬间块类型就变了，光标无处可落。占位文字顺带给了
+    /// 「这里要填东西」的视觉提示。
+    fn toggle_inline(&mut self, kind: InlineKind) -> Vec<Effect> {
+        if self.composing {
+            return Vec::new();
+        }
+        let marker = kind.marker();
+        // char 区间给事务用，byte 区间给标记查找用；收起的光标两头相等。
+        let (sel, start, end) = match self.selection_chars() {
+            Some(chars) => {
+                let start = self.document.char_to_byte(chars.start);
+                let end = self.document.char_to_byte(chars.end);
+                (chars, start, end)
+            }
+            None => {
+                let byte = self.caret_byte().unwrap_or(0);
+                let at = self.document.byte_to_char(byte);
+                (at..at, byte, byte)
+            }
+        };
+        let Some(block) = self.block_covering(start, end) else {
+            return Vec::new();
+        };
+        // 光标若落在折叠标记内部（`**` 的两个星之间），插进去只会得到 `****粗**`。
+        // 停靠点模型理论上不会给出这种位置，这条是兜底。
+        if start == end
+            && (self.parsed.blocks[block].marker_pair_at(start).is_some()
+                || self.parsed.blocks[block].hidden_range_at(start).is_some())
+        {
+            return Vec::new();
+        }
+        // 表格跨格：`**` 落在竖线两侧会把整张表拆成两段非表格文本
+        if start != end
+            && matches!(self.parsed.blocks[block].kind, BlockKind::Table)
+            && self.table_locked_selection(&sel)
+        {
+            return Vec::new();
+        }
+
+        if start == end {
+            // 「再按一次取消」：光标确实停在带该样式的片段上，才去摘标记
+            if let Some((open, close)) = self.caret_inline_pair(block, start, kind) {
+                return self.unwrap_markers(open, close);
+            }
+            // 光标停在**任何**行内样式里但没找到可摘的标记（`*斜*` 的词首插
+            // `**粗体**` 会得到 `***粗体**斜*`——开头三个星被 pulldown 当成
+            // strong+em 共用的定界符，结构当场就歪了）。要嵌套请先选中文字。
+            if self.caret_in_any_inline(block, start) {
+                return Vec::new();
+            }
+            let text = kind.placeholder();
+            let insert = format!("{marker}{text}{marker}");
+            let anchor = sel.start + marker.chars().count();
+            let head = anchor + text.chars().count();
+            return self.apply_with_selection(sel.start..sel.start, &insert, anchor, head);
+        }
+
+        if let Some((open, close)) = self.inline_pair_around(block, start, end, marker) {
+            return self.unwrap_markers(open, close);
+        }
+        let text = self.document.slice_bytes(start..end);
+        let insert = format!("{marker}{text}{marker}");
+        let anchor = sel.start + marker.chars().count();
+        let head = anchor + text.chars().count();
+        self.apply_with_selection(sel, &insert, anchor, head)
+    }
+
+    /// 抽出成对的标记，中间内容原样留下；选覆盖整段内容。
+    fn unwrap_markers(&mut self, open: Range<usize>, close: Range<usize>) -> Vec<Effect> {
+        let keep = self.document.slice_bytes(open.end..close.start);
+        let span = self.document.byte_to_char(open.start)..self.document.byte_to_char(close.end);
+        let start = self.document.byte_to_char(open.start);
+        let head = start + keep.chars().count();
+        self.apply_with_selection(span, &keep, start, head)
+    }
+
+    /// 同时覆盖 `start..end` 的块索引。`end` 是排他端，判定时退一格。
+    fn block_covering(&self, start: usize, end: usize) -> Option<usize> {
+        let last = end.saturating_sub(1).max(start);
+        self.parsed.blocks.iter().position(|block| {
+            block.byte.start <= start && start <= block.byte.end && last <= block.byte.end
+        })
+    }
+
+    /// 块内找「把 `start..end` 整段包住、且标记串恰好等于 `marker`」的一对标记。
+    /// 嵌套时取最内层（区间最短），先摘紧贴内容的这一层。
+    fn inline_pair_around(
+        &self,
+        block: usize,
+        start: usize,
+        end: usize,
+        marker: &str,
+    ) -> Option<(Range<usize>, Range<usize>)> {
+        let src = self.document.text();
+        self.parsed
+            .blocks
+            .get(block)?
+            .markers
+            .iter()
+            .filter(|pair| {
+                pair.open.end <= start
+                    && end <= pair.close.start
+                    && src.get(pair.open.clone()) == Some(marker)
+                    && src.get(pair.close.clone()) == Some(marker)
+            })
+            .min_by_key(|pair| pair.close.start.saturating_sub(pair.open.start))
+            .map(|pair| (pair.open.clone(), pair.close.clone()))
+    }
+
+    /// 光标处的「取消该格式」目标：先确认光标停在一个带此样式的片段上，
+    /// 再由片段反查包住它的那一对标记。
+    fn caret_inline_pair(
+        &self,
+        block: usize,
+        byte: usize,
+        kind: InlineKind,
+    ) -> Option<(Range<usize>, Range<usize>)> {
+        let span = self.parsed.blocks.get(block)?.spans.iter().find(|span| {
+            span.byte.start <= byte && byte <= span.byte.end && kind.matches_style(&span.style)
+        })?;
+        self.inline_pair_around(block, span.byte.start, span.byte.end, kind.marker())
+    }
+
+    /// 光标是否落在某个带行内格式的片段上（四种之一，链接不算——
+    /// `[**粗**](url)` 是合法嵌套）。用于「不插占位、不破坏已有结构」的兜底。
+    fn caret_in_any_inline(&self, block: usize, byte: usize) -> bool {
+        let Some(block) = self.parsed.blocks.get(block) else {
+            return false;
+        };
+        block
+            .spans
+            .iter()
+            .find(|span| span.byte.start <= byte && byte <= span.byte.end)
+            .is_some_and(|span| {
+                span.style.strong
+                    || span.style.emphasis
+                    || span.style.strikethrough
+                    || span.style.code
+            })
+    }
+
+    /// 一行空单元格的源码：`|  |  |`。
     /// 不能写 `format!("|{}|", "  |".repeat(cols))`——每格自带一个收尾竖线，外层再包
     /// 一个就多出来一根（两列得到 `|  |  ||`）。用 `join_row` 拼，列数才和表头一致。
     fn blank_row(cols: usize) -> String {
@@ -4235,5 +4438,120 @@ mod tests {
             "续行的年份不该被当成有序项序号改写：{:?}",
             app.document.text()
         );
+    }
+
+    // ---- 行内格式 -------------------------------------------------------
+
+    #[test]
+    fn toggle_inline_wraps_selection_and_unwraps_on_second_press() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲乙丙");
+        // 选中「乙丙」（每个汉字 3 字节）
+        app.update(Message::Select { anchor: 3, head: 9 }, &files);
+        app.update(
+            Message::ToggleInline {
+                kind: InlineKind::Strong,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "甲**乙丙**");
+        assert_eq!(
+            app.selection_text().as_deref(),
+            Some("乙丙"),
+            "加粗后选区应仍盖住原文，而不是连标记一起选中"
+        );
+        // 再按一次：选区还在原内容上，应该摘掉标记而不是再包一层
+        app.update(
+            Message::ToggleInline {
+                kind: InlineKind::Strong,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "甲乙丙");
+    }
+
+    #[test]
+    fn toggle_inline_at_caret_inserts_placeholder_and_selects_it() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲乙");
+        click(&mut app, &files, 3); // 「甲」之后
+        app.update(
+            Message::ToggleInline {
+                kind: InlineKind::Strong,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "甲**粗体**乙");
+        assert_eq!(
+            app.selection_text().as_deref(),
+            Some("粗体"),
+            "占位文字必须被选中，接着打字才是替换而不是往后追加"
+        );
+        type_text(&mut app, &files, "实心");
+        assert_eq!(app.document.text(), "甲**实心**乙");
+    }
+
+    #[test]
+    fn toggle_inline_on_formatted_word_removes_the_markers() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "**粗**");
+        click(&mut app, &files, 4); // 落在「粗」里
+        app.update(
+            Message::ToggleInline {
+                kind: InlineKind::Strong,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "粗");
+    }
+
+    #[test]
+    fn toggle_inline_does_not_confuse_emphasis_with_strong() {
+        // `*斜*` 里按加粗：斜体标记不能被动到，也不能在词首写出歧义结构
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "*斜*");
+        click(&mut app, &files, 2);
+        app.update(
+            Message::ToggleInline {
+                kind: InlineKind::Strong,
+            },
+            &files,
+        );
+        assert_eq!(
+            app.document.text(),
+            "*斜*",
+            "在斜体里按加粗应该没反应，而不是写出 `***粗体**斜*` 这种歧义结构"
+        );
+    }
+
+    #[test]
+    fn toggle_inline_refuses_cross_block_selection() {
+        // `**` 跨过段落边界会把两段并成一行，语义直接变了——宁可不响应
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲\n\n乙");
+        app.update(Message::Select { anchor: 0, head: 7 }, &files);
+        app.update(
+            Message::ToggleInline {
+                kind: InlineKind::Strong,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "甲\n\n乙");
+    }
+
+    #[test]
+    fn toggle_inline_undoes_in_one_step() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, "甲乙");
+        app.update(Message::Select { anchor: 0, head: 3 }, &files);
+        app.update(
+            Message::ToggleInline {
+                kind: InlineKind::Code,
+            },
+            &files,
+        );
+        assert_eq!(app.document.text(), "`甲`乙");
+        app.update(Message::Undo, &files);
+        assert_eq!(app.document.text(), "甲乙", "一次撤销就该回到加标记之前");
     }
 }

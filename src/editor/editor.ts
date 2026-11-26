@@ -1188,6 +1188,16 @@ function runAction(action: string) {
       return;
     }
   }
+  // 行内格式只作用于所见即所得：源码视图的真值是 textarea（直接打标记即可），
+  // 阅读视图只读。不拦的话菜单点击会把改动打到内核文档上，与 textarea 里的
+  // 文本两套真值打架。
+  if (
+    (action === 'bold' || action === 'italic' || action === 'strike' || action === 'inline-code')
+    && window.__mdviewMode !== 'wysiwyg'
+  ) {
+    toast(window.__mdviewMode === 'source' ? '源码视图里请直接输入 Markdown 标记' : '阅读视图不可编辑');
+    return;
+  }
   // 最近打开：菜单条目是运行时生成的，动作名带序号（`recent:0`）。
   if (action.startsWith('recent:')) {
     openRecent(Number(action.slice('recent:'.length)));
@@ -1239,6 +1249,11 @@ function runAction(action: string) {
       break;
     case 'undo': send({ kind: 'undo' }); break;
     case 'redo': send({ kind: 'redo' }); break;
+    // 行内格式：内核自己判定「包一层 / 摘一层 / 插占位」
+    case 'bold': send({ kind: 'toggleInline', format: 'strong' }); break;
+    case 'italic': send({ kind: 'toggleInline', format: 'emphasis' }); break;
+    case 'strike': send({ kind: 'toggleInline', format: 'strike' }); break;
+    case 'inline-code': send({ kind: 'toggleInline', format: 'code' }); break;
     // 查找栏自己管焦点，不能落到函数末尾的 focusActiveEditor()
     case 'find': openFind(false); return;
     case 'replace': openFind(true); return;
@@ -1690,6 +1705,15 @@ window.addEventListener('keydown', (event) => {
     }
     if (key === 'z') { event.preventDefault(); send({ kind: event.shiftKey ? 'redo' : 'undo' }); return; }
     if (key === 'y') { event.preventDefault(); send({ kind: 'redo' }); return; }
+    // 行内格式（与 VSCode / Typora 同款键位）。必须排在 Ctrl+X 之前：
+    // 删除线是 Ctrl+Shift+X，落到下面那条会被当成剪切。
+    if (key === 'b' || key === 'i' || key === 'e' || (key === 'x' && event.shiftKey)) {
+      event.preventDefault();
+      const format: 'strong' | 'emphasis' | 'code' | 'strike' =
+        key === 'b' ? 'strong' : key === 'i' ? 'emphasis' : key === 'e' ? 'code' : 'strike';
+      send({ kind: 'toggleInline', format });
+      return;
+    }
     // 全选、复制、剪切都必须走内核：原生选区已被清掉（见 selection.js），
     // 文本真值和折叠标记的状态都在内核里，浏览器默认行为给不出正确的源码
     if (key === 'a') { event.preventDefault(); send({ kind: 'selectAll' }); return; }
@@ -2787,6 +2811,37 @@ window.__mdviewSelfTest = async function () {
       }
     } catch (err) {
       check('链接图片编辑链路可用', false, String(err));
+    }
+
+    // ---- 行内格式（Ctrl+B / I / Shift+X / E）----
+    try {
+      send({ kind: 'replaceSource', text: '甲乙丙' });
+      await queue;
+      send({ kind: 'select', anchor: 3, head: 9 });
+      await queue;
+      send({ kind: 'toggleInline', format: 'strong' });
+      await queue;
+      const bolded = await invoke<Snapshot>('snapshot');
+      check('选中后加粗写回源码', bolded.source === '甲**乙丙**', JSON.stringify(bolded.source));
+      check('加粗在视图里成形', !!docEl.querySelector('#doc .b'));
+      send({ kind: 'toggleInline', format: 'strong' });
+      await queue;
+      const plain = await invoke<Snapshot>('snapshot');
+      check('再按一次摘掉标记', plain.source === '甲乙丙', JSON.stringify(plain.source));
+      // 无选区：插占位并整段选中（占位是 `*斜体*` 里的「斜体」）
+      send({ kind: 'setCaret', stop: 0, extend: false });
+      await queue;
+      send({ kind: 'toggleInline', format: 'emphasis' });
+      await queue;
+      const placeholder = await invoke<Snapshot>('snapshot');
+      check('无选区插入占位对', placeholder.source === '*斜体*甲乙丙',
+        JSON.stringify(placeholder.source));
+      send({ kind: 'undo' });
+      await queue;
+      const restored = await invoke<Snapshot>('snapshot');
+      check('行内格式一步撤销', restored.source === '甲乙丙', JSON.stringify(restored.source));
+    } catch (err) {
+      check('行内格式链路可用', false, String(err));
     }
   } catch (err) {
     check('自检未抛异常', false, String(err));
