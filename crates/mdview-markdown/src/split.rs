@@ -34,13 +34,16 @@ pub fn split_blocks(src: &str) -> Vec<Range<usize>> {
         let marker = fence_marker(line.trim_start().as_bytes());
 
         if let Some((open, len)) = in_fence {
-            if let Some((m, n)) = marker
+            // 闭合围栏标记之后只允许空白：`` ```rust `` 是**开启**标记的样子
+            // （围栏内贴示例时很常见），带 info string 的一律不能当闭合。
+            if let Some((m, n, bare)) = marker
                 && m == open
                 && n >= len
+                && bare
             {
                 in_fence = None;
             }
-        } else if let Some((m, n)) = marker {
+        } else if let Some((m, n, _)) = marker {
             in_fence = Some((m, n));
         }
 
@@ -139,13 +142,24 @@ fn ends_with_blank_line(src: &str) -> bool {
     head.rsplit('\n').next().unwrap_or("").trim().is_empty()
 }
 
-fn fence_marker(bytes: &[u8]) -> Option<(u8, usize)> {
+/// 行首的围栏标记：`(字符, 数量, 标记之后是否只剩空白)`。
+///
+/// 第三个分量区分「开启」与「闭合」：CommonMark 规定闭合围栏后面只能是空白，
+/// 而开启围栏允许带 info string（`` ```rust ``）。只看反引号数量会把围栏里
+/// 贴的示例代码当成结束标记，块边界与解析器对不上。
+fn fence_marker(bytes: &[u8]) -> Option<(u8, usize, bool)> {
     let first = *bytes.first()?;
     if first != b'`' && first != b'~' {
         return None;
     }
     let count = bytes.iter().take_while(|b| **b == first).count();
-    (count >= 3).then_some((first, count))
+    if count < 3 {
+        return None;
+    }
+    let bare = bytes[count..]
+        .iter()
+        .all(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'));
+    Some((first, count, bare))
 }
 
 fn trim_eol(start: usize, mut end: usize, src: &str) -> Range<usize> {
@@ -246,5 +260,15 @@ mod tests {
         assert_eq!(texts("    a\n\n正文\n"), vec!["    a", "正文"]);
         // 块首不是缩进行时，不能因为两侧都缩进就并块
         assert_eq!(texts("正文\n   续行\n\n   代码\n").len(), 2);
+    }
+
+    #[test]
+    fn fence_with_info_string_does_not_close_outer_fence() {
+        // 围栏里贴示例时很常见：`` ```rust `` 带 info string，不是闭合标记
+        let src = "````\n```rust\nlet a = 1;\n\n正文\n````\n";
+        assert_eq!(texts(src).len(), 1, "{:?}", texts(src));
+        // 真正的闭合（标记后只有空白）照旧生效
+        let src = "````\n```rust\nlet a = 1;\n````\n\n正文\n";
+        assert_eq!(texts(src), vec!["````\n```rust\nlet a = 1;\n````", "正文"]);
     }
 }
