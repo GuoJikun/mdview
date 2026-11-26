@@ -442,7 +442,8 @@ fn window_title(path: Option<&std::path::Path>) -> String {
 /// 反过来的话那个 IPC 会找不到窗口对应的文档。
 ///
 /// 窗口形态要与 `tauri.*.conf.json` 里的主窗口一致（Windows/Linux 自绘标题栏、
-/// macOS 用 Overlay + 隐藏标题），否则新窗口会突然长出系统标题栏。
+/// macOS 用 Overlay + 隐藏标题、Windows/macOS 带透明表层），否则新窗口会突然
+/// 长出系统标题栏，或者因为 WebView2 的不透明白底把系统底材盖掉。
 /// 几何交给 window-state 插件按标签恢复；没有记录时用主窗口同款 960×760。
 fn create_window(
     app: &tauri::AppHandle,
@@ -463,9 +464,17 @@ fn create_window(
     {
         builder = builder
             .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .hidden_title(true);
+            .hidden_title(true)
+            // 透明表层：NSVisualEffectView 垫在 contentView 后面，窗口不透明就看不见。
+            .transparent(true);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        // 透明表层给 Mica 让位：WebView2 默认是不透明白底，材质会被它盖住；
+        // 而前端已经按 backdrop_kind 把 CSS 底层清空，窗口不透明就成了一块白板。
+        builder = builder.decorations(false).transparent(true);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         builder = builder.decorations(false);
     }
