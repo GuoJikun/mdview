@@ -13,6 +13,7 @@
 
 mod backdrop;
 mod backup;
+mod export;
 mod link;
 mod recent;
 mod release_notes;
@@ -478,6 +479,53 @@ fn copy_to_assets(source: &std::path::Path, document: &std::path::Path) -> Resul
     Ok(format!("assets/{name}"))
 }
 
+/// 文件 → 导出 HTML：把当前文档渲染成一份可以单独打开的单文件网页。
+///
+/// 图片就地内联成 data URL（沿用 `image_data_url` 的目录围栏与 32 MiB 上限），
+/// 所以导出件拷到别的机器上也不会缺图。**不做 PDF**：Tauri 2 没有跨平台打印
+/// API，菜单里给的是「导出 HTML 后用浏览器打印」这条路。
+///
+/// 返回 `Ok(None)` 表示用户取消了保存对话框。
+#[tauri::command]
+async fn export_html(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    sessions: tauri::State<'_, Sessions>,
+) -> Result<Option<String>, String> {
+    let session = session_of(window.label(), &sessions)?;
+    let (text, doc_path, _) = session.backup_payload();
+    let stem = doc_path
+        .as_ref()
+        .and_then(|path| path.file_stem())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "未命名".to_string());
+
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("导出 HTML")
+        .add_filter("HTML", &["html"])
+        .set_file_name(format!("{stem}.html"));
+    // 默认落在文档旁边：导出的 HTML 与文档放一起，图片内联了但目录关系不丢
+    if let Some(dir) = doc_path.as_ref().and_then(|path| path.parent()) {
+        dialog = dialog.set_directory(dir);
+    }
+    let Some(target) = dialog.blocking_save_file() else {
+        return Ok(None);
+    };
+    let target = target
+        .into_path()
+        .map_err(|_| "选中的路径无效".to_string())?;
+
+    let parsed = mdview_markdown::MarkdownParser::gfm().parse(&text);
+    let html = parsed.to_html(&text);
+    let body = export::inline_images(&html, |url| image_data_url(&session, url));
+    std::fs::write(&target, export::page(&stem, &body))
+        .map_err(|err| format!("写入导出文件失败：{err}"))?;
+    log::info!("导出 HTML：{}（窗口={}）", target.display(), window.label());
+    Ok(Some(target.display().to_string()))
+}
+
 /// 崩溃副本：把当前脏文档落一份到配置目录。
 ///
 /// 由前端每几秒问一次（内核里没有定时器的概念）。不脏就顺手**删掉**旧副本——
@@ -806,6 +854,7 @@ fn menu_action(id: &str) -> Option<&'static str> {
         "reload-file" => "reload-file",
         "save" => "save",
         "save-as" => "save-as",
+        "export-html" => "export-html",
         "new-file" => "new-file",
         "new-window" => "new-window",
         "settings" => "settings",
@@ -908,6 +957,7 @@ fn build_native_menu(
         .separator()
         .item(&item("save", "保存")?)
         .item(&item("save-as", "另存为…")?)
+        .item(&item("export-html", "导出 HTML…")?)
         .separator()
         .item(&item("settings", "偏好设置…")?)
         .separator()
@@ -1189,6 +1239,7 @@ fn main() {
             pick_image,
             write_backup,
             backup_recovery,
+            export_html,
             new_file,
             new_window,
             confirm_discard,
@@ -1400,6 +1451,37 @@ mod tests {
             b"first",
             "之前那张图要原样保留——覆盖在编辑器里看不出来"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 导出的单文件 HTML：图片内联、代码高亮类在、相对路径不残留。
+    ///
+    /// 这条钉的是「导出件拷到别的机器上还完整」——图片一旦留相对路径，
+    /// 换台机器就全是断链，而这在导出当下完全看不出来。
+    #[test]
+    fn exported_html_inlines_images_and_keeps_highlighting() {
+        let dir = std::env::temp_dir().join(format!("mdview-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join("assets").join("图.png"), b"png-bytes").unwrap();
+
+        let session = Session::from_text(
+            "# 标题\n\n![图](assets/图.png)\n\n```rust\nlet x = 1;\n```\n",
+            Some(dir.join("doc.md")),
+        );
+        let (text, _, _) = session.backup_payload();
+        let html = mdview_markdown::MarkdownParser::gfm()
+            .parse(&text)
+            .to_html(&text);
+        let body = export::inline_images(&html, |url| image_data_url(&session, url));
+        let page = export::page("doc", &body);
+
+        assert!(page.starts_with("<!DOCTYPE html>"), "{page}");
+        assert!(page.contains("data:image/png;base64,"), "图片必须内联");
+        assert!(!page.contains("src=\"assets/图.png\""), "相对路径不能残留");
+        assert!(page.contains("<h1"), "标题结构要保留");
+        assert!(page.contains("tk-keyword"), "代码高亮类要跟着导出");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1238,6 +1238,31 @@ function insertImageFromPicker() {
   }).catch((err) => toast('插入图片失败：' + err));
 }
 
+/** 导出进行中：别让连点叠出多个保存对话框。 */
+let exporting = false;
+
+/**
+ * 导出单文件 HTML。渲染、图片内联与写盘都在宿主侧完成——
+ * 内核只管 Markdown，导出件是「产物」而不是编辑对象，不该经前端转一手。
+ *
+ * 源码视图第一次调用前要先把 textarea 同步给内核，否则导出的是上一帧的内容。
+ */
+async function exportHtml() {
+  if (exporting) return;
+  exporting = true;
+  try {
+    flushSource();
+    await queue;
+    const path = await invoke<string | null>('export_html');
+    if (path) toast('已导出：' + baseName(path));
+  } catch (err) {
+    toast('导出失败：' + err);
+  } finally {
+    exporting = false;
+    focusActiveEditor();
+  }
+}
+
 /** 菜单动作统一入口：Windows/Linux 的自绘菜单、macOS 的原生菜单栏共用。 */
 function runAction(action: string) {
   // 源码视图下 textarea 自己就是编辑器：编辑类菜单动作必须作用于它，
@@ -1340,6 +1365,7 @@ function runAction(action: string) {
     case 'replace': openFind(true); return;
     case 'save': flushSource(); send({ kind: 'save' }); break;
     case 'save-as': requestSavePath(); break;
+    case 'export-html': void exportHtml(); return;
     case 'copy': send({ kind: 'copy' }); break;
     case 'cut': send({ kind: 'cut' }); break;
     case 'select-all': send({ kind: 'selectAll' }); break;
@@ -2817,6 +2843,9 @@ window.__mdviewSelfTest = async function () {
       const saveAsItem = document.querySelector('#tb-menu-popup button[data-action="save-as"]');
       check('文件菜单有另存为项', !!saveAsItem,
         saveAsItem ? saveAsItem.textContent : '无');
+      const exportItem = document.querySelector('#tb-menu-popup button[data-action="export-html"]');
+      check('文件菜单有导出 HTML 项', !!exportItem,
+        exportItem ? exportItem.textContent : '无');
       const newItem = document.querySelector('#tb-menu-popup button[data-action="new-file"]');
       check('文件菜单有新建项', !!newItem,
         newItem ? newItem.textContent : '无');

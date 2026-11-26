@@ -385,10 +385,13 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
   - 测试：`backup.rs` 单测 5 项（id 稳定性 / 未命名 key / 有效性判定 / 落盘读取清理全流程 / 未命名文档）、`Session::restore` 1 项、自检 1 项。
   - **手动验证项（自动化覆盖不到）**：真·任务管理器强杀 → 重启是否弹「恢复 / 丢弃」。副本的落盘、读取、有效性判定都有单测，唯独「进程被强杀时最后 5 秒的改动」只能靠人演一遍。
 
-- ⬜ **M6-5 导出与打印**
-  现状：唯一出口是复制（`text/html` + `text/plain`）。
-  做法：**导出单文件 HTML**——复用阅读态 `to_html()`，把 `<img data-asset>` 的相对路径按 `resolve_local` 内联成 data URL（沿用 32 MiB 上限），注入一份独立样式表（含 `tk-*` 高亮类与明暗变量、表格边框），产出可直接双击打开的文件。**PDF 不做内置**：Tauri 2 没有跨平台打印 API，现实路径是「导出 HTML → 浏览器打印成 PDF」，菜单里写明这句即可，README 不要承诺 PDF 导出。
-  过关线：导出的 HTML 在 Chrome / Firefox 里图片、表格、代码高亮、脚注跳转都正常，相对路径图片不丢。
+- ✅ **M6-5 导出与打印**（2026-11-26）：新增「文件 → 导出 HTML…」，把当前文档写成一个自带样式的单文件 HTML。**PDF 不做内置**（原因见下），README 与菜单都不承诺 PDF 导出。
+  - 渲染复用解析层：`MarkdownParser::gfm().parse(&text).to_html(&text)` 拿到与阅读视图同一份 HTML，样式表（`export.rs::STYLE`）单独写一份，不引用前端 CSS——导出的文件得能脱离应用单独活着，指望 `dist/assets/index-xxx.css` 是不行的。含 `tk-*` 代码高亮类、表格边框、`<figure>` 图片居中、脚注返回链接样式，以及一段 `@media print`（去掉背景色、避免标题被孤行切开、链接打印出 URL）。
+  - **图片内联**：`inline_images(html, resolve)` 把 `<img src="assets/图.png">` 换成 data URL，`resolve` 由宿主提供（`image_data_url`，沿用 32 MiB 上限）。三条边界——`data:` / `http(s)://` / `//` 开头的直接跳过；读不到的文件**保留原路径而不是让整次导出失败**（一张图丢了不该毁掉整篇文章）；HTML 里的 `&amp;` 要先还原再交回读盘，否则 `a&amp;b.png` 一定找不到。
+  - **PDF 为什么不做内置**：Tauri 2 没有跨平台打印 / 页面导出的 API。Windows 能借 WebView2 的 `PrintToPdfAsync`，macOS 得走 `NSPrintOperation`，Linux 上 WebKitGTK 又是另一套——三份平台代码，还都拿不到分页控制。现实路径就是导出 HTML 后让浏览器「打印为 PDF」，输出质量由浏览器决定，比自写分页可靠。
+  - 宿主侧 `export_html` 命令：默认目录取文档所在目录、文件名 `stem.html`（未命名就叫 `未命名.html`），对话框可改路径；写成后返回实际路径给前端 toast。
+  - 测试：`export.rs` 单测 4 项（页面骨架与标题转义 / 图片内联的三种跳过 / 读不到时保留原路径 / `&amp;` 还原）、宿主链路 1 项（`exported_html_inlines_images_and_keeps_highlighting`：真文档 → 导出 → 断言图片变 data URL、`tk-` 高亮类与表格都在）、自检 1 项（文件菜单有导出项）。
+  - **手动验证项**：导出的 HTML 在 Chrome / Firefox 里逐项看图片、表格、高亮、脚注——「双击打开是否好看」没法自动化，骨架与内联由单测锁住。
 
 #### P1 日常可用
 
@@ -455,10 +458,10 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
 ## 7. 当前进度快照
 
 - 日期：2026-11-26（M6-1 行内格式、M6-2 插入菜单、M6-3 偏好设置、M6-4 崩溃恢复与自动保存；上一轮为多窗口、最近打开、字数统计、拖放打开、粘贴 HTML / 复制富文本、查找替换、Tab 缩进、链接/图片行内编辑）
-- 测试：**Rust 393 项全过**（app 146 / markdown 172 / desktop bin 61 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **184 项**（18 文件，unit + dom 两个 project：`ime` / `caretline` / `selection` / `dragscroll` / `outline` / `theme` / `update-format` / `find` / `clipboard` / `html-to-md` / `skin` / CRLF 视图 / 环境能力 / 滚动条 / 图片大纲 / 内核启动），由 `pnpm test` 一次跑完
+- 测试：**Rust 398 项全过**（app 146 / markdown 172 / desktop bin 66 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **184 项**（18 文件，unit + dom 两个 project：`ime` / `caretline` / `selection` / `dragscroll` / `outline` / `theme` / `update-format` / `find` / `clipboard` / `html-to-md` / `skin` / CRLF 视图 / 环境能力 / 滚动条 / 图片大纲 / 内核启动），由 `pnpm test` 一次跑完
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 112/112」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为 9 项**、**字数 2 项**、**查找替换 8 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**、**行内格式 5 项**、**插入 4 项**、**偏好设置 5 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 113/113」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为/导出 10 项**、**字数 2 项**、**查找替换 8 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**、**行内格式 5 项**、**插入 4 项**、**偏好设置 5 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
   - **必须走 `pnpm tauri dev`**：debug 构建会按 `devUrl` 加载 `http://localhost:1450`，没有 Vite 时窗口标题只有配置里的 `mdview`、页面白屏、日志停在「启动」一行——不是回归。想直接用 `target/debug/mdview-desktop.exe` 跑自检，手工起的 Vite **必须绑 IPv4**（`pnpm dev --host 127.0.0.1`，别再夹一层 `--`：pnpm 会把 `--` 原样传给 vite，host 不生效）：Vite 默认在这台机器上只监听 `[::1]`，WebView2 打不开 `localhost` 时同样白屏，且 CDP 里页面的 `title` 会停在 `about:blank`
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
@@ -545,12 +548,12 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
 2. ~~**M6-2 插入菜单 + `Ctrl+K` 插入链接**~~ **已完成（2026-11-26）**：插入菜单七项、图片复制到 `assets/`、自检 4 项，见第 6 节
 3. ~~**M6-3 偏好设置面板**~~ **已完成（2026-11-26）**：`Ctrl+,` + 五项排版偏好 + 缩进宽度进内核，见第 6 节
 4. ~~**M6-4 自动保存与崩溃恢复**~~ **已完成（2026-11-26）**：5 秒崩溃副本 + 可选的静默自动保存，见第 6 节
-5. **M6-5 导出 HTML** —— 下一步；有出口才算「写完」
-5. **M6-6 文件侧栏**
-6. **M6-7 多标签页**（先出设计，别边写边改）
-7. **M6-8 编码 / M6-9 性能 / M6-10 表格**
-8. **M6-15 CI 补齐** —— 越早越好，可与上面并行
-9. P2 逐条收割（M6-12 ~ M6-17）
+5. ~~**M6-5 导出 HTML**~~ **已完成（2026-11-26）**：单文件 HTML + 图片内联；PDF 走浏览器打印，见第 6 节
+6. **M6-6 文件侧栏** —— 下一步
+7. **M6-7 多标签页**（先出设计，别边写边改）
+8. **M6-8 编码 / M6-9 性能 / M6-10 表格**
+9. **M6-15 CI 补齐** —— 越早越好，可与上面并行
+10. P2 逐条收割（M6-12 ~ M6-17）
 
 已完成的历史项（`selectAll`、拖边自动滚动、Watcher、M2 收尾、表格子工程、粘贴 HTML、段末 Delete）见 M1–M5 与第 8 节，不再在此记账。
 

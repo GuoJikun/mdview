@@ -49,6 +49,7 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
     { sep: true },
     { action: 'save', label: '保存', acc: 'Ctrl+S' },
     { action: 'save-as', label: '另存为…', acc: 'Ctrl+Shift+S' },
+    { action: 'export-html', label: '导出 HTML…' },
     { sep: true },
     { action: 'settings', label: '偏好设置…', acc: 'Ctrl+,' },
     { sep: true },
