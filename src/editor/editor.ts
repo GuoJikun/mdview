@@ -491,11 +491,20 @@ function runFind() {
   findMatcher = { re: built.re };
   const text = findHaystack();
   const offsets = utf8Offsets(text);
-  const scope = findInSelection ? selectionByteRange() : null;
+  // 源码视图的命中只需要 UTF-16 下标：高亮与替换都交给 textarea 自己。
+  // 不能再算 byte 去换停靠点——`textarea.value` 已被规范把 CRLF 归一成 LF，
+  // 与内核原文差一个字节，首行之后全部换算落空，表现为「切到源码视图就搜不到」。
+  // 「仅在选区内」的范围来自停靠点，同样只对编辑态成立。
+  const sourceMode = window.__mdviewMode === 'source';
+  const scope = !sourceMode && findInSelection ? selectionByteRange() : null;
   for (const hit of scanMatches(text, findMatcher)) {
     const startByte = offsets[hit.start];
     const endByte = offsets[hit.end];
     if (scope && (startByte < scope.start || endByte > scope.end)) continue;
+    if (sourceMode) {
+      findMatches.push({ start: hit.start, end: hit.end, startByte, endByte, startStop: 0, endStop: 0 });
+      continue;
+    }
     const range = stopRangeFor(startByte, endByte);
     if (!range) continue;
     findMatches.push({ start: hit.start, end: hit.end, startByte, endByte, ...range });

@@ -214,4 +214,26 @@ describe('替换展开与保留大小写', () => {
     // $0 不指向任何分组
     expect(replacementFor(src, { start: 0, end: 1 }, '$0', { matcher: { re } })).toBe('$0');
   });
+
+  it('未参与匹配的可选分组展开成空串（不是字面量 $1）', () => {
+    // ECMAScript 语义：`(x)?b` 匹配 "b" 时 $1 是 undefined → 空串。
+    // 写成字面量会把 `$1` 静默写进正文。
+    const { re } = buildMatcher('(x)?b', { regex: true });
+    expect(replacementFor('b', { start: 0, end: 1 }, '[$1]', { matcher: { re } })).toBe('[]');
+
+    const named = buildMatcher('(?<y>x)?b', { regex: true });
+    expect(
+      replacementFor('b', { start: 0, end: 1 }, '[$<y>]', { matcher: { re: named.re } }),
+    ).toBe('[]');
+
+    // 另一半分支没走到的分组同理
+    const either = buildMatcher('(a)|(b)', { regex: true });
+    expect(
+      replacementFor('a', { start: 0, end: 1 }, '[$2]', { matcher: { re: either.re } }),
+    ).toBe('[]');
+    // 真正不存在的分组仍是字面量
+    expect(
+      replacementFor('b', { start: 0, end: 1 }, '[$9]', { matcher: { re: either.re } }),
+    ).toBe('[$9]');
+  });
 });

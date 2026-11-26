@@ -19,6 +19,7 @@
           :class="{ open: openSubIndex === i }"
           role="menuitem"
           aria-haspopup="true"
+          :data-sub-index="i"
           @pointerenter="openSubIndex = i"
           @click.stop="toggleSub(i)"
         >
@@ -142,15 +143,40 @@ function run(action?: string): void {
   dispatch(action);
 }
 
+/**
+ * 可导航的菜单项。
+ *
+ * 不能只取 `button[data-action]`：子菜单触发器（最近打开 / 外观 / 主题）没有
+ * action，按方向键永远跳不过去。折叠的子菜单是 `v-if`，不在 DOM 里；展开之后
+ * 它的条目紧跟触发器，正好接在导航序列里。
+ */
 function popupButtons(): HTMLButtonElement[] {
-  return Array.from(popupEl.value?.querySelectorAll<HTMLButtonElement>('button[data-action]') ?? []);
+  return Array.from(popupEl.value?.querySelectorAll<HTMLButtonElement>('button') ?? []);
 }
 
-function highlight(index: number): void {
+/** 方向键移动高亮。还没有高亮时：下键从头、上键从尾。 */
+function stepHighlight(delta: number): void {
   const buttons = popupButtons();
   if (!buttons.length) return;
-  menuState.activeIndex = (index + buttons.length) % buttons.length;
-  buttons.forEach((btn, i) => btn.classList.toggle('focused', i === menuState.activeIndex));
+  const count = buttons.length;
+  const from = menuState.activeIndex;
+  const next = from < 0
+    ? (delta > 0 ? 0 : count - 1)
+    : (from + delta + count) % count;
+  menuState.activeIndex = next;
+  buttons.forEach((btn, i) => btn.classList.toggle('focused', i === next));
+}
+
+/** Enter：普通项直接执行，子菜单触发器展开 / 收起。 */
+function activate(index: number): void {
+  const btn = popupButtons()[index];
+  if (!btn) return;
+  if (btn.dataset.action) {
+    run(btn.dataset.action);
+    return;
+  }
+  const sub = btn.dataset.subIndex;
+  if (sub !== undefined) toggleSub(Number(sub));
 }
 
 function onDocMousedown(event: MouseEvent): void {
@@ -170,14 +196,11 @@ function onKeydown(event: KeyboardEvent): void {
   event.preventDefault();
   event.stopPropagation();
   if (event.key === 'Escape') closeMenu();
-  else if (event.key === 'ArrowDown') highlight(menuState.activeIndex + 1);
-  else if (event.key === 'ArrowUp') highlight(menuState.activeIndex - 1);
+  else if (event.key === 'ArrowDown') stepHighlight(1);
+  else if (event.key === 'ArrowUp') stepHighlight(-1);
   else if (event.key === 'ArrowLeft') switchMenu(-1);
   else if (event.key === 'ArrowRight') switchMenu(1);
-  else if (menuState.activeIndex >= 0) {
-    const btn = popupButtons()[menuState.activeIndex];
-    if (btn?.dataset.action) run(btn.dataset.action);
-  }
+  else activate(menuState.activeIndex);
 }
 
 // 打开后量一次宽度再定位；右侧放不下时整体左移（与原实现一致）。
