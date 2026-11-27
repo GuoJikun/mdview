@@ -122,6 +122,9 @@ pub enum Wire {
         after: bool,
     },
     TableDeleteColumn,
+    TableSortColumn {
+        descending: bool,
+    },
 }
 
 /// 行内格式的线缆表示。
@@ -234,6 +237,7 @@ impl Wire {
             Wire::TableDeleteRow => Message::TableDeleteRow,
             Wire::TableInsertColumn { after } => Message::TableInsertColumn { after },
             Wire::TableDeleteColumn => Message::TableDeleteColumn,
+            Wire::TableSortColumn { descending } => Message::TableSortColumn { descending },
         }
     }
 }
@@ -707,6 +711,9 @@ mod tests {
             serde_json::from_str(r#"{"kind":"tableInsertColumn","after":false}"#).unwrap();
         assert!(matches!(wire, Wire::TableInsertColumn { after: false }));
         assert!(serde_json::from_str::<Wire>(r#"{"kind":"tableDeleteColumn"}"#).is_ok());
+        let wire: Wire =
+            serde_json::from_str(r#"{"kind":"tableSortColumn","descending":true}"#).unwrap();
+        assert!(matches!(wire, Wire::TableSortColumn { descending: true }));
         // Tab / Shift+Tab：布尔字段决定方向
         let wire: Wire = serde_json::from_str(r#"{"kind":"indent","outdent":true}"#).unwrap();
         assert!(matches!(wire, Wire::Indent { outdent: true }));

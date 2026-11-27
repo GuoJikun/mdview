@@ -2452,6 +2452,8 @@ barEl.addEventListener('click', (event) => {
     'row-': { kind: 'tableDeleteRow' },
     'col+': { kind: 'tableInsertColumn', after: true },
     'col-': { kind: 'tableDeleteColumn' },
+    'sort-asc': { kind: 'tableSortColumn', descending: false },
+    'sort-desc': { kind: 'tableSortColumn', descending: true },
   };
   const message = ops[tableBtn.dataset.table ?? ''];
   if (message) send(message);
@@ -3452,6 +3454,42 @@ window.__mdviewSelfTest = async function () {
         document.activeElement ? document.activeElement.id || '无 id' : '无');
     } catch (err) {
       check('无障碍链路可用', false, String(err));
+    }
+
+    // ---- 表格排序：排序只搬整行源码，表头不动，一次事务 ----
+    try {
+      const tableSrc =
+        '| 名 | 数 |\n| --- | --- |\n| 乙 | 10 |\n| 甲 | 9 |\n| 丙 | 2 |\n| 丁 | 5 |\n';
+      send({ kind: 'replaceSource', text: tableSrc });
+      await queue;
+      const cell = docEl.querySelector<HTMLElement>('[data-cell="1,1"] [data-b]');
+      check('排序样张渲染成网格', !!cell);
+      if (cell) {
+        // 光标先进「数」列：排序按键列走，不是按选中区域
+        send({ kind: 'setCaret', stop: Number(cell.dataset.b), extend: false });
+        await queue;
+        check('表格工具条有排序按钮',
+          !!barEl.querySelector('[data-table="sort-asc"]') &&
+            !!barEl.querySelector('[data-table="sort-desc"]'));
+        const rev = meta.revision;
+        send({ kind: 'tableSortColumn', descending: false });
+        await queue;
+        const sorted = (await invoke<Snapshot>('snapshot')).source;
+        check('按数值升序排序（10 不该排在 2 前面）',
+          sorted.indexOf('丙') < sorted.indexOf('丁') &&
+            sorted.indexOf('丁') < sorted.indexOf('甲') &&
+            sorted.indexOf('甲') < sorted.indexOf('乙'),
+          JSON.stringify(sorted.slice(0, 40)));
+        check('排序后表头仍在一、二位',
+          sorted.startsWith('| 名 | 数 |\n| --- | --- |'), JSON.stringify(sorted.slice(0, 20)));
+        check('排序是一次事务', meta.revision === rev + 1, rev + ' → ' + meta.revision);
+        send({ kind: 'undo' });
+        await queue;
+        const back = (await invoke<Snapshot>('snapshot')).source;
+        check('一次撤销恢复排序前的行序', back === tableSrc, JSON.stringify(back.slice(0, 30)));
+      }
+    } catch (err) {
+      check('表格排序链路可用', false, String(err));
     }
 
     // ---- 大文档：十万字量级的打开、点击落点与跨块拖选 ----

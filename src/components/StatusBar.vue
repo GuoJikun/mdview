@@ -18,6 +18,9 @@
       <button type="button" data-table="row-" title="删除当前行">行−</button>
       <button type="button" data-table="col+" title="在右侧插入列">列+</button>
       <button type="button" data-table="col-" title="删除当前列">列−</button>
+      <!-- 排序只动数据行：表头与分隔行原地不动，一次事务、一步撤销 -->
+      <button type="button" data-table="sort-asc" title="按本列升序排列" aria-label="按本列升序排列">↑</button>
+      <button type="button" data-table="sort-desc" title="按本列降序排列" aria-label="按本列降序排列">↓</button>
     </span>
     <span class="hint">← → 移动 · Shift 扩选 · Enter 分段 · Tab 跨格 · Ctrl+S 保存</span>
   </Teleport>

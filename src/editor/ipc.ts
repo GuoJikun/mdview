@@ -58,7 +58,9 @@ export type Wire =
   | { kind: 'tableInsertRow'; after: boolean }
   | { kind: 'tableDeleteRow' }
   | { kind: 'tableInsertColumn'; after: boolean }
-  | { kind: 'tableDeleteColumn' };
+  | { kind: 'tableDeleteColumn' }
+  /** 按当前列给数据行排序；`descending` 决定方向，表头与分隔行不动。 */
+  | { kind: 'tableSortColumn'; descending: boolean };
 
 /** 一个块的投影：`html` 已经是最终 DOM，前端只负责换节点。 */
 export interface BlockDto {

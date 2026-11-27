@@ -228,6 +228,10 @@ pub enum Message {
     },
     /// 删除当前列（至少保留一列）
     TableDeleteColumn,
+    /// 按当前列给数据行排序（表头与分隔行不动）
+    TableSortColumn {
+        descending: bool,
+    },
     Reload {
         content: String,
     },
@@ -623,6 +627,7 @@ impl AppState {
             Message::TableDeleteRow => self.table_delete_row(),
             Message::TableInsertColumn { after } => self.table_insert_column(after),
             Message::TableDeleteColumn => self.table_delete_column(),
+            Message::TableSortColumn { descending } => self.table_sort_column(descending),
             Message::Reload { content } => {
                 self.document = Document::new(content);
                 self.reparse();
@@ -1795,6 +1800,80 @@ impl AppState {
         self.replace_table(id, &lines, target, 0)
     }
 
+    /// 按当前列给数据行排序，表头与分隔行原地不动。
+    ///
+    /// 只搬**整行源码**，不重新拼单元格：`\|` 转义、行内代码、对齐空格、行尾
+    /// 全都不动，撤销栈里也是一次事务。这样做还有个好处——GFM 的对齐写在分隔行，
+    /// 行序变化不会破坏它。
+    ///
+    /// 判据：两行都能读成数字就按数值比（`10` 排在 `9` 之后，而不是按字符串
+    /// 排在 `9` 前面）；否则按不区分大小写的字典序。两种判据不混用，一行数字、
+    /// 一行文字时统一退回字典序，顺序才是可预期的。
+    fn table_sort_column(&mut self, descending: bool) -> Vec<Effect> {
+        let Some((id, _, caret_row, col)) = self.caret_table_cell() else {
+            return Vec::new();
+        };
+        let src = self.document.text();
+        let block = &self.parsed.blocks[id];
+        let Some(grid) = block.table.as_ref() else {
+            return Vec::new();
+        };
+        if grid.rows.len() < 3 || col >= grid.rows[0].cells.len() {
+            return Vec::new();
+        }
+        let mut lines = Self::table_lines(&src, &block.byte);
+        // 数据行与源码行必须一一对应。对不上说明这张表有本函数不认识的形态
+        // （比如单元格里混进了换行），那就不排——把表改坏比如实说「不支持」更糟。
+        if lines.len() != grid.rows.len() + 1 {
+            return Vec::new();
+        }
+        let cell_text = |row: usize| -> &str {
+            grid.rows[row]
+                .cells
+                .get(col)
+                .and_then(|cell| src.get(cell.byte.clone()))
+                .unwrap_or("")
+                .trim()
+        };
+        let mut order: Vec<usize> = (1..grid.rows.len()).collect();
+        order.sort_by(|&a, &b| {
+            let (left, right) = (cell_text(a), cell_text(b));
+            let cmp = match (Self::table_number(left), Self::table_number(right)) {
+                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+                _ => left.to_lowercase().cmp(&right.to_lowercase()),
+            };
+            if descending { cmp.reverse() } else { cmp }
+        });
+        let sorted: Vec<String> = order
+            .iter()
+            .map(|&row| lines[Self::table_source_row(row)].clone())
+            .collect();
+        for (index, line) in sorted.into_iter().enumerate() {
+            lines[2 + index] = line;
+        }
+        // 光标跟着原来那一行走：它排到第几名，就停在第几行同一列，接着输数字
+        // 不会跳回表头。
+        let target = order
+            .iter()
+            .position(|&row| row == caret_row)
+            .map_or(2, |position| 2 + position);
+        self.replace_table(id, &lines, target, col)
+    }
+
+    /// 排序用的数字：**整串**都得是数字才算，`10 个` 仍按文本排。
+    ///
+    /// `f64::parse` 会接受 `NaN` / `inf`，这两个参与比较没有全序，直接当文本处理。
+    fn table_number(text: &str) -> Option<f64> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        trimmed
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+    }
+
     /// 用 `TableGrid` 记下的单元格区间取出每行原文。
     ///
     /// 不能按 `|` 切分源码：GFM 允许 `\|` 转义竖线，行内代码里的 `|`
@@ -2796,6 +2875,154 @@ mod tests {
 
     fn table_app(files: &mut InMemoryFileStore) -> AppState {
         open(files, TABLE)
+    }
+
+    /// 排序专供的样张：数据行的顺序与「数字大小」「字母大小写」都刻意错开，
+    /// 一眼就能看出排的是数值还是字符串。
+    const SORTABLE: &str =
+        "| 名 | 数 |\n| --- | --- |\n| 乙 | 10 |\n| 甲 | 9 |\n| 丙 | 2 |\n| 丁 | 5 |\n";
+
+    fn sortable_app(files: &mut InMemoryFileStore) -> AppState {
+        open(files, SORTABLE)
+    }
+
+    /// 点进「数」列第一格（`10`）——排序按光标所在列走。
+    fn sort_by_number_column(app: &mut AppState, files: &InMemoryFileStore, descending: bool) {
+        let at = SORTABLE.find("10").expect("样张里应有 10");
+        click(app, files, at);
+        app.update(Message::TableSortColumn { descending }, files);
+    }
+
+    /// byte → 停靠点。布局只提供 stop → byte 一个方向，测试里线性扫一遍就够。
+    fn stop_at(app: &AppState, byte: usize) -> usize {
+        let mut stop = 0;
+        while let Some(at) = app.layout.byte(stop) {
+            if at >= byte {
+                return stop;
+            }
+            stop += 1;
+        }
+        stop
+    }
+
+    #[test]
+    fn copying_across_table_cells_yields_source_not_tsv() {
+        // 跨格复制的决策依据：选区本来就落在源码上，复制直接给出那一段 Markdown，
+        // 粘回去仍是表格。做 TSV 反而会让「粘回本编辑器」丢结构。
+        let mut files = InMemoryFileStore::default();
+        let mut app = table_app(&mut files);
+        let start = stop_at(&app, TABLE.find('a').expect("样张里应有 a"));
+        let end = stop_at(&app, TABLE.find('f').expect("样张里应有 f") + 1);
+        app.update(
+            Message::SetCaret {
+                stop: start,
+                extend: false,
+            },
+            &files,
+        );
+        app.update(
+            Message::SetCaret {
+                stop: end,
+                extend: true,
+            },
+            &files,
+        );
+        let effects = app.update(Message::Copy, &files);
+        let Some(Effect::Clipboard { text }) = effects.first() else {
+            panic!("跨格选区应当产生一次剪贴板写入：{effects:?}");
+        };
+        // 从 `a` 选到 `f`：拿到的就是这段源码，行内格式与竖线原样保留
+        assert!(
+            text.contains("**b** | c |") && text.contains("| d | e | f"),
+            "跨格复制给的是源码：{text:?}"
+        );
+        assert!(!text.contains('\t'), "不该改成制表符分隔：{text:?}");
+    }
+
+    #[test]
+    fn table_sort_compares_numbers_not_strings() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = sortable_app(&mut files);
+        sort_by_number_column(&mut app, &files, false);
+        assert_eq!(
+            app.document.text(),
+            "| 名 | 数 |\n| --- | --- |\n| 丙 | 2 |\n| 丁 | 5 |\n| 甲 | 9 |\n| 乙 | 10 |\n",
+            "数字列要按数值排：字符串序会把 10 排到 2 前面"
+        );
+    }
+
+    #[test]
+    fn table_sort_descending_flips_the_order() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = sortable_app(&mut files);
+        sort_by_number_column(&mut app, &files, true);
+        assert_eq!(
+            app.document.text(),
+            "| 名 | 数 |\n| --- | --- |\n| 乙 | 10 |\n| 甲 | 9 |\n| 丁 | 5 |\n| 丙 | 2 |\n",
+            "降序之后仍是数值序，不是简单的行反转"
+        );
+    }
+
+    #[test]
+    fn table_sort_keeps_header_and_is_one_undo_step() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = sortable_app(&mut files);
+        sort_by_number_column(&mut app, &files, false);
+        let sorted = app.document.text();
+        assert!(
+            sorted.starts_with("| 名 | 数 |\n| --- | --- |\n"),
+            "表头与分隔行不该动：{sorted}"
+        );
+        app.update(Message::Undo, &files);
+        assert_eq!(app.document.text(), SORTABLE, "一次撤销就该回到原样");
+    }
+
+    #[test]
+    fn table_sort_keeps_the_caret_on_its_own_row() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = sortable_app(&mut files);
+        sort_by_number_column(&mut app, &files, false);
+        let text = app.document.text();
+        let byte = app.layout.byte(app.selection.head).expect("光标应仍能找到");
+        let start = text[..byte].rfind('\n').map_or(0, |index| index + 1);
+        let end = text[byte..]
+            .find('\n')
+            .map_or(text.len(), |index| byte + index);
+        assert!(
+            text[start..end].contains("乙"),
+            "光标应跟着原来那一行走，实际停在 {:?}",
+            &text[start..end]
+        );
+    }
+
+    #[test]
+    fn table_sort_falls_back_to_case_insensitive_text() {
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(
+            &mut files,
+            "| 名 |\n| --- |\n| beta |\n| Alpha |\n| gamma |\n",
+        );
+        let at = "| 名 |\n| --- |\n| beta |\n| Alpha |\n| gamma |\n"
+            .find("beta")
+            .expect("样张里应有 beta");
+        click(&mut app, &files, at);
+        app.update(Message::TableSortColumn { descending: false }, &files);
+        assert_eq!(
+            app.document.text(),
+            "| 名 |\n| --- |\n| Alpha |\n| beta |\n| gamma |\n",
+            "文字列按不区分大小写的字典序"
+        );
+    }
+
+    #[test]
+    fn table_sort_does_nothing_with_a_single_data_row() {
+        let src = "| 名 |\n| --- |\n| 甲 |\n";
+        let mut files = InMemoryFileStore::default();
+        let mut app = open(&mut files, src);
+        click(&mut app, &files, src.find("甲").expect("样张里应有甲"));
+        let effects = app.update(Message::TableSortColumn { descending: false }, &files);
+        assert!(effects.is_empty(), "只有一行数据时不该产生事务");
+        assert_eq!(app.document.text(), src);
     }
 
     #[test]
