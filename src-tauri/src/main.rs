@@ -927,6 +927,7 @@ fn menu_action(id: &str) -> Option<&'static str> {
         "outline-next" => "outline-next",
         "doc-start" => "doc-start",
         "doc-end" => "doc-end",
+        "shortcuts" => "shortcuts",
         "update" => "update",
         "about" => "about",
         _ => return None,
@@ -1065,6 +1066,8 @@ fn build_native_menu(
         .build()?;
 
     let help_menu = SubmenuBuilder::new(app, "帮助")
+        .item(&item("shortcuts", "键盘快捷键")?)
+        .separator()
         .item(&item("update", "检查更新…")?)
         .separator()
         .item(&item("about", "关于")?)

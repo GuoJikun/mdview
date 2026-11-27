@@ -872,3 +872,58 @@ html[data-drop="1"] body::after {
   background: var(--accent); border-color: var(--accent); color: #fff;
 }
 #linkedit button.primary:hover { filter: brightness(1.06); }
+
+/* ---- 空状态 ---------------------------------------------------------
+   未命名且没有任何内容时，正文区是一片空白——对第一次打开的人等于什么都没说。
+   这块浮在正文上方给出三个入口，一有内容就消失（editor.ts 的 refreshEmptyState）。
+   z-index 低于自绘滚动条(25)与标题栏，高于正文；点卡片外的空白仍然落到 #doc。 */
+#empty {
+  position: fixed; z-index: 6;
+  left: calc(var(--outline-w) + var(--canvas-gap));
+  right: 0; top: 0; bottom: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; pointer-events: none;
+}
+#empty[hidden] { display: none !important; }
+#empty .empty-card {
+  pointer-events: auto;
+  width: 420px; max-width: 100%;
+  padding: 26px 28px 22px;
+  background: var(--control); color: var(--text2);
+  border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .16);
+  font: 13px/1.65 var(--doc-font);
+}
+#empty h1 { margin: 0 0 6px; font-size: 20px; font-weight: 650; color: var(--text); }
+#empty p { margin: 0 0 16px; }
+#empty .empty-actions { display: flex; flex-direction: column; gap: 6px; }
+#empty button {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  height: 32px; padding: 0 12px;
+  font: inherit; text-align: left;
+  color: var(--text); background: transparent;
+  border: 1px solid var(--border); border-radius: 7px; cursor: pointer;
+}
+#empty button:hover { background: var(--outline-hover); }
+#empty button.empty-primary {
+  color: #fff; background: var(--accent); border-color: transparent;
+}
+#empty button.empty-primary:hover { filter: brightness(1.06); }
+#empty kbd {
+  white-space: nowrap; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--control);
+  color: var(--muted); font: 11px/1.6 ui-monospace, Consolas, monospace;
+}
+#empty button.empty-primary kbd {
+  border-color: rgba(255, 255, 255, .35); background: transparent; color: inherit;
+}
+#empty-recent { margin-top: 16px; }
+#empty-recent[hidden] { display: none !important; }
+#empty-recent h2 {
+  margin: 0 0 6px; font-size: 12px; font-weight: 600;
+  color: var(--muted); letter-spacing: .02em;
+}
+#empty-recent button { border-color: transparent; padding: 0 6px; height: 28px; }
+#empty-recent .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#empty-recent .dir { color: var(--faint); font-size: 12px; flex: none; }
+#empty .empty-help { margin: 16px 0 0; color: var(--faint); font-size: 12px; }

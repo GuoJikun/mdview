@@ -55,6 +55,24 @@
 <div id="outline-scroll" class="tb-vscroll" aria-hidden="true"><div id="outline-scroll-thumb" class="tb-vscroll-thumb"></div></div>
 <!-- 内核持有文本真值，这里只有投影：每块一个 <section>，每个停靠点一个元素 -->
 <div id="doc" tabindex="-1" spellcheck="false"></div>
+<!-- 空状态：未命名且没有内容时浮在正文之上，给出「新建 / 打开 / 最近打开」三个入口。
+     一有内容（或变成有路径的文件）就撤掉，不参与任何编辑逻辑。 -->
+<div id="empty" hidden>
+  <div class="empty-card">
+    <h1>mdview</h1>
+    <p>Rust 内核的 Markdown 编辑器。写点什么，或者打开已有的稿子。</p>
+    <div class="empty-actions">
+      <button type="button" class="empty-primary" data-empty="new">新建文档<kbd>Ctrl+N</kbd></button>
+      <button type="button" data-empty="open">打开文件…<kbd>Ctrl+O</kbd></button>
+      <button type="button" data-empty="folder">打开文件夹…<kbd>Ctrl+Shift+O</kbd></button>
+    </div>
+    <div id="empty-recent" hidden>
+      <h2>最近打开</h2>
+      <div id="empty-recent-list"></div>
+    </div>
+    <p class="empty-help">把文件拖进窗口也行。全部快捷键见 <kbd>Ctrl+/</kbd>。</p>
+  </div>
+</div>
 <!-- 源码视图：直接显示与编辑 Markdown 源文本真值（不是渲染后的 HTML）。
      平时隐藏，只有 window.__mdviewMode === 'source' 时由 data-view 切换显示。 -->
 <textarea id="source" spellcheck="false" autocomplete="off" autocapitalize="off"

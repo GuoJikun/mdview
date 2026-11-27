@@ -87,3 +87,32 @@
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* ---- 快捷键一览 -----------------------------------------------------
+   条目由 src/shortcuts.ts 从菜单生成，这一层只管排版：两列排布，
+   窄窗口自动落回一列；键位用 kbd，与正文中的代码看起来要有区别。 */
+.shortcuts-dialog { width: 720px; }
+.shortcuts-body {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px;
+  /* 分组多的时候弹窗高不过视口，交给 .dialog-body 自己的滚动 */
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .shortcuts-body { grid-template-columns: 1fr; }
+}
+.shortcut-group h3 {
+  margin: 10px 0 6px; font-size: 12px; font-weight: 600;
+  color: var(--muted); letter-spacing: .02em;
+}
+.shortcut-group dl {
+  display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; margin: 0;
+}
+.shortcut-group dt, .shortcut-group dd { margin: 0; }
+.shortcut-group dd { color: var(--text2); }
+.shortcuts-dialog kbd {
+  display: inline-block; white-space: nowrap;
+  padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--control);
+  color: var(--text); font: 11px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.dialog-actions .hint { margin-right: auto; align-self: center; color: var(--faint); }

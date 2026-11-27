@@ -56,6 +56,9 @@ const preeditEl = document.getElementById('preedit') as HTMLElement;
 const imeEl = document.getElementById('ime') as HTMLTextAreaElement;
 const barEl = document.getElementById('bar') as HTMLElement;
 const outlineEl = document.getElementById('outline') as HTMLElement;
+const emptyEl = document.getElementById('empty') as HTMLElement | null;
+const emptyRecentEl = document.getElementById('empty-recent') as HTMLElement | null;
+const emptyRecentList = document.getElementById('empty-recent-list') as HTMLElement | null;
 const findEl = document.getElementById('findbar') as HTMLElement;
 const findInput = document.getElementById('find-input') as HTMLInputElement;
 const findCount = document.getElementById('find-count') as HTMLElement;
@@ -1124,6 +1127,44 @@ function renderStatus() {
     window.__mdviewSetTitle(meta.path, meta.dirty);
   }
   pushShellState();
+  refreshEmptyState();
+}
+
+/**
+ * 空状态：未命名、没有未保存改动、正文为空时浮出「新建 / 打开 / 最近打开」。
+ *
+ * 判据用 `sourceText.trim()` 而不是块数：新建文档也有一个空段落，块数永远是 1。
+ * 源码视图不显示（textarea 就摆在左边，盖上去只会挡住它）。
+ */
+function refreshEmptyState(): void {
+  if (!emptyEl) return;
+  const empty = !meta.path && !meta.dirty && sourceText.trim() === '';
+  const show = empty && (window.__mdviewMode ?? 'wysiwyg') !== 'source';
+  if (emptyEl.hidden === !show) return;   // 状态没变就别反复写 DOM
+  emptyEl.hidden = !show;
+  if (show) refreshEmptyRecent();
+}
+
+/** 空状态里的「最近打开」：最多 5 条，没有就不占位。 */
+function refreshEmptyRecent() {
+  if (!emptyRecentEl || !emptyRecentList) return;
+  const items = recentPaths.slice(0, 5);
+  emptyRecentEl.hidden = items.length === 0;
+  emptyRecentList.replaceChildren(...items.map((path, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.empty = 'recent';
+    button.dataset.index = String(index);
+    button.title = path;
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = baseName(path);
+    const dir = document.createElement('span');
+    dir.className = 'dir';
+    dir.textContent = path.slice(0, Math.max(0, path.length - baseName(path).length - 1));
+    button.append(name, dir);
+    return button;
+  }));
 }
 
 /**
@@ -1646,6 +1687,16 @@ async function boot() {
   // 上次的工作区顺手恢复，目录不在了它会自己忘掉。
   mdviewFiles.initFileTree({ open: openPath, toast });
   void mdviewFiles.restoreWorkspace();
+  // 首次使用的一次性提示：写完标记就不再打扰。空状态卡片本身也是引导，
+  // 这条只是把「还有快捷键这回事」说一句。存储不可用就当没有这回事。
+  try {
+    if (!window.localStorage.getItem('mdview.seen-welcome')) {
+      window.localStorage.setItem('mdview.seen-welcome', '1');
+      window.setTimeout(() => toast('首次使用：Ctrl+/ 查看全部快捷键'), 800);
+    }
+  } catch {
+    /* localStorage 被禁用：提示不是功能，静默跳过 */
+  }
   // 外部修改：后端 Watcher 发现磁盘上的文件被别的进程改了会 emit 这个事件。
   // 只提示，不自动重载——自动重载会冲掉用户未保存的编辑。
   if (listen) {
@@ -1819,6 +1870,12 @@ window.addEventListener('keydown', (event) => {
   if (accel && event.key === ',') {
     event.preventDefault();
     window.__mdviewBridge?.dispatch('settings');
+    return;
+  }
+  // 快捷键一览：F1 与 Ctrl+/ 都认（F1 是「帮助」的通用约定，Ctrl+/ 是 VSCode 的习惯）。
+  if (event.key === 'F1' || (accel && event.key === '/')) {
+    event.preventDefault();
+    window.__mdviewBridge?.dispatch('shortcuts');
     return;
   }
   // 重新加载：三个视图都能用，但输入框（查找栏 / 链接面板）里不抢键。
@@ -2324,6 +2381,20 @@ window.addEventListener('resize', () => {
 });
 
 // 大纲点击（事件委托：侧栏会被整块重建）
+// 空状态卡片：三个入口都走与菜单、快捷键相同的动作名，逻辑不另写一套。
+emptyEl?.addEventListener('click', (event) => {
+  const target = (event.target as HTMLElement | null)
+    ?.closest<HTMLElement>('[data-empty]');
+  if (!target) return;
+  switch (target.dataset.empty) {
+    case 'new': runAction('new-file'); break;
+    case 'open': runAction('open-file'); break;
+    case 'folder': runAction('open-folder'); break;
+    case 'recent': openRecent(Number(target.dataset.index ?? '-1')); break;
+    default: break;
+  }
+});
+
 outlineEl.addEventListener('click', (event) => {
   const link = (event.target as Element | null)?.closest<HTMLElement>('a[data-idx]');
   if (!link) return;
@@ -2995,9 +3066,18 @@ window.__mdviewSelfTest = async function () {
         !!fresh && fresh.path === null && !fresh.dirty && fresh.stops >= 1,
         fresh ? 'path=' + fresh.path + ' stops=' + fresh.stops : 'null');
       if (fresh) adoptSnapshot(fresh);
+      await nextTick();
+      check('空文档显示空状态', !emptyEl?.hidden,
+        emptyEl?.hidden ? 'hidden' : 'visible');
+      check('空状态有三个入口',
+        ['new', 'open', 'folder'].every((name) =>
+          !!document.querySelector(`#empty [data-empty="${name}"]`)),
+        String(document.querySelectorAll('#empty [data-empty]').length));
       // 先敲一个字让它变脏，再看保存是否如实要求路径（而不是回「已保存」）
       send({ kind: 'insertText', text: '草' });
       await queue;
+      check('有内容后空状态撤掉', !!emptyEl?.hidden,
+        emptyEl?.hidden ? 'hidden' : 'visible');
       const counted = await invoke<Snapshot>('snapshot');
       check('字数统计跟随输入', counted.words === 1, String(counted.words));
       check('状态栏显示字数', (barEl.textContent || '').includes('字数'),
@@ -3214,6 +3294,37 @@ window.__mdviewSelfTest = async function () {
       check('Esc 关闭偏好设置', !document.querySelector('.settings-dialog'));
     } catch (err) {
       check('偏好设置链路可用', false, String(err));
+    }
+
+    // ---- 帮助体系 ----
+    try {
+      // F1 与 Ctrl+/ 都该打开它：走桥 → 外壳弹窗，与菜单点击同一条路。
+      // keydown 挂在 window 上（见 1825 行），从焦点元素冒泡上去才走真实链路。
+      imeEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'F1', bubbles: true }));
+      await nextTick();
+      const panel = document.querySelector<HTMLElement>('.shortcuts-dialog');
+      check('F1 打开快捷键面板', !!panel);
+      const keys = Array.from(document.querySelectorAll('.shortcuts-dialog kbd'))
+        .map((el) => el.textContent || '');
+      check('快捷键面板列出键位', keys.length >= 15, String(keys.length));
+      check('快捷键面板含行内格式', keys.includes('Ctrl+B') && keys.includes('Ctrl+Shift+X'),
+        keys.slice(0, 8).join(' '));
+      check('快捷键面板按菜单分组',
+        document.querySelectorAll('.shortcuts-dialog .shortcut-group').length >= 4,
+        String(document.querySelectorAll('.shortcuts-dialog .shortcut-group').length));
+      panel?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await nextTick();
+      check('Esc 关闭快捷键面板', !document.querySelector('.shortcuts-dialog'));
+      // 菜单里也要有一条：只给快捷键、不给菜单入口，鼠标用户就找不到了
+      const helpMenu = document.querySelector<HTMLElement>('#tb-menus [data-menu="help"]');
+      helpMenu?.click();
+      await nextTick();
+      const entry = document.querySelector('#tb-menu-popup button[data-action="shortcuts"]');
+      check('帮助菜单有快捷键项', !!entry, entry ? entry.textContent : '无');
+      helpMenu?.click();   // 收起
+      await nextTick();
+    } catch (err) {
+      check('帮助体系可用', false, String(err));
     }
   } catch (err) {
     check('自检未抛异常', false, String(err));

@@ -148,6 +148,8 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
     { action: 'doc-end', label: '文档结尾', acc: 'Ctrl+End' },
   ],
   help: [
+    { action: 'shortcuts', label: '键盘快捷键', acc: 'Ctrl+/' },
+    { sep: true },
     { action: 'update', label: '检查更新…' },
     {
       action: 'auto-update', label: '启动时检查更新', mark: 'check',

@@ -7,6 +7,7 @@
   <UpdateDialog v-if="updateOpen" />
   <AboutDialog v-if="aboutOpen" />
   <SettingsDialog v-if="settingsOpen" />
+  <ShortcutsDialog v-if="shortcutsOpen" />
 </template>
 
 <script setup lang="ts">
@@ -18,11 +19,14 @@ import Toast from './components/Toast.vue';
 import UpdateDialog from './components/UpdateDialog.vue';
 import AboutDialog from './components/AboutDialog.vue';
 import SettingsDialog from './components/SettingsDialog.vue';
+import ShortcutsDialog from './components/ShortcutsDialog.vue';
 import { about } from './about';
 import { settings } from './settings';
+import { help } from './help';
 import { update } from './update';
 
 const updateOpen = computed(() => update.open);
 const aboutOpen = computed(() => about.open);
 const settingsOpen = computed(() => settings.open);
+const shortcutsOpen = computed(() => help.shortcuts);
 </script>

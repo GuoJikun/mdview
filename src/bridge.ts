@@ -7,6 +7,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { nextTick, reactive, readonly } from 'vue';
 import { openAbout } from './about';
 import { openSettings } from './settings';
+import { openShortcuts } from './help';
 import { openUpdateDialog, toggleAutoUpdate } from './update';
 import type { SkinName } from './skin';
 
@@ -138,6 +139,10 @@ export function dispatch(action: string): void {
   }
   if (action === 'settings') {
     openSettings();
+    return;
+  }
+  if (action === 'shortcuts') {
+    openShortcuts();
     return;
   }
   if (action === 'update') {
