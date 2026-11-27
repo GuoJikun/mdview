@@ -26,6 +26,8 @@ mdview-app = { path = "crates/mdview-app" }
 ropey = "1"
 pulldown-cmark = "0.13"
 thiserror = "2"
+# 非 UTF-8 文本的读入 / 回写（GBK 系旧文件）。纯 Rust，无 C 依赖。
+encoding_rs = "0.8"
 log = "0.4"
 time = { version = "0.3", features = ["formatting", "local-offset"] }
 notify = "8"

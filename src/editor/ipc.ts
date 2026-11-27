@@ -141,6 +141,12 @@ export interface Snapshot {
   outline: OutlineDto[];
   /** Markdown 源文本真值。源码视图显示这一份，不是渲染后的 HTML。 */
   source: string;
+  /**
+   * 这份文档在磁盘上的编码（`utf-8` / `utf-8-bom` / `gb18030`）。
+   * 内核内存态永远是 UTF-8，这个字段只用来告诉用户「不是 UTF-8，保存会按原
+   * 编码写回」；未命名文档恒为 `utf-8`。
+   */
+  encoding?: string;
 }
 
 /** 「停靠点 → 像素」的测量结果。`el` 供 preedit 复制字体、判定表格用。 */

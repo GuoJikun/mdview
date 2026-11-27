@@ -715,6 +715,11 @@ html[data-view="reading"] #doc .a { cursor: pointer; }
 }
 #bar b { color: var(--fg); font-weight: 600; }
 #bar .hint { margin-left: auto; color: var(--faint); }
+/* 非 UTF-8 文件的编码提示：给一点强调色，但不抢「块 / 字数」的位置 */
+#bar .enc {
+  color: var(--outline-active-fg); background: var(--outline-active-bg);
+  padding: 0 6px; border-radius: 4px; font-weight: 600;
+}
 #bar .table-tools { display: inline-flex; gap: 4px; }
 #bar .table-tools button {
   font: inherit; color: var(--muted); background: transparent;

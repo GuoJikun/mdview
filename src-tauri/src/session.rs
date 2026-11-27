@@ -270,6 +270,10 @@ pub struct Snapshot {
     pub outline: Vec<OutlineDto>,
     /// Markdown 源文本真值。源码视图直接显示与编辑这一份，不是渲染后的 HTML。
     pub source: String,
+    /// 这份文档在磁盘上的编码（`utf-8` / `utf-8-bom` / `gb18030`）。内核内存态
+    /// 永远是 UTF-8，这个字段只用于告诉用户「打开的不是 UTF-8，保存会按原编码
+    /// 写回」；未命名文档恒为 `utf-8`。
+    pub encoding: String,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -330,18 +334,25 @@ pub struct Session {
 
 impl Session {
     pub fn open(path: Option<PathBuf>) -> Result<Self, String> {
-        let files = StdFileStore;
+        let files = StdFileStore::new();
         let content = match &path {
             Some(path) => files
                 .load(path)
                 .map_err(|err| format!("{}: {err}", path.display()))?,
             None => String::new(),
         };
-        Ok(Self::from_text(&content, path))
+        // 复用刚读过盘的那个 store：它记着这份文件的编码，换成新的就丢了。
+        Ok(Self::with_store(&content, path, files))
     }
 
+    /// 直接给一份文本构造会话（不读盘）。只在测试里用：生产路径一律走
+    /// `open`（需要那次读盘来记住编码）。
+    #[cfg(test)]
     pub fn from_text(content: &str, path: Option<PathBuf>) -> Self {
-        let files = StdFileStore;
+        Self::with_store(content, path, StdFileStore::new())
+    }
+
+    fn with_store(content: &str, path: Option<PathBuf>, files: StdFileStore) -> Self {
         Self {
             state: Arc::new(Mutex::new(AppState::open(content, path, &files))),
             files,
@@ -433,6 +444,12 @@ impl Session {
             selection: selection_of(&app),
             outline: outline_of(&app),
             source: app.document.text(),
+            encoding: app
+                .path
+                .as_deref()
+                .and_then(|path| self.files.encoding_of(path))
+                .map_or("utf-8", |encoding| encoding.as_str())
+                .to_string(),
         }
     }
 
@@ -525,6 +542,11 @@ impl Session {
     /// 副本不是磁盘内容，所以恢复后**必须是脏的**：用户不保存就关窗时，
     /// 守卫还得再问一次，不能让人以为已经落盘。
     pub fn restore(&self, content: &str, path: Option<PathBuf>) -> Snapshot {
+        // 副本里只有 UTF-8 文本，编码得看原文件：崩溃前用户存过盘，磁盘上那份
+        // 还是 GBK，恢复后保存要按它的编码写回去，不能顺手改成 UTF-8。
+        if let Some(path) = path.as_deref() {
+            self.files.remember_from_disk(path);
+        }
         self.replace_document(content, path);
         if let Ok(mut app) = self.state.lock() {
             app.dirty = true;
@@ -1058,6 +1080,74 @@ mod tests {
         assert_eq!(
             session.snapshot().path.as_deref(),
             Some(target_str.as_str())
+        );
+
+        let _ = std::fs::remove_file(&target);
+    }
+
+    /// M6-8 的过关线：GBK 文件打开不乱码、保存后编码不变。
+    ///
+    /// 「# 标」的 GBK 字节是 `23 20 B1 EA`（`标` = U+6807 = GBK `B1EA`）。
+    /// 断言落在**磁盘字节**上而不是字符串上：字符串变了容易看出来，字节变了
+    /// 才是真问题（把用户的 GBK 文件悄悄改成 UTF-8，diff 与版本历史全乱）。
+    #[test]
+    fn gbk_file_opens_correctly_and_saves_back_as_gbk() {
+        let dir = std::env::temp_dir().join("mdview-gbk");
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("旧稿.md");
+        std::fs::write(&target, [0x23u8, 0x20, 0xB1, 0xEA]).unwrap();
+
+        let session = Session::open(Some(target.clone())).expect("打开 GBK 文件");
+        assert_eq!(session.text(), "# 标", "GBK 要按 GB18030 解出来");
+        assert_eq!(
+            session.snapshot().encoding,
+            "gb18030",
+            "快照要告诉前端这不是 UTF-8"
+        );
+
+        session.dispatch(Wire::InsertText { text: "题".into() });
+        assert_eq!(session.text(), "# 题标", "光标在文首，新字插在前面");
+        assert!(session.dispatch(Wire::Save).saved, "保存应当成功");
+
+        let bytes = std::fs::read(&target).unwrap();
+        assert_eq!(
+            bytes,
+            [0x23u8, 0x20, 0xCC, 0xE2, 0xB1, 0xEA],
+            "保存后仍是 GBK 字节（题 = CCE2、标 = B1EA），不能变成 UTF-8"
+        );
+        assert!(
+            std::str::from_utf8(&bytes).is_err(),
+            "这串字节恰好不是合法 UTF-8，正好证明没有被改写"
+        );
+
+        let _ = std::fs::remove_file(&target);
+    }
+
+    /// 带 BOM 的 UTF-8：BOM 不留在正文里，保存时不丢。
+    #[test]
+    fn utf8_bom_is_stripped_on_load_and_written_back() {
+        let dir = std::env::temp_dir().join("mdview-bom");
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("bom.md");
+        std::fs::write(&target, [0xEFu8, 0xBB, 0xBF, 0x23, 0x20, 0x41]).unwrap(); // BOM + "# A"
+
+        let session = Session::open(Some(target.clone())).expect("打开 BOM 文件");
+        assert_eq!(session.text(), "# A", "BOM 不能进内核");
+        assert_eq!(session.snapshot().encoding, "utf-8-bom");
+        assert!(
+            session
+                .snapshot()
+                .outline
+                .iter()
+                .any(|item| item.title == "A"),
+            "BOM 留在正文里会让首个标题认不出来"
+        );
+
+        assert!(session.dispatch(Wire::Save).saved);
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            [0xEFu8, 0xBB, 0xBF, 0x23, 0x20, 0x41],
+            "回写要原样带 BOM"
         );
 
         let _ = std::fs::remove_file(&target);

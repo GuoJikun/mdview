@@ -1,4 +1,7 @@
-use mdview_support::AppError;
+use mdview_support::{
+    AppError, TextEncoding,
+    text::{self, decode as decode_text, encode as encode_text},
+};
 
 use std::{
     cell::RefCell,
@@ -20,26 +23,73 @@ pub trait FileStore {
     fn fingerprint(&self, path: &Path) -> Result<Fingerprint, AppError>;
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct StdFileStore;
+/// 真实磁盘上的文件存储：读入时判定编码，保存时按同一编码回写。
+///
+/// **为什么要记住编码**：内核内存态永远是 UTF-8 的 `String`，但用户的文件可能
+/// 是 GBK。若保存时一律写 UTF-8，用户的文件会被悄悄改编码——diff、版本历史、
+/// 别的编辑器里看全是改动。所以编码这份记忆挂在存储上：按**路径**记，因为
+/// 编码属于文件，而不是属于某次编辑。
+///
+/// 这份表最多几条，用 `Arc<Mutex<..>>` 只是为了 `Clone` 能在多个 `Session`
+/// 之间共享同一份记忆（同一份文件在多个窗口里打开时判定结果一致）。
+#[derive(Clone, Default)]
+pub struct StdFileStore {
+    encodings: Arc<Mutex<HashMap<PathBuf, TextEncoding>>>,
+}
+
+impl StdFileStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 某个路径上次读入时的编码。没读过（新建 / 另存为的新路径）返回 `None`。
+    pub fn encoding_of(&self, path: &Path) -> Option<TextEncoding> {
+        self.encodings
+            .lock()
+            .ok()
+            .and_then(|map| map.get(path).copied())
+    }
+
+    /// 记下编码（`restore` 这类「内容来自内存」的路径也要补记，否则恢复出来的
+    /// GBK 文档会在下一次保存时变成 UTF-8）。
+    pub fn remember_encoding(&self, path: &Path, encoding: TextEncoding) {
+        if let Ok(mut map) = self.encodings.lock() {
+            map.insert(path.to_path_buf(), encoding);
+        }
+    }
+
+    /// 从磁盘再判定一次编码并记下（已经记过就不重读）。
+    ///
+    /// 给崩溃恢复用：副本里是 UTF-8 文本，而原文件可能是 GBK。读一次原文件的
+    /// 字节、只做编码判定（不拿它的内容），代价是一份文件大小的顺序读。
+    pub fn remember_from_disk(&self, path: &Path) {
+        if self.encoding_of(path).is_some() {
+            return;
+        }
+        if let Ok(bytes) = fs::read(path) {
+            self.remember_encoding(path, text::detect(&bytes));
+        }
+    }
+}
 
 impl FileStore for StdFileStore {
     fn load(&self, path: &Path) -> Result<String, AppError> {
-        let text = fs::read_to_string(path)?;
-        // UTF-8 BOM 解码后是正文首字符 U+FEFF：首个 `# ` 不再被识别成标题、
-        // 字数多算一个、保存时还会被当作内容写回。读取时一律剥掉。
-        Ok(match text.strip_prefix('\u{feff}') {
-            Some(rest) => rest.to_owned(),
-            None => text,
-        })
+        let bytes = fs::read(path)?;
+        // 先严格 UTF-8、读不成再退 GB18030；BOM 在这里一并剥掉——留着它会让
+        // 首个 `# ` 不再被识别成标题、字数多算一个、保存时被当作内容写回。
+        let (text, encoding) = decode_text(&bytes);
+        self.remember_encoding(path, encoding);
+        Ok(text)
     }
 
     fn save(&self, path: &Path, content: &str) -> Result<(), AppError> {
+        // 按读入时的编码回写；没读过的新文件就是 UTF-8。
+        let encoding = self.encoding_of(path).unwrap_or(TextEncoding::Utf8);
         // 原子写：同目录临时文件 → 落盘 → 原子替换。
         // 临时文件与目标同目录，保证 rename/replace 在同一卷内，是原子操作。
         // 任一步失败都清理临时文件，且不掩盖原始错误。
         let tmp = path.with_extension("mdview.tmp");
-        fs::write(&tmp, content)?;
+        fs::write(&tmp, encode_text(content, encoding))?;
         let replaced = atomic_replace(&tmp, path);
         if replaced.is_err() {
             let _ = fs::remove_file(&tmp);
@@ -312,6 +362,59 @@ mod tests {
     }
 
     #[test]
+    fn gbk_file_is_written_back_as_gbk() {
+        // 「标」的 GBK 字节是 B1 EA。读进来是 UTF-8 字符，存回去必须还是这两个字节。
+        let dir = TempDir::new("gbk");
+        let path = dir.file("旧稿.md");
+        fs::write(&path, [0x23u8, 0x20, 0xB1, 0xEA]).unwrap(); // "# 标"
+
+        let store = StdFileStore::new();
+        assert_eq!(store.load(&path).unwrap(), "# 标");
+        assert_eq!(store.encoding_of(&path), Some(TextEncoding::Gb18030));
+
+        store.save(&path, "# 标题").unwrap();
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            encode_text("# 标题", TextEncoding::Gb18030),
+            "保存要按读入时的编码回写"
+        );
+        assert!(
+            std::str::from_utf8(&fs::read(&path).unwrap()).is_err(),
+            "回写后仍是 GBK 字节，不该被悄悄改成 UTF-8"
+        );
+    }
+
+    #[test]
+    fn a_file_that_was_never_read_is_written_as_utf8() {
+        // 另存为的新路径没有读入记录，按 UTF-8 写是唯一合理的默认。
+        let dir = TempDir::new("freshenc");
+        let path = dir.file("新稿.md");
+        let store = StdFileStore::new();
+        assert_eq!(store.encoding_of(&path), None);
+
+        store.save(&path, "中文").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), "中文".as_bytes());
+    }
+
+    #[test]
+    fn remember_from_disk_picks_up_the_file_encoding() {
+        // 崩溃恢复走这条：内容来自内存副本，编码得现读一次原文件才知道。
+        let dir = TempDir::new("recoverenc");
+        let path = dir.file("旧稿.md");
+        fs::write(&path, [0xB1u8, 0xEA]).unwrap(); // "标"
+
+        let store = StdFileStore::new();
+        assert_eq!(store.encoding_of(&path), None);
+        store.remember_from_disk(&path);
+        assert_eq!(store.encoding_of(&path), Some(TextEncoding::Gb18030));
+
+        // 已经记过就不重读：文件删了也不会把已有记忆抹掉
+        fs::remove_file(&path).unwrap();
+        store.remember_from_disk(&path);
+        assert_eq!(store.encoding_of(&path), Some(TextEncoding::Gb18030));
+    }
+
+    #[test]
     fn save_overwrites_an_existing_file() {
         // 这是旧实现的核心缺陷：remove + rename 之间有窗口期，且 Windows
         // 上 std::fs::rename 遇到已存在目标会直接失败。新实现必须能稳定覆盖。
@@ -319,7 +422,7 @@ mod tests {
         let path = dir.file("note.md");
         fs::write(&path, "旧内容").unwrap();
 
-        StdFileStore.save(&path, "新内容").unwrap();
+        StdFileStore::new().save(&path, "新内容").unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "新内容");
     }
@@ -329,7 +432,7 @@ mod tests {
         let dir = TempDir::new("create");
         let path = dir.file("fresh.md");
 
-        StdFileStore.save(&path, "首次写入").unwrap();
+        StdFileStore::new().save(&path, "首次写入").unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "首次写入");
     }
@@ -338,8 +441,8 @@ mod tests {
     fn save_leaves_no_temp_file_behind() {
         let dir = TempDir::new("notmp");
         let path = dir.file("clean.md");
-        StdFileStore.save(&path, "甲").unwrap();
-        StdFileStore.save(&path, "乙").unwrap();
+        StdFileStore::new().save(&path, "甲").unwrap();
+        StdFileStore::new().save(&path, "乙").unwrap();
 
         let tmp = path.with_extension("mdview.tmp");
         assert!(!tmp.exists(), "替换成功后临时文件必须被消费掉");
@@ -350,11 +453,11 @@ mod tests {
     fn fingerprint_changes_when_content_changes() {
         let dir = TempDir::new("fp");
         let path = dir.file("fp.md");
-        StdFileStore.save(&path, "甲").unwrap();
-        let before = StdFileStore.fingerprint(&path).unwrap();
+        StdFileStore::new().save(&path, "甲").unwrap();
+        let before = StdFileStore::new().fingerprint(&path).unwrap();
 
-        StdFileStore.save(&path, "乙").unwrap();
-        let after = StdFileStore.fingerprint(&path).unwrap();
+        StdFileStore::new().save(&path, "乙").unwrap();
+        let after = StdFileStore::new().fingerprint(&path).unwrap();
 
         assert_ne!(before, after, "内容变了指纹必须变，外部冲突检测才有效");
     }
@@ -365,14 +468,14 @@ mod tests {
         let dir = TempDir::new("bom");
         let path = dir.file("bom.md");
         fs::write(&path, "\u{feff}# 标题\n").unwrap();
-        assert_eq!(StdFileStore.load(&path).unwrap(), "# 标题\n");
+        assert_eq!(StdFileStore::new().load(&path).unwrap(), "# 标题\n");
     }
 
     #[test]
     fn fingerprint_reports_a_missing_file_as_not_found() {
         // 上层靠 NotFound 区分「文件被删，可以写回重建」和「读不了，按冲突处理」。
         let dir = TempDir::new("fpmiss");
-        let err = StdFileStore
+        let err = StdFileStore::new()
             .fingerprint(&dir.file("gone.md"))
             .expect_err("文件不存在应当报错");
         assert!(err.is_not_found(), "实际错误：{err}");

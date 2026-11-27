@@ -38,6 +38,8 @@ export interface BridgeState {
   column: number | null;
   /** 内核 revision，状态栏右侧的 r 值。 */
   revision: number;
+  /** 磁盘编码（`utf-8` / `utf-8-bom` / `gb18030`）。非 UTF-8 时状态栏给个提示。 */
+  encoding: string;
   /** 光标是否落在表格单元格里，决定状态栏是否显示行列工具条。 */
   inTable: boolean;
   /** 主题偏好档位：跟随系统 / 亮色 / 暗色。 */
@@ -91,6 +93,7 @@ const store = reactive<BridgeState>({
   caretBlock: null,
   column: null,
   revision: 0,
+  encoding: 'utf-8',
   inTable: false,
   themeMode: 'system',
   theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',

@@ -6,6 +6,8 @@
 
 pub mod error;
 pub mod logging;
+pub mod text;
 
 pub use error::AppError;
 pub use logging::{LogConfig, init as init_logging, init_default as init_logging_default};
+pub use text::TextEncoding;

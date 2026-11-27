@@ -74,6 +74,8 @@ interface Meta {
   stops: number;
   /** 正文字数，由内核随快照 / 回包下发。 */
   words: number;
+  /** 磁盘编码（`utf-8` / `utf-8-bom` / `gb18030`）。只用于状态栏提示。 */
+  encoding: string;
 }
 
 let byBefore: Map<number, HTMLElement> = new Map(); // 停靠点 → 从它开始的元素
@@ -82,7 +84,7 @@ let marks: HTMLElement[] = [];                      // 全部带 data-b 的元�
 let maxStop = -1;                                   // 最大停靠点序号，供上下移动取上界
 let caret: CaretDto | null = null;                  // 最近一次内核回报的光标
 let pendingStop: number | null = null;              // 已发出、尚未回包的垂直移动落点
-let meta: Meta = { revision: 0, dirty: false, path: null, stops: 0, words: 0 };
+let meta: Meta = { revision: 0, dirty: false, path: null, stops: 0, words: 0, encoding: 'utf-8' };
 /** 下一次保存是自动保存：成功时不弹「已保存」（见 applyReply）。 */
 let quietSave = false;
 // 当前视图模式。它不只画菜单圆点，还真正驱动 <html data-view> 切 DOM：
@@ -1140,6 +1142,7 @@ function pushShellState() {
     caretBlock: caret ? caret.block : null,
     column: caret && caret.visual !== null ? caret.visual : null,
     revision: meta.revision,
+    encoding: meta.encoding,
     inTable: inTable(),
     mode: window.__mdviewMode ?? 'wysiwyg',
     themeMode: mdviewTheme.mode() as ThemeMode,
@@ -1509,8 +1512,11 @@ function applyReply(reply: Reply) {
   if (typeof reply.words === 'number') meta.words = reply.words;
   // 另存为成功后内核会把文档改绑到新路径，标题栏要跟着换名字
   if (reply.path) {
+    const moved = reply.path !== meta.path;
     meta.path = reply.path;
     mdviewFiles.markActive(meta.path);   // 侧栏高亮跟着换（可能已开出工作区）
+    // 另存为到新路径时，那个文件此前没被读过，保存写的是 UTF-8
+    if (moved) meta.encoding = 'utf-8';
   }
   // 内核回传的源文本真值。源码视图里 textarea 是用户正在敲的那一侧，
   // 它的值可能与这条回包同revision，不要回写覆盖，否则光标会跳。
@@ -1573,6 +1579,7 @@ function applySnapshot(snap: Snapshot) {
     path: snap.path,
     stops: snap.stops,
     words: typeof snap.words === 'number' ? snap.words : 0,
+    encoding: snap.encoding || 'utf-8',
   };
   // 换文档/新建/启动：源文本真值整份替换，textarea 无条件跟上
   sourceText = snap.source ?? '';
@@ -2953,6 +2960,30 @@ window.__mdviewSelfTest = async function () {
         String(document.documentElement.classList.contains('has-workspace')));
     } catch (err) {
       check('文件侧栏可用', false, String(err));
+    }
+
+    // ---- 非 UTF-8 编码 ----
+    // 样张 gbk.md 是真正的 GBK 字节（由脚本按 gbk 码表写出），只按 UTF-8 读
+    // 会整篇变成替换字符。断言文本、编码标记与状态栏提示三处。
+    try {
+      const gbk = await invoke<Snapshot | null>('open_file', { path: 'tests/fixtures/gbk.md' });
+      check('GBK 文件按 GB18030 解码',
+        !!gbk && (gbk.source || '').startsWith('# 中文标题'),
+        gbk ? JSON.stringify((gbk.source || '').slice(0, 12)) : 'null');
+      check('快照报告 GB18030 编码', gbk?.encoding === 'gb18030', String(gbk?.encoding));
+      if (gbk) adoptSnapshot(gbk);
+      await nextTick();   // 状态栏由 Vue 渲染，DOM 在下一个微任务才更新
+      check('状态栏显示编码提示', (barEl.textContent || '').includes('GB18030'),
+        (barEl.textContent || '').slice(0, 30));
+      // 收尾：换回 UTF-8 样张，后面的断言不受影响（也顺带验证编码提示会消失）
+      const back = await invoke<Snapshot | null>('open_file', { path: originalPath });
+      if (back) adoptSnapshot(back);
+      await nextTick();
+      check('换回 UTF-8 文件后不显示编码提示',
+        back?.encoding === 'utf-8' && !(barEl.textContent || '').includes('GB18030'),
+        String(back?.encoding));
+    } catch (err) {
+      check('GBK 文件解码链路可用', false, String(err));
     }
 
     // 新建 + 未命名保存：验证「没有路径时必须问，而不是假装写过」这条链路。

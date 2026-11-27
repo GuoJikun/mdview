@@ -8,6 +8,11 @@
     <span>停靠点 <b>{{ dash(state.stop) }}</b></span>
     <span>列 <b>{{ dash(state.column) }}</b></span>
     <span>r<b>{{ state.revision }}</b></span>
+    <!-- 非 UTF-8 文件给一格提示：保存会按原编码写回，用户不用猜为什么别的
+         编辑器里看着还是旧编码。UTF-8 是常态，不占位置。 -->
+    <span v-if="encodingLabel" class="enc" :title="'文件编码：' + encodingLabel + '（保存时按它写回）'">
+      {{ encodingLabel }}
+    </span>
     <span v-if="state.inTable" class="table-tools">
       <button type="button" data-table="row+" title="在下方插入行">行+</button>
       <button type="button" data-table="row-" title="删除当前行">行−</button>
@@ -28,4 +33,10 @@ const dash = (v: number | null) => (v === null || v === undefined ? '-' : String
 const blockText = computed(() =>
   state.caretBlock === null ? '-' : state.caretBlock + 1 + '/' + state.blocks,
 );
+// 只有「不是 UTF-8」才需要说明；UTF-8 带不带 BOM 都值得标一下。
+const encodingLabel = computed(() => {
+  const value = state.encoding || 'utf-8';
+  if (value === 'utf-8') return '';
+  return value === 'utf-8-bom' ? 'UTF-8 BOM' : 'GB18030';
+});
 </script>

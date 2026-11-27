@@ -412,10 +412,16 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
   注意：`Sessions` 是**窗口级**注册表（`label → Session`），一个窗口只有一份文档。标签页要把键改成 `(label, doc_id)` 并让所有 IPC 命令带文档标识——**架构改动，动手前先出设计**，不要边写边改。
   过关线：一个窗口内多标签独立脏标记与独立外部修改监听；关标签拦截未保存；自检覆盖两个标签互不串状态。
 
-- ⬜ **M6-8 非 UTF-8 编码读入**
-  现状：只按 UTF-8 解码（读入剥 BOM），GBK / GB18030 的旧文件打开是乱码，Windows 上很常见。
-  做法：`encoding_rs`（纯 Rust，放 `mdview-support`，**不进 `mdview-markdown`**）先严格 UTF-8 解码，失败按 GB18030 解码并提示「按 GB18030 打开」；保存按读入时的编码回写。内核内存态始终 UTF-8，字节偏移与停靠点不受影响。
-  过关线：GBK 样张打开 / 编辑 / 保存后编码不变、内容不乱；指纹比对仍按磁盘原始字节算。
+- ✅ **M6-8 非 UTF-8 编码读入**（2026-11-27）：`mdview-support/src/text.rs` 一个 `decode` / `encode` 对，先严格 UTF-8、失败退 GB18030；编码跟着**文件**记，保存按原编码回写。内核内存态仍然只有 UTF-8 `String`，字节偏移与停靠点不受影响。
+  - 判定顺序的道理：有 BOM 就一定是 UTF-8（BOM 是自证），剥掉后解码；否则 `str::from_utf8` **严格**校验通过就是 UTF-8——一段纯 ASCII 在 GBK 里是同一个意思，先判 UTF-8 不会误伤；校验失败才退 GB18030（GBK / GB2312 都是它的子集，一套码表通吃）。
+  - `TextEncoding` 三态而不是两态：`Utf8` / `Utf8Bom` / `Gb18030`。「有没有 BOM」在回写时是两个不同结果，合并成「UTF-8」就一定会丢 BOM。
+  - **编码记在存储上、按路径存**（`StdFileStore::encodings`），不是记在 `AppState` 里：内核不认识编码，它只认识文本；而同一份文件在多个窗口里打开时，编码判定必须一致。这样 `state.rs` 的 `save_into` 一行都不用改——`files.save()` 自己知道该用哪种编码。
+  - 崩溃恢复是唯一的坑：副本里只有 UTF-8 文本，恢复时这个路径可能还没被读过，于是保存会写成 UTF-8。`remember_from_disk` 在 `restore` 里补一次编码判定（只读字节、不取内容），把「用户存过的 GBK 文件」的编码找回来。
+  - GB18030 编码不了的字符会被写成数字字符引用 `&#..;`——这是 `encoding_rs` 的既定行为，宁可显示成引用，也不丢字或让整次保存失败。
+  - `StdFileStore` 从 unit struct 变成带 `Arc<Mutex<HashMap<..>>>` 的结构，因此丢了 `Copy`；`Session::open` 改成 `with_store`，把「刚读过盘的那个 store」交给会话，否则读出来的编码记忆会在构造新 store 时丢掉。
+  - 前端：`Snapshot.encoding` → 状态栏一格提示（只有非 UTF-8 才占位，UTF-8 BOM 也标出来）。
+  - 测试：`text.rs` 8 项（UTF-8 / BOM 剥与回写 / GBK 回退 / ASCII / 混合文档往返 / detect / 标签 / 空文本）、`ports.rs` 3 项（GBK 回写字节不变 / 新路径按 UTF-8 / `remember_from_disk`）、`session.rs` 2 项（**过关线**：GBK 打开→编辑→保存后字节仍是 GBK、BOM 剥掉但回写保留）、自检 4 项（解码正确 / 快照报 gb18030 / 状态栏提示 / 换回 UTF-8 后提示消失）。
+  - 指纹仍按磁盘元数据（长度 + mtime）算，与编码无关。
 
 - ⬜ **M6-9 大文档性能**
   现状：全文档一次性建 DOM（每字符一个 span），第 8 节第 5 条记了「5 万字以上会卡」。
@@ -465,10 +471,10 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
 ## 7. 当前进度快照
 
 - 日期：2026-11-26（M6-1 行内格式、M6-2 插入菜单、M6-3 偏好设置、M6-4 崩溃恢复与自动保存；上一轮为多窗口、最近打开、字数统计、拖放打开、粘贴 HTML / 复制富文本、查找替换、Tab 缩进、链接/图片行内编辑）
-- 测试：**Rust 404 项全过**（app 146 / markdown 172 / desktop bin 72 + 前端守门 2 / core 5 / support 7），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **192 项**（19 文件，unit + dom 两个 project：`ime` / `caretline` / `selection` / `dragscroll` / `outline` / `theme` / `update-format` / `find` / `clipboard` / `html-to-md` / `skin` / 侧栏树模型 / CRLF 视图 / 环境能力 / 滚动条 / 图片大纲 / 内核启动），由 `pnpm test` 一次跑完
+- 测试：**Rust 417 项全过**（app 149 / markdown 172 / desktop bin 74 + 前端守门 2 / core 5 / support 15），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **192 项**（19 文件，unit + dom 两个 project：`ime` / `caretline` / `selection` / `dragscroll` / `outline` / `theme` / `update-format` / `find` / `clipboard` / `html-to-md` / `skin` / 侧栏树模型 / CRLF 视图 / 环境能力 / 滚动条 / 图片大纲 / 内核启动），由 `pnpm test` 一次跑完
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 122/122」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为/导出 11 项**、**文件侧栏 9 项**、**字数 2 项**、**查找替换 8 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**、**行内格式 5 项**、**插入 4 项**、**偏好设置 5 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 126/126」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为/导出 11 项**、**文件侧栏 9 项**、**编码 4 项**、**字数 2 项**、**查找替换 8 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**、**行内格式 5 项**、**插入 4 项**、**偏好设置 5 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
   - **必须走 `pnpm tauri dev`**：debug 构建会按 `devUrl` 加载 `http://localhost:1450`，没有 Vite 时窗口标题只有配置里的 `mdview`、页面白屏、日志停在「启动」一行——不是回归。想直接用 `target/debug/mdview-desktop.exe` 跑自检，手工起的 Vite **必须绑 IPv4**（`pnpm dev --host 127.0.0.1`，别再夹一层 `--`：pnpm 会把 `--` 原样传给 vite，host 不生效）：Vite 默认在这台机器上只监听 `[::1]`，WebView2 打不开 `localhost` 时同样白屏，且 CDP 里页面的 `title` 会停在 `about:blank`
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
@@ -557,10 +563,10 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
 4. ~~**M6-4 自动保存与崩溃恢复**~~ **已完成（2026-11-26）**：5 秒崩溃副本 + 可选的静默自动保存，见第 6 节
 5. ~~**M6-5 导出 HTML**~~ **已完成（2026-11-26）**：单文件 HTML + 图片内联；PDF 走浏览器打印，见第 6 节
 6. ~~**M6-6 文件侧栏**~~ **已完成（2026-11-26）**：`Ctrl+Shift+O` 打开工作区、懒展开目录树、点文件走同一条 `open_file`，见第 6 节
-7. **M6-7 多标签页** —— 下一步，**先出设计，别边写边改**
-8. **M6-8 编码 / M6-9 性能 / M6-10 表格**
-9. **M6-15 CI 补齐** —— 越早越好，可与上面并行
-10. P2 逐条收割（M6-12 ~ M6-17）
+7. ~~**M6-8 非 UTF-8 编码读入**~~ **已完成（2026-11-27）**：GB18030 回退 + 按原编码回写，见第 6 节
+8. **M6-15 CI 补齐** —— 下一步，越早越好
+9. **M6-12 帮助体系 / M6-14 可访问性 / M6-9 性能 / M6-10 表格**，再往后 P2 剩余的 M6-13 / M6-16 / M6-17
+10. **M6-7 多标签页** —— **押后单独一轮**：它是唯一需要改架构的条目（`Sessions` 从窗口级改成 `(label, doc_id)` 双键、所有 IPC 命令带文档标识、脏检查与外部修改监听按标签重做），动手前先在第 8 节写设计再实现
 
 已完成的历史项（`selectAll`、拖边自动滚动、Watcher、M2 收尾、表格子工程、粘贴 HTML、段末 Delete）见 M1–M5 与第 8 节，不再在此记账。
 
