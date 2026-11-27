@@ -128,15 +128,15 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
     },
     { sep: true },
     {
-      action: 'mode-wysiwyg', label: '所见即所得', mark: 'dot',
+      action: 'mode-wysiwyg', label: '所见即所得', acc: 'Ctrl+1', mark: 'dot',
       checked: (s) => s.mode === 'wysiwyg',
     },
     {
-      action: 'mode-reading', label: '阅读视图', mark: 'dot',
+      action: 'mode-reading', label: '阅读视图', acc: 'Ctrl+2', mark: 'dot',
       checked: (s) => s.mode === 'reading',
     },
     {
-      action: 'mode-source', label: '源码视图', mark: 'dot',
+      action: 'mode-source', label: '源码视图', acc: 'Ctrl+3', mark: 'dot',
       checked: (s) => s.mode === 'source',
     },
   ],

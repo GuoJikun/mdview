@@ -53,8 +53,16 @@
 <!-- 大纲侧栏：标题清单，点击跳正文，滚动时高亮当前节 -->
 <nav id="outline" aria-label="文档大纲"></nav>
 <div id="outline-scroll" class="tb-vscroll" aria-hidden="true"><div id="outline-scroll-thumb" class="tb-vscroll-thumb"></div></div>
-<!-- 内核持有文本真值，这里只有投影：每块一个 <section>，每个停靠点一个元素 -->
-<div id="doc" tabindex="-1" spellcheck="false"></div>
+<!-- 内核持有文本真值，这里只有投影：每块一个 <section>，每个停靠点一个元素。
+     对屏幕阅读器而言这一层是「一个多行文本框」：不声明 role 的话，读到的会是
+     几百个各自独立的 span，逐字碎片化。真正的无障碍编辑路径是源码视图
+     （原生 textarea），这里的 aria-describedby 就指向那句提示。 -->
+<div id="doc" tabindex="-1" spellcheck="false" role="textbox" aria-multiline="true"
+     aria-label="文档正文" aria-describedby="doc-hint"></div>
+<p id="doc-hint" class="sr-only">
+  文档正文以排版形式显示。用方向键移动光标，Tab 缩进，Ctrl+B / Ctrl+I 等设置行内格式。
+  使用屏幕阅读器时请按 Ctrl+3 切到源码视图，那里是原生的多行文本框，可以逐字朗读与编辑。
+</p>
 <!-- 空状态：未命名且没有内容时浮在正文之上，给出「新建 / 打开 / 最近打开」三个入口。
      一有内容（或变成有路径的文件）就撤掉，不参与任何编辑逻辑。 -->
 <div id="empty" hidden>
@@ -77,9 +85,13 @@
      平时隐藏，只有 window.__mdviewMode === 'source' 时由 data-view 切换显示。 -->
 <textarea id="source" spellcheck="false" autocomplete="off" autocapitalize="off"
           autocorrect="off" aria-label="Markdown 源码"></textarea>
-<div id="caret"></div>
+<div id="caret" aria-hidden="true"></div>
 <!-- preedit 镜像层：组合期间唯一可见的输入反馈，位置贴着 caret -->
-<div id="preedit"></div>
+<div id="preedit" aria-hidden="true"></div>
+<!-- 屏幕阅读器播报区：视觉上不可见，只在 aria-live 里出声。
+     保存结果、查找命中、切视图这类「没有焦点变化」的反馈都往这里写，
+     否则看不见屏幕上 toast 的人什么也得不到。 -->
+<div id="sr-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 <!-- 查找替换浮层：Ctrl+F / Ctrl+H 打开，Esc 关闭。
      布局对齐 VSCode：左侧箭头展开替换行，Aa / ab / .* 三个开关在输入框内，
      右侧是命中计数、上/下一个、更多与关闭。事件接线见 editor.ts 的「查找替换」段。 -->
@@ -92,7 +104,9 @@
       <button type="button" class="find-inline" data-find="word" title="全词匹配（Alt+W）" aria-label="全词匹配">ab</button>
       <button type="button" class="find-inline" data-find="regex" title="使用正则表达式（Alt+R）" aria-label="使用正则表达式">.*</button>
     </div>
-    <span id="find-count" class="find-count"></span>
+    <!-- 命中计数是「没有焦点变化的结果反馈」：给它 live，输入时屏幕阅读器
+         才听得到「3/12」这类变化，而不是只有看得见的人知道。 -->
+    <span id="find-count" class="find-count" role="status" aria-live="polite"></span>
     <button type="button" data-find="prev" title="上一个（Shift+Enter）" aria-label="上一个"><svg class="i" aria-hidden="true"><use href="#i-arrow-up" /></svg></button>
     <button type="button" data-find="next" title="下一个（Enter）" aria-label="下一个"><svg class="i" aria-hidden="true"><use href="#i-arrow-down" /></svg></button>
     <button type="button" data-find="more" title="更多选项" aria-label="更多选项" aria-haspopup="true"><svg class="i" aria-hidden="true"><use href="#i-ellipsis" /></svg></button>
@@ -132,7 +146,7 @@
 <!-- 输入法只能落在真正的可编辑元素上，所以留一个透明输入框承接 IME；
      它同时决定候选窗弹在哪儿（跟着 caret 走） -->
 <textarea id="ime" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off"
-          spellcheck="false" aria-label="编辑器输入"></textarea>
+          spellcheck="false" aria-label="编辑器输入" aria-describedby="doc-hint"></textarea>
 <div id="bar"></div>
 <!-- Vue 覆盖层挂载点：标题栏/菜单/状态栏/toast 都在这里，大纲与正文区刻意
      不放任何 Vue 节点（留洞），鼠标穿透到下面的现有 DOM。 -->

@@ -5,15 +5,17 @@ import { MENUS, MENU_LABELS, MENU_ORDER } from '../menu';
 import { shortcutGroups } from '../shortcuts';
 
 describe('shortcuts.shortcutGroups', () => {
-  it('按菜单顺序给出分组，菜单里没有键位的组不出现', () => {
+  it('按菜单顺序给出分组，没有键位的组不出现', () => {
     const groups = shortcutGroups();
     expect(groups.length).toBeGreaterThan(0);
     const titles = groups.map((group) => group.title);
-    // 视图 / 帮助 里的动作没有键位，不该凭空造出空分组
-    expect(titles).not.toContain(MENU_LABELS.view);
-    // 分组顺序与 MENU_ORDER 的前后关系一致
-    const menuTitles = MENU_ORDER.map((key) => MENU_LABELS[key]).filter((t) => titles.includes(t));
-    expect(titles.slice(0, menuTitles.length)).toEqual(menuTitles);
+    // 分组只来自「至少有一条带 acc 的菜单」，空组不该凭空冒出来
+    const expected = MENU_ORDER.map((key) => MENU_LABELS[key]).filter((title) =>
+      MENUS[MENU_ORDER.find((key) => MENU_LABELS[key] === title)!].some((entry) => entry.acc),
+    );
+    expect(titles.slice(0, expected.length)).toEqual(expected);
+    // 视图组是随 Ctrl+1/2/3 才有的：键位是键盘切到源码视图的唯一入口
+    expect(titles).toContain(MENU_LABELS.view);
   });
 
   it('菜单里每一个带键位的动作都出现在面板里（防止漏项）', () => {
@@ -40,6 +42,9 @@ describe('shortcuts.shortcutGroups', () => {
     expect(insert).toContainEqual({ keys: 'Ctrl+K', label: '链接' });
     const file = byTitle.get(MENU_LABELS.file) ?? [];
     expect(file).toContainEqual({ keys: 'Ctrl+Shift+O', label: '打开文件夹' });
+    // 源码视图对屏幕阅读器用户是唯一可逐字编辑的路径，键位必须列出来
+    const view = byTitle.get(MENU_LABELS.view) ?? [];
+    expect(view).toContainEqual({ keys: 'Ctrl+3', label: '源码视图' });
   });
 
   it('同一个键位＋名字只列一次（全选在两个菜单里都有）', () => {

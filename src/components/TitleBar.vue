@@ -13,6 +13,8 @@
           class="tb-menu"
           :class="{ open: menuState.open === key }"
           :data-menu="key"
+          aria-haspopup="menu"
+          :aria-expanded="menuState.open === key"
           @click="onMenuClick(key, $event)"
           @mouseover="onMenuHover(key, $event)"
         >{{ MENU_LABELS[key] }}</button>

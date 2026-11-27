@@ -202,11 +202,23 @@ function applyViewMode(mode: 'wysiwyg' | 'reading' | 'source'): void {
     // 由调用方的 flushSource() 先入队，回包会把 sourceText 刷新成最新）
     sourceEl.value = sourceText;
   }
+  const changed = window.__mdviewMode !== mode;
   window.__mdviewMode = mode;
   document.documentElement.dataset.view = mode;
   focusActiveEditor();
   pushShellState();
   if (window.__mdviewRefreshScrollbar) window.__mdviewRefreshScrollbar();
+  // 切视图没有 toast 也没有焦点变化（焦点还是那个输入框），只能靠播报区说话。
+  // 阅读视图尤其要说一句：那里按键不产生任何效果，不说明原因就像「卡住了」。
+  if (changed) {
+    announce(
+      mode === 'source'
+        ? '已切到源码视图，可逐字朗读与编辑'
+        : mode === 'reading'
+          ? '已切到阅读视图，此视图不可编辑'
+          : '已切到所见即所得视图',
+    );
+  }
 }
 
 function renderAll(blocks: BlockDto[]) {
@@ -1200,6 +1212,23 @@ function toast(text: string) {
   if (window.__mdviewBridge) window.__mdviewBridge.notify(text);
 }
 
+/**
+ * 屏幕阅读器播报：往 `#sr-status` 这个 `aria-live` 区域写一句话。
+ *
+ * 只用在**没有别的东西会替它出声**的场合（切视图这类焦点不变、又没有 toast 的
+ * 状态变化）。toast 自己就带 `aria-live`，再叠一层会被念两遍。
+ *
+ * 同一句话连着播报两次时浏览器会认为是「没变」而不再念，所以重复内容补一个
+ * 零宽空格——这是 live region 的常规做法，视觉与文本内容都不受影响。
+ */
+let lastAnnounce = '';
+function announce(text: string): void {
+  const el = document.getElementById('sr-status');
+  if (!el || !text) return;
+  lastAnnounce = text === lastAnnounce ? text + '\u200b' : text;
+  el.textContent = lastAnnounce;
+}
+
 /** 路径里的文件名部分（Windows 与 POSIX 两种分隔符都要认）。 */
 function baseName(path: string): string {
   const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
@@ -1834,6 +1863,13 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'F3') {
     event.preventDefault();
     stepFind(event.shiftKey ? -1 : 1);
+    return;
+  }
+  // 视图切换：Ctrl+1/2/3。没有鼠标的人切到源码视图只能靠键盘——而源码视图是
+  // 唯一能把正文当普通多行文本框朗读与编辑的路径，这条键位对无障碍是硬需求。
+  if (accel && !event.altKey && (event.key === '1' || event.key === '2' || event.key === '3')) {
+    event.preventDefault();
+    runAction(event.key === '1' ? 'mode-wysiwyg' : event.key === '2' ? 'mode-reading' : 'mode-source');
     return;
   }
   // 焦点在查找栏里：键盘归它自己。不返回的话每个字符都会被当成正文输入，
@@ -3325,6 +3361,92 @@ window.__mdviewSelfTest = async function () {
       await nextTick();
     } catch (err) {
       check('帮助体系可用', false, String(err));
+    }
+
+    // ---- 无障碍 ----
+    try {
+      // 语义：这一层是「一个多行文本框」，不是几百个各说各话的 span
+      check(
+        '#doc 声明为多行文本框',
+        docEl.getAttribute('role') === 'textbox' && docEl.getAttribute('aria-multiline') === 'true',
+        (docEl.getAttribute('role') ?? '无') + '/' + (docEl.getAttribute('aria-multiline') ?? '无'),
+      );
+      check('#doc 有无障碍标签', (docEl.getAttribute('aria-label') ?? '').length > 0,
+        docEl.getAttribute('aria-label') ?? '无');
+      const hintId = docEl.getAttribute('aria-describedby') ?? '';
+      check('#doc 的说明指向存在的节点', !!hintId && !!document.getElementById(hintId),
+        hintId || '无');
+
+      // 播报区：没有焦点变化的结果反馈得有个地方说
+      const live = document.getElementById('sr-status');
+      check(
+        '播报区是 polite 状态区',
+        live?.getAttribute('role') === 'status' && live?.getAttribute('aria-live') === 'polite',
+        (live?.getAttribute('role') ?? '无') + '/' + (live?.getAttribute('aria-live') ?? '无'),
+      );
+      const toastEl = document.getElementById('toast');
+      check(
+        'toast 会自我播报',
+        toastEl?.getAttribute('role') === 'status' &&
+          toastEl?.getAttribute('aria-live') === 'polite',
+        (toastEl?.getAttribute('role') ?? '无') + '/' + (toastEl?.getAttribute('aria-live') ?? '无'),
+      );
+
+      // 菜单按钮得让屏幕阅读器知道「按下去会弹层」
+      const fileBtn = document.querySelector<HTMLElement>('#tb-menus [data-menu="file"]');
+      check(
+        '菜单按钮声明弹出式',
+        fileBtn?.getAttribute('aria-haspopup') === 'menu' &&
+          fileBtn?.getAttribute('aria-expanded') === 'false',
+        (fileBtn?.getAttribute('aria-haspopup') ?? '无') +
+          '/' + (fileBtn?.getAttribute('aria-expanded') ?? '无'),
+      );
+
+      // Ctrl+3 是屏幕阅读器用户进入「可逐字朗读的 textarea」的唯一入口
+      imeEl.dispatchEvent(new KeyboardEvent('keydown', { key: '3', ctrlKey: true, bubbles: true }));
+      await queue;
+      check('Ctrl+3 切到源码视图', document.documentElement.dataset.view === 'source',
+        String(document.documentElement.dataset.view));
+      check('源码视图焦点落在 textarea 上', document.activeElement === sourceEl,
+        document.activeElement ? document.activeElement.id || '无 id' : '无');
+      check('切视图会播报', (live?.textContent ?? '').indexOf('源码视图') >= 0,
+        live?.textContent ?? '空');
+      sourceEl.dispatchEvent(
+        new KeyboardEvent('keydown', { key: '1', ctrlKey: true, bubbles: true }),
+      );
+      await queue;
+      check('Ctrl+1 切回所见即所得', document.documentElement.dataset.view === 'wysiwyg',
+        String(document.documentElement.dataset.view));
+
+      // 焦点陷阱 + 焦点归还：模态弹窗最容易被键盘用户撞见的两件事
+      imeEl.focus();
+      window.__mdviewBridge?.dispatch('settings');
+      await nextTick();
+      const dialog = document.querySelector<HTMLElement>('.settings-dialog');
+      check(
+        '偏好设置声明为模态弹窗',
+        dialog?.getAttribute('role') === 'dialog' && dialog?.getAttribute('aria-modal') === 'true',
+        (dialog?.getAttribute('role') ?? '无') + '/' + (dialog?.getAttribute('aria-modal') ?? '无'),
+      );
+      // 用独立的查询挑元素，不借实现里的 focusablesIn，免得自己验自己
+      const fields = dialog
+        ? Array.from(dialog.querySelectorAll<HTMLElement>('button, input, select')).filter(
+            (el) => el.getClientRects().length > 0,
+          )
+        : [];
+      check('弹窗里有可聚焦控件', fields.length >= 5, String(fields.length));
+      const tail = fields[fields.length - 1];
+      tail?.focus();
+      tail?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+      check('Tab 关在弹窗内', document.activeElement === fields[0],
+        document.activeElement?.id || document.activeElement?.textContent || '无');
+      dialog?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await nextTick();
+      check('Esc 关闭偏好设置（无障碍段）', !document.querySelector('.settings-dialog'));
+      check('关闭后焦点回到正文输入框', document.activeElement === imeEl,
+        document.activeElement ? document.activeElement.id || '无 id' : '无');
+    } catch (err) {
+      check('无障碍链路可用', false, String(err));
     }
   } catch (err) {
     check('自检未抛异常', false, String(err));

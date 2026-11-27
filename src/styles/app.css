@@ -927,3 +927,32 @@ html[data-drop="1"] body::after {
 #empty-recent .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #empty-recent .dir { color: var(--faint); font-size: 12px; flex: none; }
 #empty .empty-help { margin: 16px 0 0; color: var(--faint); font-size: 12px; }
+
+/* ---- 无障碍 ---------------------------------------------------------
+   sr-only：只给屏幕阅读器看的文字。刻意不用 display:none / visibility:hidden，
+   那两样会把内容从无障碍树里一并删掉，等于没写。 */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* 键盘焦点环：只在键盘导航时出现（:focus-visible），鼠标点击不留痕。
+   用 outline 而不是 box-shadow——不参与布局、不会被误判成尺寸变化。 */
+button:focus-visible,
+a[href]:focus-visible,
+select:focus-visible,
+input:focus-visible,
+[tabindex]:not([tabindex='-1']):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 源码视图整块就是输入区，环画在外面会被窗口裁掉，改画在里面 */
+#source:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}

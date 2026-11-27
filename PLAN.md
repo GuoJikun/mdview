@@ -451,10 +451,14 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
   现状：界面文案全中文硬编码——前端散在模板与 `editor.ts`，Rust 侧在菜单构建里。
   做法：先抽不翻译——`src/i18n/zh-CN.ts` 集中前端文案，`menu.rs` 的 label 收进常量表；结构就位后再加 `en-US`。不要在半成品状态下引入运行时切换。
 
-- ⬜ **M6-14 可访问性**
-  现状：正文是自绘投影层（每字符一个 span、`tabindex=-1`），屏幕阅读器读到的是碎字符；`aria-live` 只在 toast 上有。
-  做法：`#doc` 补 `role="textbox"` + `aria-multiline` + `aria-label`；查找结果与保存结果走 `aria-live="polite"`；把「源码视图」标注为无障碍视图并保证 `Tab` 可达；设置面板等新弹窗复用 `dialog-modal.ts` 的焦点陷阱。
-  过关线：只用键盘能走完 新建 → 写 → 保存 → 查找 → 退出。
+- ✅ **M6-14 可访问性**（2026-11-27）：四条线——正文语义、播报、焦点陷阱、键盘可达。
+  - **正文语义**：`#doc` 补 `role="textbox"` + `aria-multiline` + `aria-label="文档正文"` + `aria-describedby="doc-hint"`。投影层是每字符一个 `span`，不声明 role 的话屏幕阅读器会按「一堆独立文本节点」来读，逐字碎片化；声明成 textbox 后浏览器按可访问值把整段内容算成一个字段。**不改成 `contenteditable`**：那会把输入、选区、撤销全部从内核手里抢走，等于推翻「源码真值只有一份」的前提。
+  - **真正的无障碍编辑路径是源码视图**。所以给三个视图补了 `Ctrl+1` / `Ctrl+2` / `Ctrl+3`——此前切视图只能点菜单，没鼠标就进不去那个原生 textarea。`applyViewMode` 切完会把焦点落到 textarea（`focusActiveEditor` 本来就这么做），`Tab` 在 textarea 里是浏览器默认的「移出焦点」，不拦。
+  - **播报**：`#sr-status` 是常驻的 `role="status" aria-live="polite"` 空节点，`announce()` 往里写一句。只用在「没有焦点变化、也没有 toast」的状态变化上——目前是切视图（阅读视图尤其要说，否则按什么都没反应像是卡死）。同一句话连播两次会被浏览器当成「没变」，重复时补一个零宽空格。**toast 自己带 `aria-live`**，走 announce 会被念两遍，所以两条通道刻意不重叠。查找命中数直接给 `#find-count` 挂 live，输入时听得到「3/12」，不必逐次 announce。
+  - **焦点陷阱**：`dialog-modal.ts` 从「只吞 Esc」扩成真陷阱——`trapTab` 首尾相接、焦点跑到弹窗外先收回来、`Tab` 在捕获阶段拦（抢在编辑器之前）。关窗时把焦点还给打开前的元素（`isConnected` 才算数，焦点原本在 `body` 上就不硬塞）。四个弹窗统一走它，Esc 行为用参数区分：关于 / 检查更新**不关**（怕误触丢掉正在下载的更新），偏好设置 / 快捷键**关**。
+  - 顺带补的：菜单按钮 `aria-haspopup="menu"` + `aria-expanded`；`#caret` / `#preedit` 标 `aria-hidden`；`:focus-visible` 焦点环（鼠标点击不留痕），源码 textarea 的环画在内侧免得被窗口裁掉。
+  - 测试：`dialog-modal.dom.test.ts` 6 项（可见元素筛选 / 末项 Tab 回首项 / 首项 Shift+Tab 到末项 / 中间不接管 / 焦点在窗外先收回 / 非 Tab 不接管），自检 15 项（role 与 aria 三连、播报区与 toast 的 live、菜单 `aria-expanded`、`Ctrl+3` 切源码并聚焦 textarea、切视图播报、`Ctrl+1` 切回、弹窗 role/aria-modal、可聚焦控件数、Tab 关在弹窗内、Esc 关闭、焦点归还正文输入框）。
+  - 过关线复核（键盘全程）：`Ctrl+N` 新建 → 直接打字 → `Ctrl+S` 保存（未命名会弹路径框）→ `Ctrl+F` 查找 → `Alt+F4` 退出，中途没有任何一步必须用鼠标。
 
 - ✅ **M6-15 CI 补齐**（2026-11-27）：`check.yml` 从「只有 Windows + Rust」扩成两道门禁。
   - `rust` job 加矩阵 `[windows-latest, macos-latest]`，`fail-fast: false`（一个平台红不该把另一个的结论吞掉）。macOS 那一份不是凑数：`#[cfg(not(windows))]` 的 POSIX 原子写、`#[cfg(target_os = "macos")]` 的原生菜单，平时只有这条链在编译。
@@ -479,10 +483,10 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
 ## 7. 当前进度快照
 
 - 日期：2026-11-26（M6-1 行内格式、M6-2 插入菜单、M6-3 偏好设置、M6-4 崩溃恢复与自动保存；上一轮为多窗口、最近打开、字数统计、拖放打开、粘贴 HTML / 复制富文本、查找替换、Tab 缩进、链接/图片行内编辑）
-- 测试：**Rust 417 项全过**（app 149 / markdown 172 / desktop bin 74 + 前端守门 2 / core 5 / support 15），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **197 项**（20 文件，unit + dom 两个 project：`ime` / `caretline` / `selection` / `dragscroll` / `outline` / `theme` / `update-format` / `find` / `clipboard` / `html-to-md` / `skin` / 侧栏树模型 / 快捷键表 / CRLF 视图 / 环境能力 / 滚动条 / 图片大纲 / 内核启动），由 `pnpm test` 一次跑完
+- 测试：**Rust 417 项全过**（app 149 / markdown 172 / desktop bin 74 + 前端守门 2 / core 5 / support 15），`cargo clippy --workspace --all-targets -- -D warnings` 无告警。前端 **203 项**（21 文件，unit + dom 两个 project：`ime` / `caretline` / `selection` / `dragscroll` / `outline` / `theme` / `update-format` / `find` / `clipboard` / `html-to-md` / `skin` / 侧栏树模型 / 快捷键表 / 弹窗陷阱 / CRLF 视图 / 环境能力 / 滚动条 / 图片大纲 / 内核启动），由 `pnpm test` 一次跑完
 - 前端工程：`pnpm build`（含 `vue-tsc --noEmit`）通过；`src/` 为 Vite + Vue 工程根，产物 `dist/` 不入库，`cargo` 直跑前必须先 build
 - 桌面端已能起窗：`pnpm tauri dev -- -- <file>`。日志里出现「前端就绪：N 块 / M 停靠点」才说明页面与 IPC 都活着
-- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 135/135」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为/导出 11 项**、**文件侧栏 9 项**、**编码 4 项**、**字数 2 项**、**查找替换 8 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**、**行内格式 5 项**、**插入 4 项**、**偏好设置 5 项**、**帮助 9 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
+- 自检：`pnpm tauri dev -- -- tests/fixtures/selftest.md --self-test`，日志出现「自检通过：OK 150/150」即链路通（含 IME 11 项、上下移动 7 项、Home/End 2 项、点击空白 2 项、**拖动自动滚动 3 项**、视口 1 项、全选/复制/剪切 8 项、**M2 大纲/主题 15 项**、**表格 8 项**、**文件/新建/另存为/导出 11 项**、**文件侧栏 9 项**、**编码 4 项**、**字数 2 项**、**查找替换 8 项**、**Tab 缩进 2 项**、**链接/图片编辑 6 项**、**行内格式 5 项**、**插入 4 项**、**偏好设置 5 项**、**帮助 9 项**、**无障碍 15 项**）。**失败时报告写进 `logs/error.log` 而不是 `mdview.log`**，排查别只看后一个
   - 样张必须是 `tests/fixtures/selftest.md`：首块是标题、第二块是**单行**段落、第三块是列表，且总长可滚 200px 以上。随手拿长段落文档跑会误报三项——软换行会让 `End` 落在视觉行尾、让 `↓` 停在同块第二行，而用例的假设是「一块一行」
   - **必须走 `pnpm tauri dev`**：debug 构建会按 `devUrl` 加载 `http://localhost:1450`，没有 Vite 时窗口标题只有配置里的 `mdview`、页面白屏、日志停在「启动」一行——不是回归。想直接用 `target/debug/mdview-desktop.exe` 跑自检，手工起的 Vite **必须绑 IPv4**（`pnpm dev --host 127.0.0.1`，别再夹一层 `--`：pnpm 会把 `--` 原样传给 vite，host 不生效）：Vite 默认在这台机器上只监听 `[::1]`，WebView2 打不开 `localhost` 时同样白屏，且 CDP 里页面的 `title` 会停在 `about:blank`
 - **真实输入法已人工验收**（2026-11-07）：候选窗贴住光标不跑偏、preedit 覆盖层表现正常
@@ -574,8 +578,9 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
 7. ~~**M6-8 非 UTF-8 编码读入**~~ **已完成（2026-11-27）**：GB18030 回退 + 按原编码回写，见第 6 节
 8. ~~**M6-15 CI 补齐**~~ **已完成（2026-11-27）**：Rust 双平台矩阵 + 前端 job 进门禁，见第 6 节
 9. ~~**M6-12 帮助体系**~~ **已完成（2026-11-27）**：快捷键一览从菜单生成 + 空状态 + 首次提示，见第 6 节
-10. **M6-14 可访问性** —— 下一步；随后 M6-9 性能 / M6-10 表格，再往后 P2 剩余的 M6-13 / M6-16 / M6-17
-11. **M6-7 多标签页** —— **押后单独一轮**：它是唯一需要改架构的条目（`Sessions` 从窗口级改成 `(label, doc_id)` 双键、所有 IPC 命令带文档标识、脏检查与外部修改监听按标签重做），动手前先在第 8 节写设计再实现
+10. ~~**M6-14 可访问性**~~ **已完成（2026-11-27）**：正文语义 + 播报区 + 焦点陷阱 + `Ctrl+1/2/3`，见第 6 节
+11. **M6-9 大文档性能** —— 下一步；随后 M6-10 表格，再往后 P2 剩余的 M6-13 / M6-16 / M6-17
+12. **M6-7 多标签页** —— **押后单独一轮**：它是唯一需要改架构的条目（`Sessions` 从窗口级改成 `(label, doc_id)` 双键、所有 IPC 命令带文档标识、脏检查与外部修改监听按标签重做），动手前先在第 8 节写设计再实现
 
 已完成的历史项（`selectAll`、拖边自动滚动、Watcher、M2 收尾、表格子工程、粘贴 HTML、段末 Delete）见 M1–M5 与第 8 节，不再在此记账。
 

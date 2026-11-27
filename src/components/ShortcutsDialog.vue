@@ -8,8 +8,8 @@
       role="dialog"
       aria-modal="true"
       aria-labelledby="shortcuts-title"
+      aria-describedby="shortcuts-hint"
       tabindex="-1"
-      @keydown.esc.prevent.stop="closeShortcuts"
     >
       <header class="dialog-header">
         <h2 id="shortcuts-title">键盘快捷键</h2>
@@ -28,7 +28,7 @@
       </div>
 
       <footer class="dialog-actions">
-        <span class="hint">macOS 上 Ctrl 换成 ⌘</span>
+        <span class="hint" id="shortcuts-hint">macOS 上 Ctrl 换成 ⌘ · Esc 关闭</span>
         <button type="button" class="btn primary" @click="closeShortcuts">知道了</button>
       </footer>
     </section>
@@ -36,19 +36,15 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { ref } from 'vue';
+import { useModalDialog } from '../dialog-modal';
 import { closeShortcuts } from '../help';
 import { shortcutGroups } from '../shortcuts';
 
 const panel = ref<HTMLElement | null>(null);
 const groups = shortcutGroups();
 
-onMounted(() => panel.value?.focus());
-// 与「关于」「偏好设置」一致：Esc 在面板里已经处理，这里兜住「焦点不在弹窗上」
-// 的情况（焦点跑到正文时按 Esc 也该关）。
-const onKeydown = (event: KeyboardEvent) => {
-  if (event.key === 'Escape') closeShortcuts();
-};
-document.addEventListener('keydown', onKeydown);
-onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
+// 焦点落在面板本身（tabindex=-1），Tab 之后进第一个 kbd 前的按钮；
+// 焦点陷阱与 Esc 关闭都由 dialog-modal 统一处理，关闭后焦点还给打开它的地方。
+useModalDialog(panel, { closeOnEscape: true, onEscape: closeShortcuts });
 </script>

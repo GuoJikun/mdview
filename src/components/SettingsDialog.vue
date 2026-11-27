@@ -10,7 +10,6 @@
       aria-modal="true"
       aria-labelledby="settings-title"
       tabindex="-1"
-      @keydown.esc.prevent.stop="closeSettings"
     >
       <header class="dialog-header">
         <h2 id="settings-title">偏好设置</h2>
@@ -105,7 +104,8 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { ref } from 'vue';
+import { useModalDialog } from '../dialog-modal';
 import { closeSettings } from '../settings';
 import {
   FONT_LABELS,
@@ -141,18 +141,8 @@ function restoreDefaults() {
   window.__mdviewRelayout?.();
 }
 
-// 弹窗是模态的：锁页面滚动，Esc 归自己（见模板上的 keydown）。
-let previousOverflow = '';
-
-onMounted(() => {
-  previousOverflow = document.documentElement.style.overflow;
-  document.documentElement.style.overflow = 'hidden';
-  panel.value?.focus();
-});
-
-onBeforeUnmount(() => {
-  document.documentElement.style.overflow = previousOverflow;
-});
+// 弹窗是模态的：锁页面滚动、Tab 关在弹窗里、Esc 关闭、关掉后焦点还给打开它的地方。
+useModalDialog(panel, { closeOnEscape: true, onEscape: closeSettings });
 </script>
 
 <style scoped>
