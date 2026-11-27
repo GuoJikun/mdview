@@ -148,8 +148,12 @@ function reindex() {
   for (const el of docEl.querySelectorAll<HTMLElement>('[data-b]')) {
     const before = Number(el.dataset.b);
     if (!byBefore.has(before)) byBefore.set(before, el);
-    const after = el.hasAttribute('data-a') ? Number(el.dataset.a) : before;
-    if (el.hasAttribute('data-a')) byAfter.set(after, el);
+    // data-a 是**无值属性**：只表示「这一格占据一个停靠点区间」。每个停靠点
+    // 恰好占一格，终点恒为 b + 1，写出来不过是把同一个数重复十几万次。
+    // 没有它的（<br>、块尾锚点、部分零宽标记）是零宽元素，起点即终点。
+    const ranged = el.hasAttribute('data-a');
+    const after = ranged ? before + 1 : before;
+    if (ranged) byAfter.set(after, el);
     if (before > maxStop) maxStop = before;
     if (after > maxStop) maxStop = after;
     marks.push(el);
@@ -574,7 +578,7 @@ function paintFind() {
   for (const el of marks) {
     if (el.classList.contains('mk')) continue;
     const b = Number(el.dataset.b);
-    const a = el.hasAttribute('data-a') ? Number(el.dataset.a) : b;
+    const a = el.hasAttribute('data-a') ? b + 1 : b;
     while (mi < findMatches.length && findMatches[mi].endStop <= b) mi++;
     if (mi >= findMatches.length) break;
     const m = findMatches[mi];
@@ -1097,7 +1101,7 @@ function paintSelection(range: [number, number] | null) {
   const [lo, hi] = range;
   for (const el of marks) {
     const before = Number(el.dataset.b);
-    const after = el.hasAttribute('data-a') ? Number(el.dataset.a) : before + 1;
+    const after = before + 1;
     if (before >= lo && after <= hi && !el.classList.contains('mk') && !el.classList.contains('eob')) {
       el.classList.add('sel');
     }
@@ -2178,10 +2182,11 @@ function stopFromPoint(x: number, y: number): number | null {
   // 这里不能直接放弃：编辑器的惯例是「点哪儿光标就落在那一行」。
   if (!el) return stopFromBlank(x, y);
   const before = Number(el.dataset.b);
+  // 零宽元素（<br>、块尾锚点）：点在哪边都是它自己
   if (!el.hasAttribute('data-a')) return before;
   const rect = el.getBoundingClientRect();
   if (rect.width === 0) return before;
-  return x > rect.left + rect.width / 2 ? Number(el.dataset.a) : before;
+  return x > rect.left + rect.width / 2 ? before + 1 : before;
 }
 
 /**
@@ -2215,8 +2220,8 @@ function nearestStopFromBrowser(x: number, y: number): number | null {
   if (!holder) return null;
   // 只用来定位行，方向由 nearestInLine 按 x 重选；给右端是为了让
   // 「点在字与字之间的空隙」也落到靠右的位置，与系统 caret 的习惯一致。
-  const after = holder.dataset.a;
-  return Number(after !== undefined ? after : holder.dataset.b);
+  const before = Number(holder.dataset.b);
+  return holder.hasAttribute('data-a') ? before + 1 : before;
 }
 
 /**
@@ -3447,6 +3452,120 @@ window.__mdviewSelfTest = async function () {
         document.activeElement ? document.activeElement.id || '无 id' : '无');
     } catch (err) {
       check('无障碍链路可用', false, String(err));
+    }
+
+    // ---- 大文档：十万字量级的打开、点击落点与跨块拖选 ----
+    try {
+      // 每段都带行内元素，避免「整段纯文本」这种乐观情况：投影层要为每个字符
+      // 产出一个停靠点元素，行内样式越多，碎片越碎。
+      const parts: string[] = [];
+      let size = 0;
+      let index = 0;
+      while (size < 100000) {
+        if (index % 20 === 0) {
+          parts.push(`## 第 ${index / 20 + 1} 节`, '');
+          size += 12;
+        }
+        const para =
+          `第 ${index} 段：用来把文档撑到十万字的正文，含 \`行内代码\`、**加粗**、` +
+          `*斜体* 与 [链接](https://example.com/${index})，让投影层每段都产出多个片段。`;
+        parts.push(para, '');
+        size += para.length;
+        index += 1;
+      }
+      const bigText = parts.join('\n') + '\n';
+      const started = performance.now();
+      send({ kind: 'replaceSource', text: bigText });
+      await queue;
+      // 拆两段看：回包 + 挂 DOM 是 IPC 与解析，折行排版在强制布局那一刻
+      const replied = performance.now();
+      void docEl.offsetHeight;
+      const laidOut = performance.now();
+      const openMs = Math.round(laidOut - started);
+      const payloadMb = (docEl.innerHTML.length / 1048576).toFixed(1);
+      const stopEls = docEl.querySelectorAll('[data-b]').length;
+      check(
+        '十万字文档能打开并排版',
+        docEl.children.length > 500,
+        `块 ${docEl.children.length} / 停靠点 ${stopEls} / 载荷 ${payloadMb} MB / ` +
+          `回包+渲染 ${Math.round(replied - started)} ms / 布局 ${Math.round(laidOut - replied)} ms`,
+      );
+      check('十万字文档打开在 4 秒内', openMs < 4000, `${openMs} ms`);
+
+      // 滚动帧时间：滚轮体验无法合成，就量「连续滚动时相邻 rAF 的间隔」。
+      // 空闲时是 16.7ms（60fps），掉到几十毫秒就是肉眼可见的卡。
+      const stamps: number[] = [];
+      await new Promise<void>((done) => {
+        const started2 = performance.now();
+        const step = () => {
+          window.scrollBy(0, 160);
+          stamps.push(performance.now() - started2);
+          if (stamps.length >= 40) done();
+          else requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      });
+      const gaps = stamps.slice(1).map((t, i) => t - stamps[i]);
+      const avgGap = gaps.reduce((a, b) => a + b, 0) / Math.max(1, gaps.length);
+      const worstGap = Math.max(...gaps);
+      check(
+        '十万字文档滚动不卡',
+        avgGap < 40,
+        `平均 ${avgGap.toFixed(1)} ms / 最长 ${worstGap.toFixed(1)} ms（40 帧）`,
+      );
+
+      // 中段点击：落点必须与点中的那个字符一致。分块渲染 / 虚拟化最容易坏的就是
+      // 这里——离屏块若用估算高度，滚动之后的坐标就全错位了。
+      const mid = Math.round(
+        (document.documentElement.scrollHeight - window.innerHeight) * 0.5,
+      );
+      window.scrollTo(0, mid);
+      await nextTick();
+      // 视口正中可能是两块之间的空隙或短行的行尾空白，那里没有字符。挑一个
+      // 「完整落在视口里」的真实字符来点，才算测到了落点映射。
+      const visible = Array.from(docEl.querySelectorAll<HTMLElement>('.ch')).filter((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 3 && rect.top > 80 && rect.bottom < window.innerHeight - 80;
+      });
+      const target = visible[Math.floor(visible.length / 2)] ?? null;
+      const box = target ? target.getBoundingClientRect() : null;
+      const cx = box ? Math.round(box.left + box.width / 2) : Math.round(window.innerWidth * 0.5);
+      const cy = box ? Math.round(box.top + box.height / 2) : Math.round(window.innerHeight * 0.5);
+      docEl.dispatchEvent(
+        new MouseEvent('mousedown', { clientX: cx, clientY: cy, buttons: 1, bubbles: true, cancelable: true }),
+      );
+      docEl.dispatchEvent(
+        new MouseEvent('mouseup', { clientX: cx, clientY: cy, bubbles: true, cancelable: true }),
+      );
+      await queue;
+      check(
+        '大文档里点击落在点中的字符上',
+        !!caret && !!target && Math.abs(caret.stop - Number(target.dataset.b)) <= 1,
+        `点中 ${target?.dataset.b ?? '无'} / 光标 ${caret ? caret.stop : '无'}`,
+      );
+
+      // 跨块拖选：选区两端必须落在不同块里，且长度是「一屏」的量级
+      const fromY = Math.round(window.innerHeight * 0.3);
+      const toY = Math.round(window.innerHeight * 0.7);
+      docEl.dispatchEvent(
+        new MouseEvent('mousedown', { clientX: cx, clientY: fromY, buttons: 1, bubbles: true, cancelable: true }),
+      );
+      window.dispatchEvent(
+        new MouseEvent('mousemove', { clientX: cx, clientY: toY, buttons: 1, bubbles: true, cancelable: true }),
+      );
+      window.dispatchEvent(
+        new MouseEvent('mouseup', { clientX: cx, clientY: toY, bubbles: true, cancelable: true }),
+      );
+      await queue;
+      const after = await invoke<Snapshot>('snapshot');
+      const sel = after.selection;
+      check(
+        '大文档里能跨块拖选',
+        !!sel && Math.abs(sel[1] - sel[0]) > 100,
+        sel ? `${sel[0]}..${sel[1]}（${Math.abs(sel[1] - sel[0])} 个停靠点）` : '无选区',
+      );
+    } catch (err) {
+      check('大文档链路可用', false, String(err));
     }
   } catch (err) {
     check('自检未抛异常', false, String(err));

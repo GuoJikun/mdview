@@ -190,10 +190,9 @@ fn table_html(
         if index + 1 == stops.len() {
             let _ = write!(
                 out,
-                "<span class=\"eob\" data-b=\"{}\" data-byte=\"{}\" data-block=\"{}\">&#8203;</span>",
+                "<span class=\"eob\" data-b=\"{}\" data-byte=\"{}\">&#8203;</span>",
                 first + index,
-                block.byte.end,
-                block.id.0
+                block.byte.end
             );
             continue;
         }
@@ -344,8 +343,8 @@ fn block_html(src: &str, block: &Block, doc: &DocumentLayout, images: ImageMode)
     // 块尾锚点：最后一个停靠点没有对应字符，单独给一个零宽元素供光标停靠
     let _ = write!(
         out,
-        "<span class=\"eob\" data-b=\"{last}\" data-byte=\"{}\" data-block=\"{}\">&#8203;</span>",
-        block.byte.end, block.id.0
+        "<span class=\"eob\" data-b=\"{last}\" data-byte=\"{}\">&#8203;</span>",
+        block.byte.end
     );
     // 回链放在块尾锚点之后：没有 data-b，不占停靠点，点击只跳转。
     if let BlockKind::FootnoteDefinition {
@@ -386,8 +385,6 @@ fn write_segment(
 ) {
     let stop = stops[index];
     let end = stops[index + 1].byte;
-    let next = global + 1;
-    let block_id = block.id.0;
 
     // 折叠标记：零宽，两个停靠点落在同一列
     if let Some(hidden) = block.hidden_at(stop.byte) {
@@ -402,8 +399,8 @@ fn write_segment(
         }
         let _ = write!(
             out,
-            "<span class=\"mk\" data-b=\"{global}\" data-a=\"{next}\" \
-             data-byte=\"{}\" data-block=\"{block_id}\">&#8203;</span>",
+            "<span class=\"mk\" data-b=\"{global}\" data-a \
+             data-byte=\"{}\">&#8203;</span>",
             stop.byte
         );
         return;
@@ -424,8 +421,8 @@ fn write_segment(
             };
             let _ = write!(
                 out,
-                "<span class=\"atom img\" data-b=\"{global}\" data-a=\"{next}\" \
-                 data-byte=\"{}\" data-block=\"{block_id}\" data-asset=\"{}\" \
+                "<span class=\"atom img\" data-b=\"{global}\" data-a \
+                 data-byte=\"{}\" data-asset=\"{}\" \
                  title=\"{}\"><img alt=\"\" src=\"{}\"></span>",
                 stop.byte,
                 escape_attr(url),
@@ -436,8 +433,8 @@ fn write_segment(
         SpanKind::TaskMarker { checked } => {
             let _ = write!(
                 out,
-                "<span class=\"atom task\" data-b=\"{global}\" data-a=\"{next}\" \
-                 data-byte=\"{}\" data-block=\"{block_id}\">{}</span>",
+                "<span class=\"atom task\" data-b=\"{global}\" data-a \
+                 data-byte=\"{}\">{}</span>",
                 stop.byte,
                 if *checked { "☑" } else { "☐" }
             );
@@ -445,8 +442,8 @@ fn write_segment(
         SpanKind::Rule => {
             let _ = write!(
                 out,
-                "<span class=\"atom rule\" data-b=\"{global}\" data-a=\"{next}\" \
-                 data-byte=\"{}\" data-block=\"{block_id}\">────────</span>",
+                "<span class=\"atom rule\" data-b=\"{global}\" data-a \
+                 data-byte=\"{}\">────────</span>",
                 stop.byte
             );
         }
@@ -469,13 +466,13 @@ fn write_segment(
                 let _ = write!(
                     out,
                     "><span class=\"mk\" data-b=\"{global}\" \
-                     data-byte=\"{}\" data-block=\"{block_id}\">&#8203;</span>",
+                     data-byte=\"{}\">&#8203;</span>",
                     stop.byte
                 );
             } else {
                 let _ = write!(
                     out,
-                    "<br class=\"nl\" data-b=\"{global}\" data-byte=\"{}\" data-block=\"{block_id}\">",
+                    "<br class=\"nl\" data-b=\"{global}\" data-byte=\"{}\">",
                     stop.byte
                 );
             }
@@ -494,19 +491,24 @@ fn write_segment(
                     let _ = write!(
                         out,
                         "<span class=\"mk\" data-b=\"{global}\" data-byte=\"{}\" \
-                         data-block=\"{block_id}\">&#8203;</span>",
+                        >&#8203;</span>",
                         stop.byte
                     );
                     return;
                 }
                 let _ = write!(
                     out,
-                    "<br class=\"nl\" data-b=\"{global}\" data-byte=\"{}\" data-block=\"{block_id}\">",
+                    "<br class=\"nl\" data-b=\"{global}\" data-byte=\"{}\">",
                     stop.byte
                 );
                 return;
             }
-            let class = char_class(block, span_index, stop.byte);
+            // char_class 返回空格分隔的类名（纯文本为空串）。拼进属性时前面要补
+            // 一个空格，否则 `class="chb"` 会把 `ch` 与 `b` 粘成一个类名。
+            let class = match char_class(block, span_index, stop.byte) {
+                extra if extra.is_empty() => String::new(),
+                extra => format!(" {extra}"),
+            };
             // 链接字符带上目标地址：URL 在投影里是折叠的（`.mk`），前端拿不到
             // 它就无从知道该打开哪里。**每个字符各挂一份**——点击命中的是单个
             // 字符元素，它和同链接的其它字符是平级兄弟，`closest` 只向上找，
@@ -536,8 +538,8 @@ fn write_segment(
             };
             let _ = write!(
                 out,
-                "<span class=\"ch {class}\"{href}{fnref} data-b=\"{global}\" data-a=\"{next}\" \
-                 data-byte=\"{}\" data-block=\"{block_id}\">{}</span>",
+                "<span class=\"ch{class}\"{href}{fnref} data-b=\"{global}\" data-a \
+                 data-byte=\"{}\">{}</span>",
                 stop.byte,
                 escape(&ch.to_string())
             );
@@ -885,7 +887,8 @@ const SCRIPT: &str = r#"
     if (b > maxStop) maxStop = b;
     if (!byBefore.has(b)) byBefore.set(b, el);
     if (el.hasAttribute('data-a')) {
-      var a = Number(el.dataset.a);
+      // data-a 无值：有它就表示占一格区间，终点恒为 b + 1
+      var a = b + 1;
       if (a > maxStop) maxStop = a;
       if (!byAfter.has(a)) byAfter.set(a, el);
     }
@@ -944,7 +947,7 @@ const SCRIPT: &str = r#"
     if (lo !== hi) {
       marks.forEach(function (el) {
         var b = Number(el.dataset.b);
-        var a = el.hasAttribute('data-a') ? Number(el.dataset.a) : b + 1;
+        var a = b + 1;
         if (b >= lo && a <= hi && !el.classList.contains('mk') && !el.classList.contains('eob')) {
           el.classList.add('sel');
           selected.push(el);
@@ -981,7 +984,7 @@ const SCRIPT: &str = r#"
     if (!hit) return null;
     var b = Number(hit.dataset.b);
     if (!hit.hasAttribute('data-a')) return b;
-    var a = Number(hit.dataset.a);
+    var a = b + 1;
     var r = hit.getBoundingClientRect();
     if (r.width === 0) return b;
     return x > r.left + r.width / 2 ? a : b;
@@ -1071,7 +1074,24 @@ mod tests {
         // 块首的 `**` 不产生停靠点（见 layout 的 block_start_marker_is_not_a_resting_place），
         // 因此这里只有 3 个标记元素。
         assert_eq!(html.matches("class=\"mk\"").count(), 3);
-        assert_eq!(html.matches("class=\"ch ").count(), 7);
+        assert_eq!(html.matches("<span class=\"ch").count(), 7);
+    }
+
+    #[test]
+    fn stop_elements_do_not_repeat_redundant_attributes() {
+        // 停靠点元素每个可见字符一个，十万字就是七万个：属性上多写一个字节，
+        // 载荷就多几十 KB。`data-block` 与父 section 完全重复，`data-a` 的值
+        // 恒为 b + 1——两样都不该出现在字符元素上。
+        let html: String = frames_of("甲**乙**丙")
+            .iter()
+            .map(|f| f.html.as_str())
+            .collect();
+        assert_eq!(html.matches("data-block=").count(), 1, "{html}");
+        assert!(!html.contains("data-a=\""), "data-a 不该带值: {html}");
+        assert!(
+            html.contains(" data-a "),
+            "有区间的元素仍要带 data-a: {html}"
+        );
     }
 
     #[test]
@@ -1089,7 +1109,7 @@ mod tests {
         assert!(html.contains("tk-keyword"), "缺关键字着色: {html}");
         assert!(html.contains("tk-number"), "缺数字着色: {html}");
         // 着色只加 class，不改变停靠点：`let a = 1;` 仍是 10 个逐字符元素
-        assert_eq!(html.matches("class=\"ch ").count(), 10);
+        assert_eq!(html.matches("<span class=\"ch").count(), 10);
     }
 
     #[test]
@@ -1097,14 +1117,17 @@ mod tests {
         let html = preview_html("```rust\n#[derive(Debug)]\nprintln!(\"hi\");\n```");
         // 断言必须带上 `ch ` 前缀：样式表也内联在同一份 HTML 里，里面本来就有
         // `.tk-macro` 规则，只搜 `tk-macro` 会恒真，等于什么都没验证。
-        assert!(html.contains("class=\"ch tk-macro\""), "缺宏着色: {html}");
         assert!(
-            html.contains("class=\"ch tk-annotation\""),
+            html.contains("<span class=\"ch tk-macro\""),
+            "缺宏着色: {html}"
+        );
+        assert!(
+            html.contains("<span class=\"ch tk-annotation\""),
             "缺注解着色: {html}"
         );
         // 宏与注解的 class 只加在字符元素上，停靠点数不变
         assert_eq!(
-            html.matches("class=\"ch ").count(),
+            html.matches("<span class=\"ch").count(),
             "#[derive(Debug)]".len() + "println!(\"hi\");".len()
         );
     }
@@ -1234,7 +1257,8 @@ mod tests {
             "{html}"
         );
         assert!(html.contains(&format!("data-b=\"{}\"", frames[0].base)));
-        assert!(html.contains(&format!("data-a=\"{}\"", frames[0].base + 1)));
+        // data-a 无值：有它表示「占据一个区间」，终点恒为 b + 1
+        assert!(html.contains(" data-a "), "{html}");
         // 投影页与文档同目录，可以直接用相对路径装载
         assert!(preview_html("![图](a.png)").contains("src=\"a.png\""));
     }
