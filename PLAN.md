@@ -451,10 +451,13 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
   做法：`#doc` 补 `role="textbox"` + `aria-multiline` + `aria-label`；查找结果与保存结果走 `aria-live="polite"`；把「源码视图」标注为无障碍视图并保证 `Tab` 可达；设置面板等新弹窗复用 `dialog-modal.ts` 的焦点陷阱。
   过关线：只用键盘能走完 新建 → 写 → 保存 → 查找 → 退出。
 
-- ⬜ **M6-15 CI 补齐**
-  现状：`check.yml` 只跑 Windows + Rust；前端 147 个用例**没进门禁**（`pnpm test` 挂了 CI 不会红），macOS / Linux 零自动化。
-  做法：加 `frontend` job（mise + pnpm install + `pnpm build` + `pnpm test`）；`build` 矩阵加 macOS runner 跑 `cargo test`，平台相关用例按 `cfg` 跳过。
-  过关线：故意改坏一个前端用例，CI 必须红。
+- ✅ **M6-15 CI 补齐**（2026-11-27）：`check.yml` 从「只有 Windows + Rust」扩成两道门禁。
+  - `rust` job 加矩阵 `[windows-latest, macos-latest]`，`fail-fast: false`（一个平台红不该把另一个的结论吞掉）。macOS 那一份不是凑数：`#[cfg(not(windows))]` 的 POSIX 原子写、`#[cfg(target_os = "macos")]` 的原生菜单，平时只有这条链在编译。
+  - 新增 `frontend` job：`jdx/mise-action` 装 node/pnpm（版本只在 `mise.toml` 写一处）→ `pnpm install --frozen-lockfile` → `pnpm build`（内含 `vue-tsc` 类型检查）→ `pnpm test`（unit + dom）。**前端用例从此进门禁**，之前 `pnpm test` 挂了 CI 照样绿。
+  - pnpm store 指到工作区的 `.pnpm-store` 再缓存：Windows 与 Linux 的默认 store 目录不同，写死任一个另一边永远命中不了缓存。
+  - `frontend` 固定在 Windows runner：dom 那一批断言量的是像素（光标落点、点击命中、大纲锚点），换平台就换了字体渲染与默认缩放，结论不再可比。GitHub 的 Windows runner 预装 Google Chrome，`vitest.config.ts` 的 `channel: 'chrome'` 直接复用，不用下 Playwright 浏览器。
+  - **Linux 不进门禁**：要跑测试得先装 webkit2gtk / libsoup / librsvg 一整套 Tauri 依赖，装一次几分钟且常因源站问题红；`release.yml` 本来就在 ubuntu-22.04 上编译一次，Linux 专属的编译问题发版时必然暴露。
+  - 过关线验证：本地把一条用例改坏确认 `pnpm test` 退出码非 0（CI 判红就靠这个码），已养成习惯；真正的「CI 变红」要在首次推送后看 Actions 结果。
 
 - ⬜ **M6-16 发布合规与反馈入口**
   现状：`release.yml` 出包但 macOS 无签名 / 公证（用户要右键绕过 Gatekeeper）；Linux 拖放打开未实机验证；崩溃日志写在 `logs/error.log`，用户不知道怎么给你。
@@ -564,8 +567,8 @@ M0–M5 解决的是「内核正确」与「工程结构」，M6 解决的是「
 5. ~~**M6-5 导出 HTML**~~ **已完成（2026-11-26）**：单文件 HTML + 图片内联；PDF 走浏览器打印，见第 6 节
 6. ~~**M6-6 文件侧栏**~~ **已完成（2026-11-26）**：`Ctrl+Shift+O` 打开工作区、懒展开目录树、点文件走同一条 `open_file`，见第 6 节
 7. ~~**M6-8 非 UTF-8 编码读入**~~ **已完成（2026-11-27）**：GB18030 回退 + 按原编码回写，见第 6 节
-8. **M6-15 CI 补齐** —— 下一步，越早越好
-9. **M6-12 帮助体系 / M6-14 可访问性 / M6-9 性能 / M6-10 表格**，再往后 P2 剩余的 M6-13 / M6-16 / M6-17
+8. ~~**M6-15 CI 补齐**~~ **已完成（2026-11-27）**：Rust 双平台矩阵 + 前端 job 进门禁，见第 6 节
+9. **M6-12 帮助体系** —— 下一步；随后 M6-14 可访问性 / M6-9 性能 / M6-10 表格，再往后 P2 剩余的 M6-13 / M6-16 / M6-17
 10. **M6-7 多标签页** —— **押后单独一轮**：它是唯一需要改架构的条目（`Sessions` 从窗口级改成 `(label, doc_id)` 双键、所有 IPC 命令带文档标识、脏检查与外部修改监听按标签重做），动手前先在第 8 节写设计再实现
 
 已完成的历史项（`selectAll`、拖边自动滚动、Watcher、M2 收尾、表格子工程、粘贴 HTML、段末 Delete）见 M1–M5 与第 8 节，不再在此记账。

@@ -1,7 +1,15 @@
 name: Check
 
-# 只做 Rust 侧门禁：格式、clippy（warning 即失败）、全量测试。
-# 前端另有一条链（type-check / build），未纳入本文件。
+# 两道门禁：
+#   rust     —— 格式、clippy（warning 即失败）、全量测试，Windows + macOS 各跑一遍。
+#               macOS 那一份不是凑数：`#[cfg(not(windows))]` 的原子写、
+#               `#[cfg(target_os = "macos")]` 的原生菜单平时只有这一条链在编译。
+#   frontend —— 类型 + 构建 + vitest（unit 与 dom 两个 project）。
+#               前端用例曾经完全没进门禁：`pnpm test` 挂了 CI 照样绿。
+#
+# Linux 只出现在 release.yml 里（发版时必然编译一次）。要在这里跑测试得先装
+# webkit2gtk / libsoup / librsvg 一整套 Tauri 依赖，装一次几分钟且经常因为
+# 源站问题红，收益不抵成本；真有 Linux 专属问题，发版那一趟会先露出来。
 on:
   push:
     branches:
@@ -20,9 +28,14 @@ env:
 
 jobs:
   rust:
-    name: Format, clippy and tests
-    runs-on: windows-latest
-    timeout-minutes: 30
+    name: Rust / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      # 一个平台红不该把另一个平台的结果吞掉——两边都要看到结论。
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
 
     steps:
       - name: Checkout
@@ -45,5 +58,52 @@ jobs:
       - name: Run clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
+      # web_ime.rs 里那两条「前端用例守门」需要 node：本 job 不装前端工具链，
+      # 它们会自动跳过并打印原因，前端那一半由下面的 frontend job 负责。
       - name: Run tests
         run: cargo test --locked --workspace
+
+  frontend:
+    name: Frontend / build + vitest
+    # 固定在 Windows：dom 那一批断言量的是**像素**（光标落点、点击命中、大纲锚点），
+    # 换平台就换了字体渲染与默认缩放，结论不再可比。开发机也是 Windows。
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # node / pnpm 的版本只在 mise.toml 里写一处，CI 与本地同一份来源。
+      - name: Install toolchain (node + pnpm)
+        uses: jdx/mise-action@v2
+
+      - name: Show versions
+        run: |
+          node -v
+          pnpm -v
+
+      # store 放在工作区里，缓存路径才跨平台一致（Windows 与 Linux 的默认
+      # store 目录不同，写死任一个另一边就永远命中不了）。
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: Configure pnpm store
+        run: pnpm config set store-dir .pnpm-store --location project
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # build 里的 vue-tsc 就是类型检查：类型错了这一步就红。
+      - name: Type-check and build
+        run: pnpm build
+
+      # unit（node）+ dom（真实 Chrome）。GitHub 的 windows runner 预装了
+      # Google Chrome，vitest.config.ts 里的 `channel: 'chrome'` 会直接复用它，
+      # 不需要额外下载 Playwright 的浏览器。
+      - name: Run frontend tests
+        run: pnpm test
