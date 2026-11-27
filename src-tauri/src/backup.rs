@@ -35,7 +35,11 @@ pub(crate) struct BackupMeta {
     pub disk_mtime: Option<u64>,
 }
 
-fn backup_dir(app: &AppHandle) -> Option<PathBuf> {
+/// 崩溃副本目录（配置目录下的 `backup/`），顺带确保它存在。
+///
+/// `pub` 是给「帮助 → 打开备份目录」用的：用户反馈时要能把副本一起发过来，
+/// 让他自己翻 `%APPDATA%` 不现实。
+pub fn dir(app: &AppHandle) -> Option<PathBuf> {
     let dir = app.path().app_config_dir().ok()?.join("backup");
     if let Err(err) = fs::create_dir_all(&dir) {
         log::warn!("备份目录创建失败 {}: {err}", dir.display());
@@ -123,13 +127,13 @@ pub(crate) fn save(
     path: Option<&Path>,
     text: &str,
 ) -> Result<(), String> {
-    let dir = backup_dir(app).ok_or("备份目录不可用")?;
+    let dir = dir(app).ok_or("备份目录不可用")?;
     save_in(&dir, label, path, text)
 }
 
 /// 删掉副本（正常保存后、或用户选择丢弃时）。
 pub(crate) fn discard(app: &AppHandle, label: &str, path: Option<&Path>) {
-    let Some(dir) = backup_dir(app) else {
+    let Some(dir) = dir(app) else {
         return;
     };
     discard_in(&dir, label, path);
@@ -153,7 +157,7 @@ pub(crate) fn pending(
     label: &str,
     path: Option<&Path>,
 ) -> Option<(BackupMeta, String)> {
-    pending_in(&backup_dir(app)?, label, path)
+    pending_in(&dir(app)?, label, path)
 }
 
 fn pending_in(dir: &Path, label: &str, path: Option<&Path>) -> Option<(BackupMeta, String)> {

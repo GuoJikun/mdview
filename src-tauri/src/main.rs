@@ -442,6 +442,24 @@ async fn read_folder(path: String) -> Result<workspace::FolderListing, String> {
     workspace::read_dir(Path::new(&path))
 }
 
+/// 帮助 → 打开日志目录：反馈问题时用户要做的第一件事就是找到它。
+///
+/// 返回路径而不是只说「成功」——前端拿它弹一句「已打开：…」，用户下次也能自己找。
+#[tauri::command]
+fn open_logs(logs: tauri::State<'_, LogDir>) -> Result<String, String> {
+    let dir = logs.0.clone().ok_or_else(|| "日志目录不可用".to_owned())?;
+    link::open_path(&dir.to_string_lossy())?;
+    Ok(dir.display().to_string())
+}
+
+/// 帮助 → 打开备份目录（崩溃副本）。目录不存在时先建出来，别让资源管理器报错。
+#[tauri::command]
+fn open_backups(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = backup::dir(&app).ok_or_else(|| "备份目录不可用".to_owned())?;
+    link::open_path(&dir.to_string_lossy())?;
+    Ok(dir.display().to_string())
+}
+
 /// 插入图片：选文件 → 复制到文档同级 `assets/` → 返回要写进源码的地址。
 ///
 /// 复制而不是直接引用原路径，是因为用户多半从「下载」「桌面」里选图，绝对路径
@@ -928,6 +946,8 @@ fn menu_action(id: &str) -> Option<&'static str> {
         "doc-start" => "doc-start",
         "doc-end" => "doc-end",
         "shortcuts" => "shortcuts",
+        "open-logs" => "open-logs",
+        "open-backups" => "open-backups",
         "update" => "update",
         "about" => "about",
         _ => return None,
@@ -1068,6 +1088,10 @@ fn build_native_menu(
     let help_menu = SubmenuBuilder::new(app, "帮助")
         .item(&item("shortcuts", "键盘快捷键")?)
         .separator()
+        // 反馈入口：日志与崩溃副本都在配置目录里，用户不必自己翻 AppData
+        .item(&item("open-logs", "打开日志目录")?)
+        .item(&item("open-backups", "打开备份目录")?)
+        .separator()
         .item(&item("update", "检查更新…")?)
         .separator()
         .item(&item("about", "关于")?)
@@ -1088,6 +1112,10 @@ fn build_native_menu(
 struct RunMode {
     self_test: bool,
 }
+
+/// 启动时确定下来的日志目录（`init_logging_default` 的返回值——它可能已经
+/// 从可执行文件同级回落到配置目录，重算一遍会拿到不一样的结果）。
+struct LogDir(Option<PathBuf>);
 
 /// 最近列表变了就整棵重建原生菜单。
 ///
@@ -1213,6 +1241,7 @@ fn main() {
         .manage(CloseGuards::default())
         .manage(backdrop::Backdrop::default())
         .manage(RunMode { self_test })
+        .manage(LogDir(log_dir.clone()))
         .manage(update::UpdateState::new())
         // 关窗守卫：有未保存改动就拦住，让前端问一句再放行。
         // 标题栏的 ×、Alt+F4、菜单里的「关闭窗口」最后都走这里，一处拦全部。
@@ -1295,6 +1324,8 @@ fn main() {
             write_backup,
             backup_recovery,
             export_html,
+            open_logs,
+            open_backups,
             new_file,
             new_window,
             confirm_discard,

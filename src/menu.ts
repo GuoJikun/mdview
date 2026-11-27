@@ -150,6 +150,10 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
   help: [
     { action: 'shortcuts', label: '键盘快捷键', acc: 'Ctrl+/' },
     { sep: true },
+    // 反馈入口：日志与崩溃副本都在配置目录里，不让用户自己去翻 AppData
+    { action: 'open-logs', label: '打开日志目录' },
+    { action: 'open-backups', label: '打开备份目录' },
+    { sep: true },
     { action: 'update', label: '检查更新…' },
     {
       action: 'auto-update', label: '启动时检查更新', mark: 'check',

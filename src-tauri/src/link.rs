@@ -39,6 +39,18 @@ pub fn open_url(url: String) -> Result<(), String> {
     open_external(url.trim())
 }
 
+/// 交给系统打开一个**本地路径**（目录或文件）。
+///
+/// 与 [`open_url`] 分开是刻意的：这里不做协议白名单——路径来自应用自己
+/// （日志目录、崩溃副本目录），不是文档内容；反过来 `open_url` 也绝不能
+/// 放行任意路径，否则 `file://` 之类就成了探测本机的通道。
+pub fn open_path(path: &str) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("路径为空".to_owned());
+    }
+    open_external(path)
+}
+
 /// Windows：直接调 `ShellExecuteW`。
 ///
 /// 不引 `tauri-plugin-opener`：本项目已经用裸 Win32 做过原子替换（见

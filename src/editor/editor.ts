@@ -1448,6 +1448,14 @@ function runAction(action: string) {
     case 'replace': openFind(true); return;
     case 'save': flushSource(); send({ kind: 'save' }); break;
     case 'save-as': requestSavePath(); break;
+    case 'open-logs':
+    case 'open-backups': {
+      // 打开目录本身由系统完成，前端只负责把路径念一遍——用户下次能自己找。
+      invoke<string>(action === 'open-logs' ? 'open_logs' : 'open_backups')
+        .then((path) => toast('已打开：' + path))
+        .catch((err) => toast('打不开目录：' + err));
+      return;
+    }
     case 'export-html': void exportHtml(); return;
     case 'copy': send({ kind: 'copy' }); break;
     case 'cut': send({ kind: 'cut' }); break;
@@ -3364,6 +3372,12 @@ window.__mdviewSelfTest = async function () {
       await nextTick();
       const entry = document.querySelector('#tb-menu-popup button[data-action="shortcuts"]');
       check('帮助菜单有快捷键项', !!entry, entry ? entry.textContent : '无');
+      // 反馈入口：日志与备份都在配置目录深处，没有菜单项用户只能自己翻 AppData。
+      // 这里只验菜单接线，不真的点——点下去会弹资源管理器，自检不该有这个副作用。
+      const logsEntry = document.querySelector('#tb-menu-popup button[data-action="open-logs"]');
+      check('帮助菜单有日志目录项', !!logsEntry, logsEntry ? logsEntry.textContent : '无');
+      const backupsEntry = document.querySelector('#tb-menu-popup button[data-action="open-backups"]');
+      check('帮助菜单有备份目录项', !!backupsEntry, backupsEntry ? backupsEntry.textContent : '无');
       helpMenu?.click();   // 收起
       await nextTick();
     } catch (err) {
