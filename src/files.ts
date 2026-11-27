@@ -8,6 +8,7 @@
 // 3. **工作区只是视图状态**：内核与 `Session` 不知道它的存在，所以根路径记在
 //    localStorage，启动时尝试恢复；目录不在了就静静忘掉，不打扰用户。
 import { invoke } from '@tauri-apps/api/core';
+import { zh } from './i18n/zh-CN';
 import {
   attachChildren,
   findNode,
@@ -110,17 +111,17 @@ function render(): void {
   close.type = 'button';
   close.className = 'ft-close';
   close.dataset.ft = 'close';
-  close.title = '收起文件侧栏';
-  close.setAttribute('aria-label', '收起文件侧栏');
+  close.title = zh.files.collapse;
+  close.setAttribute('aria-label', zh.files.collapse);
   close.innerHTML = '<svg class="i" aria-hidden="true"><use href="#i-x" /></svg>';
   head.append(title, close);
 
   const list = document.createElement('div');
   list.className = 'ft-list';
   const rows = flatten(root.children ?? []);
-  if (!rows.length) list.appendChild(note('（这个文件夹里没有 Markdown 文件）'));
+  if (!rows.length) list.appendChild(note(zh.files.emptyDir));
   for (const { node, depth } of rows) list.appendChild(rowOf(node, depth));
-  if (truncated) list.appendChild(note('（部分目录项太多，只显示了前面一部分）'));
+  if (truncated) list.appendChild(note(zh.files.truncated));
 
   panel.replaceChildren(head, list);
   window.__mdviewRefreshScrollbar?.();
@@ -144,7 +145,7 @@ async function toggle(node: FileNode): Promise<void> {
     if (listing.truncated) truncated = true;
     render();
   } catch (err) {
-    options.toast('读不到这个目录：' + String(err));
+    options.toast(zh.files.readFailed(err));
   } finally {
     loading.delete(node.path);
   }
@@ -193,7 +194,7 @@ export async function openWorkspace(path?: string): Promise<void> {
   try {
     listing = await invoke<Listing | null>('open_folder', { path: path ?? null });
   } catch (err) {
-    options.toast('打开文件夹失败：' + String(err));
+    options.toast(zh.files.openFailed(err));
     return;
   }
   if (!listing) return;   // 用户取消

@@ -141,6 +141,88 @@ export const zh = {
     close: '关闭',
   },
 
+  /** 未命名文档的显示名（标题栏、最近打开、消息里都用它）。 */
+  untitled: '未命名',
+
+  /**
+   * 运行时提示：toast 与播报区。
+   *
+   * 带参数的条目一律是函数，错误信息原样接在冒号后面——厂商报错、系统错误码
+   * 翻译不得，改了反而查不到。
+   */
+  toast: {
+    // 文件
+    fileOpened: '已打开文件',
+    fileOpenFailed: (err: unknown) => `打开文件失败：${err}`,
+    docCreated: '已新建文档',
+    createFailed: (err: unknown) => `新建失败：${err}`,
+    reloaded: '已重新加载',
+    reloadFailed: (err: unknown) => `重新加载失败：${err}`,
+    saved: '已保存',
+    saveDialogFailed: (err: unknown) => `保存对话框打不开：${err}`,
+    exported: (name: string) => `已导出：${name}`,
+    exportFailed: (err: unknown) => `导出失败：${err}`,
+    externalModifiedSaveRejected: '文件已被外部修改，保存被拒',
+    externalModified: '文件已被外部修改，请重新打开以载入最新内容',
+    recovered: '已恢复上次未保存的内容',
+    closeConfirmFailed: (err: unknown) => `关闭确认失败：${err}`,
+    recentCleared: '已清除最近记录',
+    recentClearFailed: (err: unknown) => `清除失败：${err}`,
+    windowOpenFailed: (err: unknown) => `新建窗口失败：${err}`,
+    dirOpened: (path: string) => `已打开：${path}`,
+    dirOpenFailed: (err: unknown) => `打不开目录：${err}`,
+
+    // 编辑
+    linkOpenFailed: (err: unknown) => `打不开链接：${err}`,
+    imageInsertFailed: (err: unknown) => `插入图片失败：${err}`,
+    imageAbsolutePath: '文档尚未保存，图片以绝对路径引用',
+    copyFailedNoClipboard: '复制失败：系统剪贴板不可用',
+    pasteHint: '请按 Ctrl+V 粘贴',
+    readOnlyReading: '阅读视图不可编辑',
+    readOnlySource: '源码视图里请直接输入 Markdown 标记',
+    selectionRequiredForInSelectionFind: '先在正文里选中一段，才能只在选区内查找',
+    noHeadings: '文档没有标题',
+    kernelError: (err: unknown) => `内核报错：${err}`,
+    welcomeShortcuts: '首次使用：Ctrl+/ 查看全部快捷键',
+
+    // 播报区（看不见 toast 的人靠它知道发生了什么）
+    viewSource: '已切到源码视图，可逐字朗读与编辑',
+    viewReading: '已切到阅读视图，此视图不可编辑',
+    viewWysiwyg: '已切到所见即所得视图',
+
+    // 检查更新开关
+    autoUpdateOn: '已开启启动时检查更新',
+    autoUpdateOff: '已关闭启动时检查更新',
+  },
+
+  /** 文件侧栏（工作区）。 */
+  files: {
+    collapse: '收起文件侧栏',
+    emptyDir: '（这个文件夹里没有 Markdown 文件）',
+    truncated: '（部分目录项太多，只显示了前面一部分）',
+    readFailed: (err: unknown) => `读不到这个目录：${err}`,
+    openFailed: (err: unknown) => `打开文件夹失败：${err}`,
+  },
+
+  /** 编辑区里的零散文案（面板占位、浮动提示）。 */
+  editor: {
+    linkTextPlaceholder: '留空则用选中的文字',
+    /** 未命名文档另存为时的建议文件名。 */
+    untitledFileName: '未命名.md',
+  },
+
+  /** 大纲侧栏。 */
+  outline: {
+    title: '大纲',
+    empty: '（无标题）',
+  },
+
+  /** 查找栏里的状态文字。 */
+  find: {
+    invalidRegex: '无效正则',
+    noResults: '无结果',
+  },
+
   /** 标题栏菜单。key 与 `menu.ts` 里的 `action` 对齐，便于对照。 */
   menu: {
     file: {

@@ -46,6 +46,7 @@ import * as mdviewSkin from '../skin';
 import * as mdviewPrefs from '../prefs';
 // 文件侧栏（工作区）。树里点文件走同一个 openPath，未保存确认与菜单一致。
 import * as mdviewFiles from '../files';
+import { zh } from '../i18n/zh-CN';
 
 // 这几个节点在 index.html 里是写死的骨架，缺任何一个后续都会立刻炸。
 // 断言只影响类型，不改运行时行为（真拿不到时，仍是首次调用处的 TypeError）。
@@ -217,10 +218,10 @@ function applyViewMode(mode: 'wysiwyg' | 'reading' | 'source'): void {
   if (changed) {
     announce(
       mode === 'source'
-        ? '已切到源码视图，可逐字朗读与编辑'
+        ? zh.toast.viewSource
         : mode === 'reading'
-          ? '已切到阅读视图，此视图不可编辑'
-          : '已切到所见即所得视图',
+          ? zh.toast.viewReading
+          : zh.toast.viewWysiwyg,
     );
   }
 }
@@ -318,18 +319,19 @@ function rebuildOutline(items: OutlineDto[]) {
   // 大纲整棵重建（换文档 / 结构变化）时点击意图已经失效
   outlinePinned = null;
   if (!outline.length) {
-    outlineEl.innerHTML = '<div class="oc-title">大纲</div><div class="oc-empty">（无标题）</div>';
+    outlineEl.innerHTML =
+      '<div class="oc-title">' + zh.outline.title + '</div><div class="oc-empty">' + zh.outline.empty + '</div>';
     outlineAnchors = [];
     activeOutlineIdx = -1;
     pushShellState();
     return;
   }
   outlineEl.replaceChildren(...[
-    Object.assign(document.createElement('div'), { className: 'oc-title', textContent: '大纲' }),
+    Object.assign(document.createElement('div'), { className: 'oc-title', textContent: zh.outline.title }),
     ...outline.map((item, i) => {
       const a = document.createElement('a');
       a.className = 'level-' + Math.min(Math.max(item.level, 1), 6);
-      a.textContent = item.title || '（无标题）';
+      a.textContent = item.title || zh.outline.empty;
       a.dataset.idx = String(i);
       a.title = item.title;
       return a;
@@ -560,13 +562,13 @@ function paintFind() {
   clearFindHighlight();
   findCount.classList.toggle('bad', findBadPattern);
   if (findBadPattern) {
-    findCount.textContent = '无效正则';
+    findCount.textContent = zh.find.invalidRegex;
     setFindNavDisabled(true);
     return;
   }
   if (!findMatches.length) {
     // VSCode 在没有命中时显示「无结果」；查询为空则什么都不显示
-    findCount.textContent = findInput.value ? '无结果' : '';
+    findCount.textContent = findInput.value ? zh.find.noResults : '';
     setFindNavDisabled(true);
     return;
   }
@@ -706,7 +708,7 @@ function toggleFindPreserve() {
 
 function toggleFindScope() {
   if (!findInSelection && !selectionByteRange()) {
-    toast('先在正文里选中一段，才能只在选区内查找');
+    toast(zh.toast.selectionRequiredForInSelectionFind);
     return;
   }
   findInSelection = !findInSelection;
@@ -918,7 +920,7 @@ function openLinkInsert() {
   linkUrlInput.value = '';
   linkTextInput.value = '';
   linkUrlInput.placeholder = 'https://';
-  linkTextInput.placeholder = '留空则用选中的文字';
+  linkTextInput.placeholder = zh.editor.linkTextPlaceholder;
   setLinkActions({ open: false, remove: false });
   linkEditEl.hidden = false;
   // 光标元素只有 1px 宽，够定位；取不到就贴在视口左上角附近
@@ -967,7 +969,7 @@ linkEditEl.addEventListener('click', (event) => {
     case 'close': closeLinkEditor(); break;
     case 'open': {
       const url = linkUrlInput.value.trim();
-      if (url) invoke('open_url', { url }).catch((err) => toast('打不开链接：' + err));
+      if (url) invoke('open_url', { url }).catch((err) => toast(zh.toast.linkOpenFailed(err)));
       break;
     }
     default: break;
@@ -1258,9 +1260,9 @@ function openPath(path: string) {
     const snap = await invoke<Snapshot | null>('open_file', { path });
     if (!snap) return;
     adoptSnapshot(snap);
-    toast('已打开文件');
+    toast(zh.toast.fileOpened);
     refreshRecent();
-  }).catch((err) => toast('打开文件失败：' + err));
+  }).catch((err) => toast(zh.toast.fileOpenFailed(err)));
 }
 
 /** 按序号打开最近文件。未保存改动仍由宿主的 open_file 先问一句。 */
@@ -1281,13 +1283,13 @@ let saveDialogOpen = false;
 function requestSavePath() {
   if (saveDialogOpen) return;   // 连按 Ctrl+S 不该叠出多个对话框
   saveDialogOpen = true;
-  const suggested = meta.path ? baseName(meta.path) : '未命名.md';
+  const suggested = meta.path ? baseName(meta.path) : zh.editor.untitledFileName;
   invoke<string | null>('pick_save_path', { suggested })
     .then((path) => {
       // 取消：内核那边什么都没动（dirty 还在、路径还是空），不用收尾
       if (path) send({ kind: 'saveTo', path });
     })
-    .catch((err) => toast('保存对话框打不开：' + err))
+    .catch((err) => toast(zh.toast.saveDialogFailed(err)))
     .finally(() => {
       saveDialogOpen = false;
       // 对话框关掉后焦点可能停在系统窗口上，不还回去就再也打不进字
@@ -1313,8 +1315,8 @@ function insertImageFromPicker() {
     if (!src) return;
     await dispatchOne({ kind: 'insertImage', src });
     // 文档未保存时宿主退回绝对路径：能显示，但换机器 / 挪目录就断，必须说一声
-    if (/^([a-zA-Z]:[\\/]|\/)/.test(src)) toast('文档尚未保存，图片以绝对路径引用');
-  }).catch((err) => toast('插入图片失败：' + err));
+    if (/^([a-zA-Z]:[\\/]|\/)/.test(src)) toast(zh.toast.imageAbsolutePath);
+  }).catch((err) => toast(zh.toast.imageInsertFailed(err)));
 }
 
 /** 导出进行中：别让连点叠出多个保存对话框。 */
@@ -1333,9 +1335,9 @@ async function exportHtml() {
     flushSource();
     await queue;
     const path = await invoke<string | null>('export_html');
-    if (path) toast('已导出：' + baseName(path));
+    if (path) toast(zh.toast.exported(baseName(path)));
   } catch (err) {
-    toast('导出失败：' + err);
+    toast(zh.toast.exportFailed(err));
   } finally {
     exporting = false;
     focusActiveEditor();
@@ -1367,12 +1369,12 @@ function runAction(action: string) {
     (action === 'bold' || action === 'italic' || action === 'strike' || action === 'inline-code')
     && window.__mdviewMode !== 'wysiwyg'
   ) {
-    toast(window.__mdviewMode === 'source' ? '源码视图里请直接输入 Markdown 标记' : '阅读视图不可编辑');
+    toast(window.__mdviewMode === 'source' ? zh.toast.readOnlySource : zh.toast.readOnlyReading);
     return;
   }
   // 插入类动作同理
   if (INSERT_ACTIONS.has(action) && window.__mdviewMode !== 'wysiwyg') {
-    toast(window.__mdviewMode === 'source' ? '源码视图里请直接输入 Markdown 标记' : '阅读视图不可编辑');
+    toast(window.__mdviewMode === 'source' ? zh.toast.readOnlySource : zh.toast.readOnlyReading);
     return;
   }
   // 最近打开：菜单条目是运行时生成的，动作名带序号（`recent:0`）。
@@ -1384,15 +1386,15 @@ function runAction(action: string) {
     invoke('clear_recent_files')
       .then(() => {
         refreshRecent();
-        toast('已清除最近记录');
+        toast(zh.toast.recentCleared);
       })
-      .catch((err) => toast('清除失败：' + err));
+      .catch((err) => toast(zh.toast.recentClearFailed(err)));
     return;
   }
   switch (action) {
     case 'new-window':
       // 宿主负责开窗、建独立会话；本窗口不换文档，也不抢新窗口的焦点
-      invoke('new_window').catch((err) => toast('新建窗口失败：' + err));
+      invoke('new_window').catch((err) => toast(zh.toast.windowOpenFailed(err)));
       return;
     case 'new-file':
       // 内核在有未保存改动时会先问一句；取消返回 null，这里什么都不做。
@@ -1400,8 +1402,8 @@ function runAction(action: string) {
         const snap = await invoke<Snapshot | null>('new_file');
         if (!snap) return;
         adoptSnapshot(snap);
-        toast('已新建文档');
-      }).catch((err) => toast('新建失败：' + err));
+        toast(zh.toast.docCreated);
+      }).catch((err) => toast(zh.toast.createFailed(err)));
       break;
     case 'open-file':
       // 先等在途 dispatch 回包，否则旧 revision 的 reply 会盖掉刚打开的文档。
@@ -1410,9 +1412,9 @@ function runAction(action: string) {
         const snap = await invoke<Snapshot | null>('open_file');
         if (!snap) return;
         adoptSnapshot(snap);
-        toast('已打开文件');
+        toast(zh.toast.fileOpened);
         refreshRecent();
-      }).catch((err) => toast('打开文件失败：' + err));
+      }).catch((err) => toast(zh.toast.fileOpenFailed(err)));
       break;
     case 'open-folder':
       // 工作区是纯视图状态，不碰内核：换目录不影响当前文档，也不需要脏检查。
@@ -1425,8 +1427,8 @@ function runAction(action: string) {
         const snap = await invoke<Snapshot | null>('reload_file');
         if (!snap) return;
         adoptSnapshot(snap);
-        toast('已重新加载');
-      }).catch((err) => toast('重新加载失败：' + err));
+        toast(zh.toast.reloaded);
+      }).catch((err) => toast(zh.toast.reloadFailed(err)));
       break;
     case 'undo': send({ kind: 'undo' }); break;
     case 'redo': send({ kind: 'redo' }); break;
@@ -1452,8 +1454,8 @@ function runAction(action: string) {
     case 'open-backups': {
       // 打开目录本身由系统完成，前端只负责把路径念一遍——用户下次能自己找。
       invoke<string>(action === 'open-logs' ? 'open_logs' : 'open_backups')
-        .then((path) => toast('已打开：' + path))
-        .catch((err) => toast('打不开目录：' + err));
+        .then((path) => toast(zh.toast.dirOpened(path)))
+        .catch((err) => toast(zh.toast.dirOpenFailed(err)));
       return;
     }
     case 'export-html': void exportHtml(); return;
@@ -1465,9 +1467,9 @@ function runAction(action: string) {
       if (navigator.clipboard && navigator.clipboard.readText) {
         navigator.clipboard.readText().then((text) => {
           if (text) send({ kind: 'insertText', text });
-        }).catch(() => toast('请按 Ctrl+V 粘贴'));
+        }).catch(() => toast(zh.toast.pasteHint));
       } else {
-        toast('请按 Ctrl+V 粘贴');
+        toast(zh.toast.pasteHint);
       }
       break;
     case 'theme-system':
@@ -1504,7 +1506,7 @@ function runAction(action: string) {
     case 'doc-end': send({ kind: 'setCaret', stop: maxStop, extend: false }); break;
     case 'outline-prev':
     case 'outline-next': {
-      if (!outline.length) { toast('文档没有标题'); break; }
+      if (!outline.length) { toast(zh.toast.noHeadings); break; }
       const step = action === 'outline-next' ? 1 : -1;
       const from = activeOutlineIdx < 0 ? (step > 0 ? -1 : outline.length) : activeOutlineIdx;
       jumpToOutline(Math.max(0, Math.min(outline.length - 1, from + step)));
@@ -1541,7 +1543,7 @@ let queue: Promise<void> = Promise.resolve();
 function enqueue(message: Wire) {
   queue = queue.then(() => dispatchOne(message)).catch((err) => {
     console.error(err);
-    toast('内核报错：' + err);
+    toast(zh.toast.kernelError(err));
   });
   return queue;
 }
@@ -1609,13 +1611,13 @@ function applyReply(reply: Reply) {
     }
   }
   if (typeof reply.clipboard === 'string') writeClipboard(reply.clipboard, reply.clipboard_html);
-  if (reply.conflict) toast('文件已被外部修改，保存被拒');
+  if (reply.conflict) toast(zh.toast.externalModifiedSaveRejected);
   else if (reply.error) toast(reply.error);
   if (reply.saved) {
     // 自动保存不弹提示：每 5 秒冒一条「已保存」是噪音，标题栏的脏标记
     // 消失已经是足够的反馈。手动保存仍然提示。
     if (quietSave) quietSave = false;
-    else toast('已保存');
+    else toast(zh.toast.saved);
     // 另存为会把文档改绑到新路径，最近列表要跟着多一条。
     refreshRecent();
     // 落盘之后副本就没用了：让宿主把它删掉（它只在「没保存」时有意义）。
@@ -1645,9 +1647,9 @@ function writeClipboard(text: string, html?: string | null) {
   lastClipboard = text;
   copyText(text, html ?? '')
     .then((ok) => {
-      if (!ok) toast('复制失败：系统剪贴板不可用');
+      if (!ok) toast(zh.toast.copyFailedNoClipboard);
     })
-    .catch(() => toast('复制失败：系统剪贴板不可用'))
+    .catch(() => toast(zh.toast.copyFailedNoClipboard))
     .finally(() => {
       focusActiveEditor();
     });
@@ -1733,7 +1735,7 @@ async function boot() {
   try {
     if (!window.localStorage.getItem('mdview.seen-welcome')) {
       window.localStorage.setItem('mdview.seen-welcome', '1');
-      window.setTimeout(() => toast('首次使用：Ctrl+/ 查看全部快捷键'), 800);
+      window.setTimeout(() => toast(zh.toast.welcomeShortcuts), 800);
     }
   } catch {
     /* localStorage 被禁用：提示不是功能，静默跳过 */
@@ -1742,7 +1744,7 @@ async function boot() {
   // 只提示，不自动重载——自动重载会冲掉用户未保存的编辑。
   if (listen) {
     listen('external-change', () => {
-      toast('文件已被外部修改，请重新打开以载入最新内容');
+      toast(zh.toast.externalModified);
     }).catch(() => {});
     // 关窗被内核拦下了（有未保存改动）：问一句，确认后放行这一次关闭。
     // 原生对话框不能放在窗口事件回调里，所以由这里用 async 命令去弹。
@@ -1752,7 +1754,7 @@ async function boot() {
           if (ok) return invoke('force_close');
           return undefined;
         })
-        .catch((err) => toast('关闭确认失败：' + err));
+        .catch((err) => toast(zh.toast.closeConfirmFailed(err)));
     }).catch(() => {});
     // macOS 原生菜单栏点选后，Rust 侧把动作名 emit 过来。
     // 走外壳动作桥而不是直接 runAction：「检查更新」这类纯外壳动作只有桥接得住，
@@ -1805,7 +1807,7 @@ async function boot() {
       // 别因为一条空对象把刚渲染好的文档整篇换掉。
       if (!snap || typeof snap.revision !== 'number') return;
       applySnapshot(snap);
-      toast('已恢复上次未保存的内容');
+      toast(zh.toast.recovered);
     })
     .catch((err) => console.error(err));
 }
@@ -2332,7 +2334,7 @@ docEl.addEventListener('click', (event) => {
     }
     if (window.__mdviewMode !== 'reading' && !modifier) return;
     event.preventDefault();
-    invoke('open_url', { url: el.dataset.href }).catch((err) => toast('打不开链接：' + err));
+    invoke('open_url', { url: el.dataset.href }).catch((err) => toast(zh.toast.linkOpenFailed(err)));
     return;
   }
   if (image && window.__mdviewMode === 'wysiwyg' && !modifier) {

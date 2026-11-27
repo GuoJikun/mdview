@@ -9,6 +9,7 @@ import { openAbout } from './about';
 import { openSettings } from './settings';
 import { openShortcuts } from './help';
 import { openUpdateDialog, toggleAutoUpdate } from './update';
+import { zh } from './i18n/zh-CN';
 import type { SkinName } from './skin';
 
 export interface OutlineItem {
@@ -151,7 +152,7 @@ export function dispatch(action: string): void {
   }
   if (action === 'auto-update') {
     const enabled = toggleAutoUpdate();
-    notify(enabled ? '已开启启动时检查更新' : '已关闭启动时检查更新');
+    notify(enabled ? zh.toast.autoUpdateOn : zh.toast.autoUpdateOff);
     return;
   }
   const run = window.__mdviewRunAction;
@@ -176,8 +177,8 @@ function tauriWindow() {
  * editor.ts 仍通过 window.__mdviewSetTitle 调用，签名不变。
  */
 export function setTitle(path: string | null, dirty: boolean): void {
-  const name = path ? String(path).split(/[\\/]/).pop() : '未命名';
-  const text = name + (dirty ? ' ●' : '') + ' — mdview';
+  const name = path ? String(path).split(/[\\/]/).pop() : zh.untitled;
+  const text = name + (dirty ? ' ●' : '') + ' — ' + zh.appName;
   set({ path: path || null, dirty: !!dirty, title: text });
   document.title = text;
   tauriWindow()?.setTitle(text)?.catch?.(() => {});
