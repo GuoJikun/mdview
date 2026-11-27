@@ -12,12 +12,12 @@
       tabindex="-1"
     >
       <header class="dialog-header">
-        <h2 id="settings-title">偏好设置</h2>
+        <h2 id="settings-title">{{ zh.settings.title }}</h2>
       </header>
 
       <div class="dialog-body">
         <div class="row">
-          <label for="pref-font">正文字体</label>
+          <label for="pref-font">{{ zh.settings.font }}</label>
           <select
             id="pref-font"
             :value="prefs.font"
@@ -28,7 +28,7 @@
         </div>
 
         <div class="row">
-          <label for="pref-size">字号</label>
+          <label for="pref-size">{{ zh.settings.fontSize }}</label>
           <input
             id="pref-size"
             v-bind="LIMITS.fontSize"
@@ -40,7 +40,7 @@
         </div>
 
         <div class="row">
-          <label for="pref-width">正文宽度</label>
+          <label for="pref-width">{{ zh.settings.width }}</label>
           <input
             id="pref-width"
             v-bind="LIMITS.width"
@@ -52,7 +52,7 @@
         </div>
 
         <div class="row">
-          <label for="pref-indent">Tab 缩进</label>
+          <label for="pref-indent">{{ zh.settings.indent }}</label>
           <input
             id="pref-indent"
             v-bind="LIMITS.indent"
@@ -60,11 +60,11 @@
             :value="prefs.indent"
             @input="update({ indent: Number(valueOf($event)) })"
           >
-          <span class="value">{{ prefs.indent }} 空格</span>
+          <span class="value">{{ zh.settings.indentUnit(prefs.indent) }}</span>
         </div>
 
         <div class="row">
-          <label for="pref-view">启动视图</label>
+          <label for="pref-view">{{ zh.settings.startupView }}</label>
           <select
             id="pref-view"
             :value="prefs.startupView"
@@ -75,29 +75,25 @@
         </div>
 
         <div class="row check">
-          <label for="pref-autosave">自动保存</label>
+          <label for="pref-autosave">{{ zh.settings.autoSave }}</label>
           <input
             id="pref-autosave"
             type="checkbox"
             :checked="prefs.autoSave"
             @change="update({ autoSave: ($event.target as HTMLInputElement).checked })"
           >
-          <span class="value wide">有改动时静默写回原文件</span>
+          <span class="value wide">{{ zh.settings.autoSaveHint }}</span>
         </div>
 
         <p class="hint">
-          偏好存在本机，重启后保留。列表的缩进仍按标记宽度（<code>- </code> 两格、<code>1. </code> 三格）——
-          改这里不会把子项推进标记中间。
+          {{ zh.settings.indentHintA }}<code>- </code>{{ zh.settings.indentHintB }}<code>1. </code>{{ zh.settings.indentHintC }}
         </p>
-        <p class="hint">
-          无论是否开启自动保存，未保存的改动都会每 5 秒备份到配置目录：
-          崩溃或强制结束后重启，会问你要不要恢复。
-        </p>
+        <p class="hint">{{ zh.settings.backupHint }}</p>
       </div>
 
       <footer class="dialog-actions">
-        <button type="button" class="btn" @click="restoreDefaults">恢复默认</button>
-        <button type="button" class="btn primary" @click="closeSettings">完成</button>
+        <button type="button" class="btn" @click="restoreDefaults">{{ zh.common.restoreDefaults }}</button>
+        <button type="button" class="btn primary" @click="closeSettings">{{ zh.common.ok }}</button>
       </footer>
     </section>
   </div>
@@ -106,6 +102,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useModalDialog } from '../dialog-modal';
+import { zh } from '../i18n/zh-CN';
 import { closeSettings } from '../settings';
 import {
   FONT_LABELS,

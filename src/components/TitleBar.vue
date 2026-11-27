@@ -5,7 +5,7 @@
       <span class="tb-logo" data-tauri-drag-region aria-hidden="true">
         <img alt="" :src="LOGO" />
       </span>
-      <nav id="tb-menus" class="tb-menus" aria-label="应用菜单">
+      <nav id="tb-menus" class="tb-menus" :aria-label="zh.titleBar.menus">
         <button
           v-for="key in MENU_ORDER"
           :key="key"
@@ -24,14 +24,14 @@
       <span id="tb-title" class="tb-title">{{ state.title }}</span>
     </div>
     <div class="tb-right" data-tauri-drag-region>
-      <button type="button" class="tb-ctl" id="tb-min" title="最小化" aria-label="最小化" @click="minimize">
+      <button type="button" class="tb-ctl" id="tb-min" :title="zh.titleBar.minimize" :aria-label="zh.titleBar.minimize" @click="minimize">
         <Minus :size="14" :stroke-width="1.7" aria-hidden="true" />
       </button>
-      <button type="button" class="tb-ctl" id="tb-max" title="最大化 / 还原" aria-label="最大化" @click="toggleMaximize">
+      <button type="button" class="tb-ctl" id="tb-max" :title="zh.titleBar.maximizeTitle" :aria-label="zh.titleBar.maximize" @click="toggleMaximize">
         <Square v-if="!maximized" :size="14" :stroke-width="1.7" aria-hidden="true" />
         <Copy v-else :size="14" :stroke-width="1.7" aria-hidden="true" />
       </button>
-      <button type="button" class="tb-ctl tb-close" id="tb-close" title="关闭" aria-label="关闭" @click="closeWindow">
+      <button type="button" class="tb-ctl tb-close" id="tb-close" :title="zh.titleBar.close" :aria-label="zh.titleBar.close" @click="closeWindow">
         <X :size="14" :stroke-width="1.7" aria-hidden="true" />
       </button>
     </div>
@@ -44,6 +44,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Copy, Minus, Square, X } from 'lucide-vue-next';
 import { onMounted, ref } from 'vue';
 import { state } from '../bridge';
+import { zh } from '../i18n/zh-CN';
 import { MENU_LABELS, MENU_ORDER, menuState, showMenu, toggleMenu, type MenuKey } from '../menu';
 
 // 标题栏标识：由 src-tauri/icons/icon.png（512²）降采样到 64² 得到，

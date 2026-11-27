@@ -12,7 +12,7 @@
       tabindex="-1"
     >
       <header class="dialog-header">
-        <h2 id="shortcuts-title">键盘快捷键</h2>
+        <h2 id="shortcuts-title">{{ zh.shortcuts.title }}</h2>
       </header>
 
       <div class="dialog-body shortcuts-body">
@@ -28,8 +28,8 @@
       </div>
 
       <footer class="dialog-actions">
-        <span class="hint" id="shortcuts-hint">macOS 上 Ctrl 换成 ⌘ · Esc 关闭</span>
-        <button type="button" class="btn primary" @click="closeShortcuts">知道了</button>
+        <span class="hint" id="shortcuts-hint">{{ zh.shortcuts.hint }}</span>
+        <button type="button" class="btn primary" @click="closeShortcuts">{{ zh.common.gotIt }}</button>
       </footer>
     </section>
   </div>
@@ -39,6 +39,7 @@
 import { ref } from 'vue';
 import { useModalDialog } from '../dialog-modal';
 import { closeShortcuts } from '../help';
+import { zh } from '../i18n/zh-CN';
 import { shortcutGroups } from '../shortcuts';
 
 const panel = ref<HTMLElement | null>(null);

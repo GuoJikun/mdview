@@ -1,5 +1,9 @@
 // 标题栏菜单树与展开状态。数据从原 titlebar.js 原样搬来，动作名不变。
 import { shallowReactive } from 'vue';
+import { zh } from './i18n/zh-CN';
+
+/** 菜单文案的短别名：下面每条都写 `m.file.save`，不写 `zh.menu.file.save`。 */
+const m = zh.menu;
 
 export type MenuKey = 'file' | 'edit' | 'insert' | 'selection' | 'view' | 'go' | 'help';
 
@@ -29,79 +33,79 @@ export interface MenuEntry {
 export const MENU_ORDER: MenuKey[] = ['file', 'edit', 'insert', 'selection', 'view', 'go', 'help'];
 
 export const MENU_LABELS: Record<MenuKey, string> = {
-  file: '文件',
-  edit: '编辑',
-  insert: '插入',
-  selection: '选择',
-  view: '视图',
-  go: '转到',
-  help: '帮助',
+  file: m.file.title,
+  edit: m.edit.title,
+  insert: m.insert.title,
+  selection: m.selection.title,
+  view: m.view.title,
+  go: m.go.title,
+  help: m.help.title,
 };
 
 export const MENUS: Record<MenuKey, MenuEntry[]> = {
   file: [
-    { action: 'new-file', label: '新建', acc: 'Ctrl+N' },
-    { action: 'new-window', label: '新建窗口', acc: 'Ctrl+Shift+N' },
-    { action: 'open-file', label: '打开文件…', acc: 'Ctrl+O' },
-    { action: 'open-folder', label: '打开文件夹…', acc: 'Ctrl+Shift+O' },
-    { sub: { label: '最近打开', items: [], dynamic: 'recent' } },
+    { action: 'new-file', label: m.file.newFile, acc: 'Ctrl+N' },
+    { action: 'new-window', label: m.file.newWindow, acc: 'Ctrl+Shift+N' },
+    { action: 'open-file', label: m.file.openFile, acc: 'Ctrl+O' },
+    { action: 'open-folder', label: m.file.openFolder, acc: 'Ctrl+Shift+O' },
+    { sub: { label: m.file.recent, items: [], dynamic: 'recent' } },
     { sep: true },
-    { action: 'reload-file', label: '重新加载', acc: 'Ctrl+R' },
+    { action: 'reload-file', label: m.file.reloadFile, acc: 'Ctrl+R' },
     { sep: true },
-    { action: 'save', label: '保存', acc: 'Ctrl+S' },
-    { action: 'save-as', label: '另存为…', acc: 'Ctrl+Shift+S' },
-    { action: 'export-html', label: '导出 HTML…' },
+    { action: 'save', label: m.file.save, acc: 'Ctrl+S' },
+    { action: 'save-as', label: m.file.saveAs, acc: 'Ctrl+Shift+S' },
+    { action: 'export-html', label: m.file.exportHtml },
     { sep: true },
-    { action: 'settings', label: '偏好设置…', acc: 'Ctrl+,' },
+    { action: 'settings', label: m.file.settings, acc: 'Ctrl+,' },
     { sep: true },
-    { action: 'close-window', label: '关闭窗口', acc: 'Alt+F4', danger: true },
+    { action: 'close-window', label: m.file.closeWindow, acc: 'Alt+F4', danger: true },
   ],
   edit: [
-    { action: 'undo', label: '撤销', acc: 'Ctrl+Z' },
-    { action: 'redo', label: '重做', acc: 'Ctrl+Y' },
+    { action: 'undo', label: m.edit.undo, acc: 'Ctrl+Z' },
+    { action: 'redo', label: m.edit.redo, acc: 'Ctrl+Y' },
     { sep: true },
-    { action: 'bold', label: '加粗', acc: 'Ctrl+B' },
-    { action: 'italic', label: '斜体', acc: 'Ctrl+I' },
-    { action: 'strike', label: '删除线', acc: 'Ctrl+Shift+X' },
-    { action: 'inline-code', label: '行内代码', acc: 'Ctrl+E' },
+    { action: 'bold', label: m.edit.bold, acc: 'Ctrl+B' },
+    { action: 'italic', label: m.edit.italic, acc: 'Ctrl+I' },
+    { action: 'strike', label: m.edit.strike, acc: 'Ctrl+Shift+X' },
+    { action: 'inline-code', label: m.edit.inlineCode, acc: 'Ctrl+E' },
     { sep: true },
-    { action: 'cut', label: '剪切', acc: 'Ctrl+X' },
-    { action: 'copy', label: '复制', acc: 'Ctrl+C' },
-    { action: 'paste', label: '粘贴', acc: 'Ctrl+V' },
+    { action: 'cut', label: m.edit.cut, acc: 'Ctrl+X' },
+    { action: 'copy', label: m.edit.copy, acc: 'Ctrl+C' },
+    { action: 'paste', label: m.edit.paste, acc: 'Ctrl+V' },
     { sep: true },
-    { action: 'select-all', label: '全选', acc: 'Ctrl+A' },
+    { action: 'select-all', label: m.edit.selectAll, acc: 'Ctrl+A' },
     { sep: true },
-    { action: 'find', label: '查找…', acc: 'Ctrl+F' },
-    { action: 'replace', label: '替换…', acc: 'Ctrl+H' },
+    { action: 'find', label: m.edit.find, acc: 'Ctrl+F' },
+    { action: 'replace', label: m.edit.replace, acc: 'Ctrl+H' },
   ],
   insert: [
-    { action: 'insert-image', label: '图片…', acc: 'Ctrl+Shift+I' },
-    { action: 'insert-link', label: '链接…', acc: 'Ctrl+K' },
+    { action: 'insert-image', label: m.insert.image, acc: 'Ctrl+Shift+I' },
+    { action: 'insert-link', label: m.insert.link, acc: 'Ctrl+K' },
     { sep: true },
-    { action: 'insert-table', label: '表格' },
-    { action: 'insert-hr', label: '分隔线' },
+    { action: 'insert-table', label: m.insert.table },
+    { action: 'insert-hr', label: m.insert.hr },
     { sep: true },
-    { action: 'insert-code', label: '代码块' },
-    { action: 'insert-quote', label: '引用' },
-    { action: 'insert-task', label: '任务列表' },
+    { action: 'insert-code', label: m.insert.code },
+    { action: 'insert-quote', label: m.insert.quote },
+    { action: 'insert-task', label: m.insert.task },
   ],
   selection: [
-    { action: 'select-all', label: '全选', acc: 'Ctrl+A' },
+    { action: 'select-all', label: m.selection.selectAll, acc: 'Ctrl+A' },
     { sep: true },
-    { action: 'line-home', label: '行首', acc: 'Home' },
-    { action: 'line-end', label: '行尾', acc: 'End' },
+    { action: 'line-home', label: m.selection.lineHome, acc: 'Home' },
+    { action: 'line-end', label: m.selection.lineEnd, acc: 'End' },
   ],
   view: [
     {
       sub: {
-        label: '外观',
+        label: m.view.appearance,
         items: [
           {
-            action: 'skin-hyperos', label: 'HyperOS 4.0', mark: 'dot',
+            action: 'skin-hyperos', label: m.view.skinHyperos, mark: 'dot',
             checked: (s) => s.skin === 'hyperos',
           },
           {
-            action: 'skin-macos', label: 'macOS · Mica', mark: 'dot',
+            action: 'skin-macos', label: m.view.skinMacos, mark: 'dot',
             checked: (s) => s.skin === 'macos',
           },
         ],
@@ -109,18 +113,18 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
     },
     {
       sub: {
-        label: '主题',
+        label: m.view.theme,
         items: [
           {
-            action: 'theme-system', label: '跟随系统', mark: 'dot',
+            action: 'theme-system', label: m.view.themeSystem, mark: 'dot',
             checked: (s) => s.themeMode === 'system',
           },
           {
-            action: 'theme-light', label: '亮色', mark: 'dot',
+            action: 'theme-light', label: m.view.themeLight, mark: 'dot',
             checked: (s) => s.themeMode === 'light',
           },
           {
-            action: 'theme-dark', label: '暗色', mark: 'dot',
+            action: 'theme-dark', label: m.view.themeDark, mark: 'dot',
             checked: (s) => s.themeMode === 'dark',
           },
         ],
@@ -128,39 +132,39 @@ export const MENUS: Record<MenuKey, MenuEntry[]> = {
     },
     { sep: true },
     {
-      action: 'mode-wysiwyg', label: '所见即所得', acc: 'Ctrl+1', mark: 'dot',
+      action: 'mode-wysiwyg', label: m.view.wysiwyg, acc: 'Ctrl+1', mark: 'dot',
       checked: (s) => s.mode === 'wysiwyg',
     },
     {
-      action: 'mode-reading', label: '阅读视图', acc: 'Ctrl+2', mark: 'dot',
+      action: 'mode-reading', label: m.view.reading, acc: 'Ctrl+2', mark: 'dot',
       checked: (s) => s.mode === 'reading',
     },
     {
-      action: 'mode-source', label: '源码视图', acc: 'Ctrl+3', mark: 'dot',
+      action: 'mode-source', label: m.view.source, acc: 'Ctrl+3', mark: 'dot',
       checked: (s) => s.mode === 'source',
     },
   ],
   go: [
-    { action: 'outline-prev', label: '上一个标题' },
-    { action: 'outline-next', label: '下一个标题' },
+    { action: 'outline-prev', label: m.go.prevHeading },
+    { action: 'outline-next', label: m.go.nextHeading },
     { sep: true },
-    { action: 'doc-start', label: '文档开头', acc: 'Ctrl+Home' },
-    { action: 'doc-end', label: '文档结尾', acc: 'Ctrl+End' },
+    { action: 'doc-start', label: m.go.docStart, acc: 'Ctrl+Home' },
+    { action: 'doc-end', label: m.go.docEnd, acc: 'Ctrl+End' },
   ],
   help: [
-    { action: 'shortcuts', label: '键盘快捷键', acc: 'Ctrl+/' },
+    { action: 'shortcuts', label: m.help.shortcuts, acc: 'Ctrl+/' },
     { sep: true },
     // 反馈入口：日志与崩溃副本都在配置目录里，不让用户自己去翻 AppData
-    { action: 'open-logs', label: '打开日志目录' },
-    { action: 'open-backups', label: '打开备份目录' },
+    { action: 'open-logs', label: m.help.openLogs },
+    { action: 'open-backups', label: m.help.openBackups },
     { sep: true },
-    { action: 'update', label: '检查更新…' },
+    { action: 'update', label: m.help.update },
     {
-      action: 'auto-update', label: '启动时检查更新', mark: 'check',
+      action: 'auto-update', label: m.help.autoUpdate, mark: 'check',
       checked: (s) => s.autoUpdate,
     },
     { sep: true },
-    { action: 'about', label: '关于' },
+    { action: 'about', label: m.help.about },
   ],
 };
 

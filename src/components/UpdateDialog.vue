@@ -14,34 +14,34 @@
       tabindex="-1"
     >
       <header class="dialog-header">
-        <h2 id="update-title">检查更新</h2>
+        <h2 id="update-title">{{ zh.update.title }}</h2>
       </header>
 
       <div class="dialog-body">
         <p class="update-version">
-          <span>当前版本</span>
-          <strong>{{ update.version || '—' }}</strong>
+          <span>{{ zh.update.currentVersion }}</span>
+          <strong>{{ update.version || zh.common.emDash }}</strong>
         </p>
 
         <!-- 检查中 -->
         <div v-if="update.phase === 'checking'" class="update-status">
           <span class="spinner" aria-hidden="true"></span>
-          <span>正在检查更新…</span>
+          <span>{{ zh.update.checking }}</span>
         </div>
 
         <!-- 已是最新 -->
         <div v-else-if="update.phase === 'up-to-date'" class="update-status">
           <span class="check-mark" aria-hidden="true"><Check :size="14" :stroke-width="3" /></span>
-          <span>当前已是最新版本。</span>
+          <span>{{ zh.update.upToDate }}</span>
         </div>
 
         <!-- 发现新版本 -->
         <template v-else-if="update.phase === 'available' && update.info">
           <div class="update-status">
-            <strong class="update-new">发现新版本 — {{ update.info.version }}</strong>
+            <strong class="update-new">{{ zh.update.available(update.info.version) }}</strong>
           </div>
           <div v-if="notesHtml" class="update-notes-block">
-            <h3>更新内容</h3>
+            <h3>{{ zh.update.notes }}</h3>
             <!-- Release 正文由后端渲染成安全 HTML：文本已转义，链接只有 data-href。 -->
             <div class="update-notes" @wheel.stop @click="onNotesClick" v-html="notesHtml"></div>
           </div>
@@ -51,7 +51,7 @@
         <template v-else-if="update.phase === 'downloading'">
           <div class="update-status">
             <span class="spinner" aria-hidden="true"></span>
-            <span>正在下载…</span>
+            <span>{{ zh.update.downloading }}</span>
             <span v-if="update.total" class="percent">{{ percent }}%</span>
           </div>
           <div class="progress-track">
@@ -67,8 +67,8 @@
         <div v-else-if="update.phase === 'ready'" class="update-status">
           <span class="check-mark" aria-hidden="true"><Check :size="14" :stroke-width="3" /></span>
           <div>
-            <strong>更新已就绪</strong>
-            <p class="ready-hint">点击「安装并重启」完成更新。</p>
+            <strong>{{ zh.update.ready }}</strong>
+            <p class="ready-hint">{{ zh.update.readyHint }}</p>
           </div>
         </div>
 
@@ -76,7 +76,7 @@
         <div v-else-if="update.phase === 'error'" class="update-status update-error">
           <span class="error-mark" aria-hidden="true"><TriangleAlert :size="14" :stroke-width="2.4" /></span>
           <div>
-            <strong>检查更新失败</strong>
+            <strong>{{ zh.update.failed }}</strong>
             <p>{{ update.error }}</p>
           </div>
         </div>
@@ -85,34 +85,34 @@
       <footer class="dialog-actions">
         <!-- 失败：重试 + 关闭 -->
         <template v-if="update.phase === 'error'">
-          <button type="button" class="btn" @click="check">重试</button>
-          <button ref="closeButton" type="button" class="btn primary" @click="requestClose">关闭</button>
+          <button type="button" class="btn" @click="check">{{ zh.update.retry }}</button>
+          <button ref="closeButton" type="button" class="btn primary" @click="requestClose">{{ zh.common.close }}</button>
         </template>
 
         <!-- 下载中：只能取消 -->
         <template v-else-if="update.phase === 'downloading'">
-          <button type="button" class="btn" @click="cancelDownload">取消</button>
+          <button type="button" class="btn" @click="cancelDownload">{{ zh.update.cancel }}</button>
         </template>
 
         <!-- 就绪：关闭 / 安装 -->
         <template v-else-if="update.phase === 'ready'">
-          <button type="button" class="btn" @click="requestClose">关闭</button>
+          <button type="button" class="btn" @click="requestClose">{{ zh.common.close }}</button>
           <button ref="closeButton" type="button" class="btn primary" @click="install">
-            安装并重启
+            {{ zh.update.install }}
           </button>
         </template>
 
         <!-- 有新版本：关闭 / 下载 -->
         <template v-else-if="update.phase === 'available'">
-          <button type="button" class="btn" @click="requestClose">关闭</button>
+          <button type="button" class="btn" @click="requestClose">{{ zh.common.close }}</button>
           <button ref="closeButton" type="button" class="btn primary" @click="download">
-            下载更新
+            {{ zh.update.download }}
           </button>
         </template>
 
         <!-- idle / checking / up-to-date -->
         <template v-else>
-          <button ref="closeButton" type="button" class="btn primary" @click="requestClose">关闭</button>
+          <button ref="closeButton" type="button" class="btn primary" @click="requestClose">{{ zh.common.close }}</button>
         </template>
       </footer>
     </section>
@@ -133,6 +133,7 @@ import {
 } from '../update';
 import { formatBytes, progressPercent } from '../update-format';
 import { useModalDialog } from '../dialog-modal';
+import { zh } from '../i18n/zh-CN';
 
 const closeButton = ref<HTMLButtonElement | null>(null);
 

@@ -10,34 +10,31 @@
       tabindex="-1"
     >
       <header class="dialog-header">
-        <h2 id="about-title">关于 mdview</h2>
+        <h2 id="about-title">{{ zh.about.title(zh.appName) }}</h2>
       </header>
 
       <div class="dialog-body">
         <div class="about-hero">
           <span class="about-mark" aria-hidden="true">M↓</span>
           <div class="about-id">
-            <strong>mdview</strong>
-            <span>版本 {{ about.version || '—' }}</span>
+            <strong>{{ zh.appName }}</strong>
+            <span>{{ zh.about.version(about.version || zh.common.emDash) }}</span>
           </div>
         </div>
 
-        <p class="about-desc">
-          一个用 Rust 写内核的 Markdown 编辑器：文本、解析与排版都在 Rust 侧完成，
-          窗口与界面交给 Tauri + Vue。
-        </p>
+        <p class="about-desc">{{ zh.about.desc }}</p>
 
         <dl class="about-meta">
-          <div><dt>内核</dt><dd>Rust — ropey · pulldown-cmark</dd></div>
-          <div><dt>外壳</dt><dd>Tauri 2 · Vue 3</dd></div>
-          <div><dt>许可</dt><dd>MIT OR Apache-2.0</dd></div>
-          <div><dt>项目</dt><dd class="about-link">github.com/GuoJikun/mdview</dd></div>
+          <div><dt>{{ zh.about.kernel }}</dt><dd>Rust — ropey · pulldown-cmark</dd></div>
+          <div><dt>{{ zh.about.shell }}</dt><dd>Tauri 2 · Vue 3</dd></div>
+          <div><dt>{{ zh.about.license }}</dt><dd>{{ zh.about.licenseText }}</dd></div>
+          <div><dt>{{ zh.about.project }}</dt><dd class="about-link">{{ zh.about.projectUrl }}</dd></div>
         </dl>
       </div>
 
       <footer class="dialog-actions">
         <button ref="closeButton" type="button" class="btn primary" @click="closeAbout">
-          关闭
+          {{ zh.common.close }}
         </button>
       </footer>
     </section>
@@ -48,6 +45,7 @@
 import { ref } from 'vue';
 import { about, closeAbout } from '../about';
 import { useModalDialog } from '../dialog-modal';
+import { zh } from '../i18n/zh-CN';
 
 const closeButton = ref<HTMLButtonElement | null>(null);
 

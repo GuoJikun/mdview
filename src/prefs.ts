@@ -5,6 +5,7 @@
 // 生效方式是往 <html> 写 CSS 变量，正文样式全部读变量——改字号不需要重建 DOM，
 // 也就不会碰到投影层与停靠点。
 import { reactive } from 'vue';
+import { zh } from './i18n/zh-CN';
 
 /** 正文字体族。三档够用：读文档、读散文、读代码。 */
 export type FontChoice = 'system' | 'serif' | 'mono';
@@ -35,15 +36,15 @@ export const FONT_STACKS: Record<FontChoice, string> = {
 };
 
 export const FONT_LABELS: Record<FontChoice, string> = {
-  system: '系统无衬线',
-  serif: '衬线（宋体类）',
-  mono: '等宽',
+  system: zh.settings.fonts.system,
+  serif: zh.settings.fonts.serif,
+  mono: zh.settings.fonts.mono,
 };
 
 export const VIEW_LABELS: Record<StartupView, string> = {
-  wysiwyg: '所见即所得',
-  reading: '阅读视图',
-  source: '源码视图',
+  wysiwyg: zh.settings.views.wysiwyg,
+  reading: zh.settings.views.reading,
+  source: zh.settings.views.source,
 };
 
 export const DEFAULTS: Prefs = {

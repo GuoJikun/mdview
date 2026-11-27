@@ -86,6 +86,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Check, ChevronRight } from 'lucide-vue-next';
 import { dispatch, state } from '../bridge';
+import { zh } from '../i18n/zh-CN';
 import { MENUS, anchorOf, closeMenu, menuState, switchMenu, type MenuEntry } from '../menu';
 import { update } from '../update';
 
@@ -110,7 +111,7 @@ function baseName(path: string): string {
 }
 
 function recentEntries(): MenuEntry[] {
-  if (!state.recent.length) return [{ label: '（暂无）' }];
+  if (!state.recent.length) return [{ label: zh.common.none }];
   return [
     ...state.recent.map((path, i) => ({
       action: 'recent:' + i,
@@ -118,7 +119,7 @@ function recentEntries(): MenuEntry[] {
       title: path,
     })),
     { sep: true },
-    { action: 'recent-clear', label: '清除记录' },
+    { action: 'recent-clear', label: zh.menu.file.recentClear },
   ];
 }
 

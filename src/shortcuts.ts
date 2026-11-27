@@ -7,6 +7,7 @@
 //
 // 菜单表达不了的键位（查找栏里的开关、Tab 缩进、Esc 取消）只能手写，集中在
 // 下面的 `EXTRA`，一行一条，改动时容易看清楚。
+import { zh } from './i18n/zh-CN';
 import { MENUS, MENU_LABELS, MENU_ORDER, type MenuEntry } from './menu';
 
 export interface ShortcutItem {
@@ -24,22 +25,22 @@ export interface ShortcutGroup {
 /** 菜单里看不到、但确实生效的键位。 */
 const EXTRA: ShortcutGroup[] = [
   {
-    title: '查找栏',
+    title: zh.shortcuts.findBar,
     items: [
-      { keys: 'Enter ／ Shift+Enter', label: '下一个 ／ 上一个' },
-      { keys: 'Alt+C', label: '区分大小写' },
-      { keys: 'Alt+W', label: '全词匹配' },
-      { keys: 'Alt+R', label: '正则表达式' },
-      { keys: 'Esc', label: '关闭查找栏' },
+      { keys: 'Enter ／ Shift+Enter', label: zh.shortcuts.findNextPrev },
+      { keys: 'Alt+C', label: zh.shortcuts.caseSensitive },
+      { keys: 'Alt+W', label: zh.shortcuts.wholeWord },
+      { keys: 'Alt+R', label: zh.shortcuts.regex },
+      { keys: 'Esc', label: zh.shortcuts.closeFindBar },
     ],
   },
   {
-    title: '编辑区',
+    title: zh.shortcuts.editorArea,
     items: [
-      { keys: 'Tab', label: '缩进（表格里跳到下一格）' },
-      { keys: 'Shift+Tab', label: '反缩进（表格里跳到上一格）' },
-      { keys: 'Esc', label: '取消选区 ／ 关闭弹层' },
-      { keys: 'Ctrl+点击', label: '在浏览器里打开链接' },
+      { keys: 'Tab', label: zh.shortcuts.indent },
+      { keys: 'Shift+Tab', label: zh.shortcuts.outdent },
+      { keys: 'Esc', label: zh.shortcuts.clearSelection },
+      { keys: 'Ctrl+点击', label: zh.shortcuts.openLink },
     ],
   },
 ];
