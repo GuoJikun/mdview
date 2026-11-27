@@ -938,6 +938,8 @@ fn menu_action(id: &str) -> Option<&'static str> {
         "theme-system" => "theme-system",
         "theme-light" => "theme-light",
         "theme-dark" => "theme-dark",
+        "skin-hyperos" => "skin-hyperos",
+        "skin-macos" => "skin-macos",
         "mode-wysiwyg" => "mode-wysiwyg",
         "mode-reading" => "mode-reading",
         "mode-source" => "mode-source",
@@ -1056,13 +1058,22 @@ fn build_native_menu(
         .item(&item("insert-task", "任务列表")?)
         .build()?;
 
+    let appearance_menu = SubmenuBuilder::new(app, "外观")
+        .item(&item("skin-hyperos", "HyperOS 4.0")?)
+        .item(&item("skin-macos", "macOS · Mica")?)
+        .build()?;
+
     let theme_menu = SubmenuBuilder::new(app, "主题")
         .item(&item("theme-system", "跟随系统")?)
         .item(&item("theme-light", "亮色")?)
         .item(&item("theme-dark", "暗色")?)
         .build()?;
 
+    // 外观与主题是正交的两条线（风格 / 明暗），各自一个子菜单。
+    // macOS 上自绘标题栏是被 CSS 隐藏的，原生菜单是唯一入口——缺了这一项，
+    // 皮肤切换在 macOS 上就完全点不到。
     let view_menu = SubmenuBuilder::new(app, "视图")
+        .item(&appearance_menu)
         .item(&theme_menu)
         .separator()
         .item(&item("mode-wysiwyg", "所见即所得")?)

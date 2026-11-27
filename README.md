@@ -83,7 +83,7 @@ cargo run -p mdview-cli -- <file> preview  # 生成可交互的验证页
 ### 目录
 
 ```
-src/          前端：Vue 外壳（components/）+ 编辑内核（editor/）
+src/          前端：Vue 外壳（components/）+ 编辑内核（editor/）+ 文案表（i18n/）
 src-tauri/    桌面端：窗口、菜单、IPC 契约、端到端自检
 crates/       Rust 库：core / markdown / app / support / cli
 ```
